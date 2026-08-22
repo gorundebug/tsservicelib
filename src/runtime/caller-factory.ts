@@ -1,0 +1,81 @@
+import type { RuntimeConfig } from "./config/index.js";
+import { setCallerMetadata } from "./caller-metadata.js";
+import {
+  ParallelCaller,
+  PriorityTaskPoolCaller,
+  TaskPoolCaller,
+  type CallerRejectionHandler
+} from "./caller.js";
+import type { PriorityTaskPool, TaskPool } from "./pool/index.js";
+import {
+  FunctionCaller,
+  type Caller,
+  type CallerFactory,
+  type Stream,
+  type TypedStreamConsumer
+} from "./stream.js";
+import type { RuntimeTaskRegistry } from "./task-registry.js";
+
+export interface RuntimeCallerFactoryOptions {
+  readonly config: () => RuntimeConfig;
+  readonly serviceId: number;
+  readonly taskPools: ReadonlyMap<string, TaskPool>;
+  readonly priorityTaskPools: ReadonlyMap<string, PriorityTaskPool>;
+  readonly tasks: RuntimeTaskRegistry;
+  readonly onRejected?: CallerRejectionHandler | undefined;
+}
+
+/** Resolves the immutable graph link semantics once when a caller is built. */
+export class RuntimeCallerFactory implements CallerFactory {
+  readonly #options: RuntimeCallerFactoryOptions;
+
+  public constructor(options: RuntimeCallerFactoryOptions) {
+    this.#options = options;
+  }
+
+  public create<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T> {
+    const config = this.#options.config();
+    const service = config.serviceById(this.#options.serviceId);
+    if (service === undefined) {
+      throw new Error(`service config ${String(this.#options.serviceId)} not found`);
+    }
+    const semantics =
+      config.link(source.id, consumer.id)?.callSemantics ??
+      service.defaultCallSemantics ??
+      DEFAULT_CALL_SEMANTICS;
+
+    if ("functionCall" in semantics) {
+      return new FunctionCaller(consumer, semantics.functionCall.async);
+    }
+    if ("taskPool" in semantics) {
+      const pool = this.#options.taskPools.get(semantics.taskPool.poolName);
+      if (pool === undefined) {
+        throw new Error(`task pool ${semantics.taskPool.poolName} not found`);
+      }
+      return setCallerMetadata(new TaskPoolCaller(pool, consumer, this.#options.onRejected), {
+        type: "taskpool",
+        taskPoolName: pool.name()
+      });
+    }
+    if ("priorityTaskPool" in semantics) {
+      const pool = this.#options.priorityTaskPools.get(semantics.priorityTaskPool.poolName);
+      if (pool === undefined) {
+        throw new Error(`priority task pool ${semantics.priorityTaskPool.poolName} not found`);
+      }
+      return setCallerMetadata(
+        new PriorityTaskPoolCaller(
+          pool,
+          consumer,
+          semantics.priorityTaskPool.priority,
+          this.#options.onRejected
+        ),
+        { type: "prioritytaskpool", taskPoolName: pool.name() }
+      );
+    }
+    return setCallerMetadata(new ParallelCaller(this.#options.tasks, consumer), {
+      type: "parallel"
+    });
+  }
+}
+
+const DEFAULT_CALL_SEMANTICS = { functionCall: { async: false } } as const;

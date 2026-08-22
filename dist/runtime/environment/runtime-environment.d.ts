@@ -1,0 +1,102 @@
+import type { CanonicalConfig, JoinStorageType, ServiceConfig } from "../config/index.js";
+import type { RuntimeConfig, RuntimeConfigStore } from "../config/index.js";
+import type { MessageContext } from "../context.js";
+import type { DataSink } from "../data-sink.js";
+import type { DataSource } from "../data-source.js";
+import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
+import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
+import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
+import { type SerdeRegistry, type SerdeType, type StreamSerde } from "../serde/index.js";
+import { type Caller, type CallerFactory, type Stream, type TypedStreamConsumer } from "../stream.js";
+import { type Logger } from "./log.js";
+import { type Metrics } from "./metrics/index.js";
+import type { Tracing } from "./tracing/index.js";
+export interface RuntimeGraphLink {
+    readonly from: number;
+    readonly to: number;
+}
+export type JoinStorageFactory = <K>(storageType: JoinStorageType, config: JoinStorageConfig, stream: Stream) => JoinStorage<K> | undefined;
+export interface RuntimeEnvironment {
+    runtimeConfig(): RuntimeConfig;
+    serviceConfig(): ServiceConfig;
+    registerStream(stream: Stream): void;
+    registerStorage(storage: Storage): void;
+    createKeyValueJoinStorage<K>(storageType: JoinStorageType, config: JoinStorageConfig, stream: Stream): JoinStorage<K> | undefined;
+    storages(): readonly Storage[];
+    addDataSource(dataSource: DataSource): void;
+    dataSourceById(id: number): DataSource | undefined;
+    dataSources(): readonly DataSource[];
+    addDataSink(dataSink: DataSink): void;
+    dataSinkById(id: number): DataSink | undefined;
+    dataSinks(): readonly DataSink[];
+    log(): Logger;
+    metrics(): Metrics;
+    tracing(): Tracing | undefined;
+    registerHttpHandler(path: string, handler: HTTPHandler): void;
+    httpServer(): ServiceHTTPServer;
+    registerRuntimeBuildable(buildable: RuntimeBuildable): void;
+    streamById(id: number): Stream | undefined;
+    runtimeStreamIds(): ReadonlySet<number>;
+    graphLinks(): readonly RuntimeGraphLink[];
+    runtimeStreams(): readonly Stream[];
+    linkCallCount(from: number, to: number): number;
+    buildRuntimeStreams(): Promise<void>;
+    validateRuntimeTopology(): void;
+    serdeRegistry(): SerdeRegistry;
+    serde<T>(type: SerdeType<T>): StreamSerde<T>;
+    serdeByName<T>(name: string): StreamSerde<T>;
+    assertSerdeValue<T>(name: string, value: unknown): asserts value is T;
+    streamValueSerde<T>(streamId: number): StreamSerde<T>;
+    streamErrorSerde<T>(streamId: number): StreamSerde<T>;
+    taskPool(name: string): TaskPool | undefined;
+    priorityTaskPool(name: string): PriorityTaskPool | undefined;
+    makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
+    makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
+    delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
+}
+export interface RuntimeBuildable {
+    build(): void | Promise<void>;
+}
+export declare class ServiceEnvironment<T extends CanonicalConfig = CanonicalConfig> implements RuntimeEnvironment {
+    #private;
+    constructor(config: RuntimeConfigStore<T>, serviceId: number, callerFactory?: CallerFactory, delayPool?: DelayPool, serdeRegistry?: SerdeRegistry, logger?: Logger, metrics?: Metrics, tracing?: Tracing, taskPools?: ReadonlyMap<string, TaskPool>, priorityTaskPools?: ReadonlyMap<string, PriorityTaskPool>, joinStorageFactory?: JoinStorageFactory);
+    runtimeConfig(): RuntimeConfig<T>;
+    taskPool(name: string): TaskPool | undefined;
+    priorityTaskPool(name: string): PriorityTaskPool | undefined;
+    serviceConfig(): ServiceConfig;
+    registerStream(stream: Stream): void;
+    streamById(id: number): Stream | undefined;
+    runtimeStreamIds(): ReadonlySet<number>;
+    graphLinks(): readonly RuntimeGraphLink[];
+    runtimeStreams(): readonly Stream[];
+    linkCallCount(from: number, to: number): number;
+    buildRuntimeStreams(): Promise<void>;
+    validateRuntimeTopology(): void;
+    registerStorage(storage: Storage): void;
+    createKeyValueJoinStorage<K>(storageType: JoinStorageType, config: JoinStorageConfig, stream: Stream): JoinStorage<K> | undefined;
+    addDataSource(dataSource: DataSource): void;
+    dataSourceById(id: number): DataSource | undefined;
+    dataSources(): readonly DataSource[];
+    addDataSink(dataSink: DataSink): void;
+    dataSinkById(id: number): DataSink | undefined;
+    dataSinks(): readonly DataSink[];
+    log(): Logger;
+    metrics(): Metrics;
+    tracing(): Tracing | undefined;
+    registerHttpHandler(path: string, handler: HTTPHandler): void;
+    httpServer(): ServiceHTTPServer;
+    storages(): readonly Storage[];
+    registerRuntimeBuildable(buildable: RuntimeBuildable): void;
+    buildables(): readonly RuntimeBuildable[];
+    makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
+    makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
+    serdeRegistry(): SerdeRegistry;
+    serde<T>(type: SerdeType<T>): StreamSerde<T>;
+    serdeByName<T>(name: string): StreamSerde<T>;
+    assertSerdeValue<T>(name: string, value: unknown): asserts value is T;
+    streamErrorSerde<T>(streamId: number): StreamSerde<T>;
+    streamValueSerde<T>(streamId: number): StreamSerde<T>;
+    delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
+    delayPool(): DelayPool;
+}
+//# sourceMappingURL=runtime-environment.d.ts.map

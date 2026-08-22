@@ -1,0 +1,764 @@
+import type {
+  AnyDataConnectorConfig,
+  AnyEndpointConfig,
+  AnyStreamConfig,
+  CallSemanticsGroup,
+  CanonicalConfig,
+  DataConnectorType,
+  LinkConfig,
+  JoinStorageType,
+  JoinType,
+  ModuleConfig,
+  PoolConfig,
+  Properties,
+  ServiceConfig,
+  TransformationType,
+  TypeConfig
+} from "./types.js";
+
+interface RecordValue extends Record<string, unknown> {
+  readonly id?: unknown;
+  readonly name?: unknown;
+  readonly color?: unknown;
+  readonly defaultCallSemantics?: unknown;
+  readonly defaultGrpcTimeout?: unknown;
+  readonly environment?: unknown;
+  readonly grpcHost?: unknown;
+  readonly grpcPort?: unknown;
+  readonly httpHost?: unknown;
+  readonly httpPort?: unknown;
+  readonly logLevel?: unknown;
+  readonly metricsHandler?: unknown;
+  readonly startupHandler?: unknown;
+  readonly readinessHandler?: unknown;
+  readonly livenessHandler?: unknown;
+  readonly kubernetesWorkloadType?: unknown;
+  readonly modulePath?: unknown;
+  readonly programmingLanguage?: unknown;
+  readonly shutdownTimeout?: unknown;
+  readonly statusHandler?: unknown;
+  readonly functionCall?: unknown;
+  readonly taskPool?: unknown;
+  readonly priorityTaskPool?: unknown;
+  readonly parallelCall?: unknown;
+  readonly async?: unknown;
+  readonly poolName?: unknown;
+  readonly priority?: unknown;
+  readonly functionPackage?: unknown;
+  readonly functionName?: unknown;
+  readonly publicFunction?: unknown;
+  readonly functionDescription?: unknown;
+  readonly functionInitializerGroup?: unknown;
+  readonly functionModule?: unknown;
+  readonly type?: unknown;
+  readonly pipeline?: unknown;
+  readonly idService?: unknown;
+  readonly idSource?: unknown;
+  readonly idSources?: unknown;
+  readonly xPos?: unknown;
+  readonly yPos?: unknown;
+  readonly valueType?: unknown;
+  readonly keyType?: unknown;
+  readonly idEndpoint?: unknown;
+  readonly joinType?: unknown;
+  readonly joinStorage?: unknown;
+  readonly ttl?: unknown;
+  readonly renewTTL?: unknown;
+  readonly pattern?: unknown;
+  readonly duration?: unknown;
+  readonly implementation?: unknown;
+  readonly module?: unknown;
+  readonly host?: unknown;
+  readonly port?: unknown;
+  readonly useDedicatedListener?: unknown;
+  readonly address?: unknown;
+  readonly connectionsCount?: unknown;
+  readonly brokers?: unknown;
+  readonly version?: unknown;
+  readonly dialTimeout?: unknown;
+  readonly usePartitioner?: unknown;
+  readonly securityProtocol?: unknown;
+  readonly saslMechanism?: unknown;
+  readonly username?: unknown;
+  readonly password?: unknown;
+  readonly idDataConnector?: unknown;
+  readonly enabled?: unknown;
+  readonly httpMethodType?: unknown;
+  readonly path?: unknown;
+  readonly grpcMethodType?: unknown;
+  readonly methodName?: unknown;
+  readonly createTopic?: unknown;
+  readonly topic?: unknown;
+  readonly partitions?: unknown;
+  readonly consumerGroup?: unknown;
+  readonly replicationFactor?: unknown;
+  readonly callSemantics?: unknown;
+  readonly from?: unknown;
+  readonly to?: unknown;
+  readonly executorsCount?: unknown;
+  readonly queueCapacity?: unknown;
+  readonly golangVersion?: unknown;
+  readonly typeDefinition?: unknown;
+  readonly typeImport?: unknown;
+  readonly package?: unknown;
+  readonly definitionFormat?: unknown;
+  readonly publicType?: unknown;
+  readonly transferByValue?: unknown;
+  readonly useAlias?: unknown;
+  readonly description?: unknown;
+}
+
+function record(value: unknown, path: string): RecordValue {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${path} must be a mapping`);
+  }
+  return value as RecordValue;
+}
+
+function stringValue(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${path} must be a string`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, path: string): string | undefined {
+  return value === undefined ? undefined : stringValue(value, path);
+}
+
+function numberValue(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${path} must be a finite number`);
+  }
+  return value;
+}
+
+function integer(value: unknown, path: string): number {
+  const result = numberValue(value, path);
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(`${path} must be a safe integer`);
+  }
+  return result;
+}
+
+function optionalInteger(value: unknown, path: string): number | undefined {
+  return value === undefined ? undefined : integer(value, path);
+}
+
+function booleanValue(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${path} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalBoolean(value: unknown, path: string): boolean | undefined {
+  return value === undefined ? undefined : booleanValue(value, path);
+}
+
+function optionalEnum<const T extends readonly string[]>(
+  value: unknown,
+  path: string,
+  allowed: T
+): T[number] | undefined {
+  if (value === undefined) return undefined;
+  const result = stringValue(value, path);
+  if (!(allowed as readonly string[]).includes(result)) {
+    throw new Error(`${path} must be one of: ${allowed.join(", ")}`);
+  }
+  return result;
+}
+
+function integerArray(value: unknown, path: string): readonly number[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be a sequence`);
+  }
+  return value.map((item, index) => integer(item, `${path}[${String(index)}]`));
+}
+
+function properties(source: RecordValue, known: ReadonlySet<string>): Properties {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => !known.has(key)));
+}
+
+const identityKeys = new Set(["id", "name"]);
+
+function identity(
+  source: RecordValue,
+  path: string
+): { readonly id: number; readonly name: string } {
+  return { id: integer(source.id, `${path}.id`), name: stringValue(source.name, `${path}.name`) };
+}
+
+function namedSection<T>(
+  root: RecordValue,
+  section: string,
+  parse: (value: RecordValue, path: string) => T
+): readonly T[] {
+  const values = record(root[section] ?? {}, section);
+  return Object.keys(values)
+    .sort()
+    .map((name) => parse(record(values[name], `${section}.${name}`), `${section}.${name}`));
+}
+
+const serviceKeys = new Set([
+  ...identityKeys,
+  "color",
+  "defaultCallSemantics",
+  "defaultGrpcTimeout",
+  "environment",
+  "golangVersion",
+  "grpcHost",
+  "grpcPort",
+  "httpHost",
+  "httpPort",
+  "logLevel",
+  "metricsHandler",
+  "startupHandler",
+  "readinessHandler",
+  "livenessHandler",
+  "kubernetesWorkloadType",
+  "modulePath",
+  "shutdownTimeout",
+  "statusHandler"
+]);
+
+function callSemantics(value: unknown, path: string): CallSemanticsGroup | undefined {
+  if (value === undefined || value === 0 || value === 1) {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    switch (value) {
+      case 2:
+        return { functionCall: { async: false } };
+      case 3:
+        return { taskPool: { poolName: "" } };
+      case 4:
+        return { priorityTaskPool: { poolName: "", priority: 0 } };
+      case 5:
+        return { parallelCall: {} };
+      default:
+        throw new Error(`${path} has an unknown call semantics value`);
+    }
+  }
+  const source = record(value, path);
+  if ("functionCall" in source) {
+    const config = record(source.functionCall, `${path}.functionCall`);
+    return {
+      functionCall: { async: optionalBoolean(config.async, `${path}.functionCall.async`) ?? false }
+    };
+  }
+  if ("taskPool" in source) {
+    const config = record(source.taskPool, `${path}.taskPool`);
+    return { taskPool: { poolName: stringValue(config.poolName, `${path}.taskPool.poolName`) } };
+  }
+  if ("priorityTaskPool" in source) {
+    const config = record(source.priorityTaskPool, `${path}.priorityTaskPool`);
+    return {
+      priorityTaskPool: {
+        poolName: stringValue(config.poolName, `${path}.priorityTaskPool.poolName`),
+        priority: integer(config.priority, `${path}.priorityTaskPool.priority`)
+      }
+    };
+  }
+  if ("parallelCall" in source) {
+    record(source.parallelCall, `${path}.parallelCall`);
+    return { parallelCall: {} };
+  }
+  throw new Error(`${path} must select exactly one call semantics`);
+}
+
+function parseService(source: RecordValue, path: string): ServiceConfig {
+  const kubernetesWorkloadType = stringValue(
+    source.kubernetesWorkloadType,
+    `${path}.kubernetesWorkloadType`
+  );
+  if (kubernetesWorkloadType !== "Deployment" && kubernetesWorkloadType !== "StatefulSet") {
+    throw new Error(`${path}.kubernetesWorkloadType must be Deployment or StatefulSet`);
+  }
+  return {
+    ...identity(source, path),
+    color: stringValue(source.color, `${path}.color`),
+    defaultCallSemantics: callSemantics(
+      source.defaultCallSemantics,
+      `${path}.defaultCallSemantics`
+    ),
+    defaultGrpcTimeout: optionalInteger(source.defaultGrpcTimeout, `${path}.defaultGrpcTimeout`),
+    environment: stringValue(source.environment, `${path}.environment`),
+    golangVersion: optionalString(source.golangVersion, `${path}.golangVersion`),
+    grpcHost: stringValue(source.grpcHost, `${path}.grpcHost`),
+    grpcPort: integer(source.grpcPort, `${path}.grpcPort`),
+    httpHost: stringValue(source.httpHost, `${path}.httpHost`),
+    httpPort: integer(source.httpPort, `${path}.httpPort`),
+    logLevel: optionalString(source.logLevel, `${path}.logLevel`),
+    metricsHandler: stringValue(source.metricsHandler, `${path}.metricsHandler`),
+    startupHandler: stringValue(source.startupHandler, `${path}.startupHandler`),
+    readinessHandler: stringValue(source.readinessHandler, `${path}.readinessHandler`),
+    livenessHandler: stringValue(source.livenessHandler, `${path}.livenessHandler`),
+    kubernetesWorkloadType,
+    modulePath: optionalString(source.modulePath, `${path}.modulePath`),
+    shutdownTimeout: integer(source.shutdownTimeout, `${path}.shutdownTimeout`),
+    statusHandler: stringValue(source.statusHandler, `${path}.statusHandler`),
+    properties: properties(source, serviceKeys)
+  };
+}
+
+const transformations: Readonly<Record<number, TransformationType>> = {
+  1: "Input",
+  2: "Map",
+  3: "Filter",
+  4: "Join",
+  5: "MultiJoin",
+  6: "Process",
+  7: "FlatMap",
+  8: "FlatMapIterable",
+  9: "KeyBy",
+  10: "Merge",
+  11: "Split",
+  12: "Case",
+  13: "Sink",
+  14: "CycleLink",
+  15: "Error",
+  16: "Delay",
+  17: "When"
+};
+
+function transformation(value: unknown, path: string): TransformationType {
+  if (typeof value === "number") {
+    const result = transformations[value];
+    if (result !== undefined) return result;
+  }
+  if (
+    typeof value === "string" &&
+    Object.values(transformations).includes(value as TransformationType)
+  ) {
+    return value as TransformationType;
+  }
+  throw new Error(`${path} has an unknown transformation type`);
+}
+
+function joinType(value: unknown, path: string): JoinType {
+  const result = integer(value, path);
+  if (result === 0 || result === 1 || result === 2 || result === 3 || result === 4) {
+    return result;
+  }
+  throw new Error(`${path} has an unknown join type`);
+}
+
+function joinStorage(value: unknown, path: string): JoinStorageType {
+  const result = integer(value, path);
+  if (result === 0 || result === 1 || result === 2 || result === 3) {
+    return result;
+  }
+  throw new Error(`${path} has an unknown join storage type`);
+}
+
+const streamKeys = new Set([
+  ...identityKeys,
+  "type",
+  "pipeline",
+  "idService",
+  "idSource",
+  "idSources",
+  "xPos",
+  "yPos",
+  "functionPackage",
+  "functionName",
+  "publicFunction",
+  "functionDescription",
+  "functionInitializerGroup",
+  "functionModule",
+  "valueType",
+  "keyType",
+  "idEndpoint",
+  "joinType",
+  "joinStorage",
+  "ttl",
+  "renewTTL",
+  "pattern",
+  "duration"
+]);
+
+function functionFields(source: RecordValue, path: string) {
+  return {
+    functionPackage: optionalString(source.functionPackage, `${path}.functionPackage`),
+    functionName: optionalString(source.functionName, `${path}.functionName`),
+    publicFunction: optionalBoolean(source.publicFunction, `${path}.publicFunction`),
+    functionDescription: optionalString(source.functionDescription, `${path}.functionDescription`),
+    functionInitializerGroup: optionalString(
+      source.functionInitializerGroup,
+      `${path}.functionInitializerGroup`
+    ),
+    functionModule: optionalString(source.functionModule, `${path}.functionModule`)
+  };
+}
+
+function parseStream(source: RecordValue, path: string): AnyStreamConfig {
+  const type = transformation(source.type, `${path}.type`);
+  const common = {
+    ...identity(source, path),
+    type,
+    pipeline: stringValue(source.pipeline, `${path}.pipeline`),
+    idService: integer(source.idService, `${path}.idService`),
+    idSource: optionalInteger(source.idSource, `${path}.idSource`) ?? 0,
+    idSources: integerArray(source.idSources, `${path}.idSources`),
+    xPos: numberValue(source.xPos, `${path}.xPos`),
+    yPos: numberValue(source.yPos, `${path}.yPos`),
+    properties: properties(source, streamKeys)
+  };
+  const functions = functionFields(source, path);
+  switch (type) {
+    case "Input":
+      return {
+        ...common,
+        type,
+        valueType: stringValue(source.valueType, `${path}.valueType`),
+        idEndpoint: integer(source.idEndpoint, `${path}.idEndpoint`)
+      };
+    case "Map":
+    case "FlatMap":
+      return {
+        ...common,
+        ...functions,
+        type,
+        valueType: stringValue(source.valueType, `${path}.valueType`)
+      };
+    case "Filter":
+    case "Case":
+      return { ...common, ...functions, type };
+    case "Delay":
+      return {
+        ...common,
+        ...functions,
+        type,
+        duration: integer(source.duration, `${path}.duration`)
+      };
+    case "FlatMapIterable":
+    case "When":
+      return { ...common, type, valueType: stringValue(source.valueType, `${path}.valueType`) };
+    case "KeyBy":
+      return {
+        ...common,
+        ...functions,
+        type,
+        keyType: stringValue(source.keyType, `${path}.keyType`),
+        valueType: stringValue(source.valueType, `${path}.valueType`)
+      };
+    case "Join":
+      return {
+        ...common,
+        ...functions,
+        type,
+        valueType: stringValue(source.valueType, `${path}.valueType`),
+        joinType: joinType(source.joinType, `${path}.joinType`),
+        joinStorage: joinStorage(source.joinStorage, `${path}.joinStorage`),
+        ttl: integer(source.ttl, `${path}.ttl`),
+        renewTTL: booleanValue(source.renewTTL, `${path}.renewTTL`)
+      };
+    case "MultiJoin":
+      return {
+        ...common,
+        ...functions,
+        type,
+        valueType: stringValue(source.valueType, `${path}.valueType`),
+        joinStorage: joinStorage(source.joinStorage, `${path}.joinStorage`),
+        ttl: integer(source.ttl, `${path}.ttl`),
+        renewTTL: booleanValue(source.renewTTL, `${path}.renewTTL`)
+      };
+    case "Process":
+      return {
+        ...common,
+        ...functions,
+        type,
+        pattern: optionalString(source.pattern, `${path}.pattern`)
+      };
+    case "Sink":
+      return {
+        ...common,
+        type,
+        valueType: optionalString(source.valueType, `${path}.valueType`),
+        idEndpoint: integer(source.idEndpoint, `${path}.idEndpoint`)
+      };
+    case "CycleLink":
+      return { ...common, type };
+    case "Merge":
+    case "Split":
+      return { ...common, type };
+    case "Error":
+      throw new Error(`${path}.type Error is a virtual runtime stream, not a config stream`);
+  }
+}
+
+const connectorKeys = new Set([
+  ...identityKeys,
+  "type",
+  "implementation",
+  "programmingLanguage",
+  "module",
+  "host",
+  "port",
+  "useDedicatedListener",
+  "address",
+  "connectionsCount",
+  "brokers",
+  "version",
+  "dialTimeout",
+  "usePartitioner",
+  "async",
+  "securityProtocol",
+  "saslMechanism",
+  "username",
+  "password"
+]);
+
+function parseConnector(source: RecordValue, path: string): AnyDataConnectorConfig {
+  const type = integer(source.type, `${path}.type`) as DataConnectorType;
+  const common = {
+    ...identity(source, path),
+    type,
+    implementation: stringValue(source.implementation, `${path}.implementation`),
+    properties: properties(source, connectorKeys)
+  };
+  switch (type) {
+    case 1:
+      return {
+        ...common,
+        type,
+        module: optionalString(source.module, `${path}.module`),
+        host: optionalString(source.host, `${path}.host`),
+        port: optionalInteger(source.port, `${path}.port`),
+        useDedicatedListener:
+          optionalBoolean(source.useDedicatedListener, `${path}.useDedicatedListener`) ?? false
+      };
+    case 2:
+      return {
+        ...common,
+        type,
+        programmingLanguage: optionalInteger(
+          source.programmingLanguage,
+          `${path}.programmingLanguage`
+        ),
+        module: optionalString(source.module, `${path}.module`),
+        address: optionalString(source.address, `${path}.address`),
+        connectionsCount: optionalInteger(source.connectionsCount, `${path}.connectionsCount`) ?? 1
+      };
+    case 3:
+      return {
+        ...common,
+        type,
+        programmingLanguage: optionalInteger(
+          source.programmingLanguage,
+          `${path}.programmingLanguage`
+        ),
+        brokers: optionalString(source.brokers, `${path}.brokers`) ?? "",
+        version: optionalString(source.version, `${path}.version`),
+        dialTimeout:
+          source.dialTimeout === undefined
+            ? 0
+            : numberValue(source.dialTimeout, `${path}.dialTimeout`),
+        usePartitioner: optionalBoolean(source.usePartitioner, `${path}.usePartitioner`) ?? false,
+        async: optionalBoolean(source.async, `${path}.async`) ?? false,
+        securityProtocol:
+          optionalEnum(source.securityProtocol, `${path}.securityProtocol`, [
+            "PLAINTEXT",
+            "SASL_PLAINTEXT",
+            "SASL_SSL"
+          ] as const) ?? "PLAINTEXT",
+        saslMechanism:
+          optionalEnum(source.saslMechanism, `${path}.saslMechanism`, [
+            "PLAIN",
+            "SCRAM-SHA-256",
+            "SCRAM-SHA-512"
+          ] as const) ?? "PLAIN",
+        username: optionalString(source.username, `${path}.username`),
+        password: optionalString(source.password, `${path}.password`)
+      };
+    case 4:
+      return common;
+    default:
+      throw new Error(`${path}.type has an unknown data connector type`);
+  }
+}
+
+const endpointKeys = new Set([
+  ...identityKeys,
+  "idDataConnector",
+  "enabled",
+  "httpMethodType",
+  "path",
+  "grpcMethodType",
+  "methodName",
+  "createTopic",
+  "topic",
+  "partitions",
+  "consumerGroup",
+  "replicationFactor",
+  "functionPackage",
+  "functionName",
+  "publicFunction",
+  "functionDescription",
+  "functionInitializerGroup",
+  "functionModule"
+]);
+
+function grpcMethod(
+  value: unknown,
+  path: string
+): "NoStreaming" | "ClientStreaming" | "ServerStreaming" | "BidirectionalStreaming" {
+  const values = {
+    1: "NoStreaming",
+    2: "ClientStreaming",
+    4: "ServerStreaming",
+    5: "BidirectionalStreaming"
+  } as const;
+  if (typeof value === "number" && value in values) return values[value as keyof typeof values];
+  if (typeof value === "string" && Object.values(values).includes(value as never))
+    return value as (typeof values)[keyof typeof values];
+  throw new Error(`${path} has an unknown gRPC method type`);
+}
+
+function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
+  const common = {
+    ...identity(source, path),
+    idDataConnector: integer(source.idDataConnector, `${path}.idDataConnector`),
+    properties: properties(source, endpointKeys)
+  };
+  const functions = functionFields(source, path);
+  if (source.httpMethodType !== undefined)
+    return {
+      ...common,
+      ...functions,
+      httpMethodType: stringValue(source.httpMethodType, `${path}.httpMethodType`) as
+        "GET" | "POST",
+      path: stringValue(source.path, `${path}.path`)
+    };
+  if (source.grpcMethodType !== undefined)
+    return {
+      ...common,
+      ...functions,
+      grpcMethodType: grpcMethod(source.grpcMethodType, `${path}.grpcMethodType`),
+      methodName: stringValue(source.methodName, `${path}.methodName`)
+    };
+  if (
+    source.topic !== undefined ||
+    source.createTopic !== undefined ||
+    source.consumerGroup !== undefined
+  )
+    return {
+      ...common,
+      ...functions,
+      enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
+      createTopic: optionalBoolean(source.createTopic, `${path}.createTopic`) ?? false,
+      topic: optionalString(source.topic, `${path}.topic`) ?? "",
+      partitions: optionalInteger(source.partitions, `${path}.partitions`) ?? 0,
+      consumerGroup: optionalString(source.consumerGroup, `${path}.consumerGroup`) ?? "",
+      replicationFactor: optionalInteger(source.replicationFactor, `${path}.replicationFactor`) ?? 0
+    };
+  return { ...common, ...functions };
+}
+
+const linkKeys = new Set(["from", "to", "callSemantics", "poolName", "priority", "async"]);
+
+function parseLink(source: RecordValue, path: string): LinkConfig {
+  const semantics = callSemantics(source.callSemantics, `${path}.callSemantics`);
+  let effective = semantics;
+  if (semantics !== undefined && "functionCall" in semantics && source.async !== undefined)
+    effective = { functionCall: { async: booleanValue(source.async, `${path}.async`) } };
+  if (semantics !== undefined && "taskPool" in semantics && source.poolName !== undefined)
+    effective = { taskPool: { poolName: stringValue(source.poolName, `${path}.poolName`) } };
+  if (semantics !== undefined && "priorityTaskPool" in semantics)
+    effective = {
+      priorityTaskPool: {
+        poolName: stringValue(source.poolName, `${path}.poolName`),
+        priority: integer(source.priority, `${path}.priority`)
+      }
+    };
+  return {
+    from: integer(source.from, `${path}.from`),
+    to: integer(source.to, `${path}.to`),
+    callSemantics: effective,
+    properties: properties(source, linkKeys)
+  };
+}
+
+function parsePool(source: RecordValue, path: string): PoolConfig {
+  const keys = new Set(["name", "executorsCount", "queueCapacity"]);
+  return {
+    name: stringValue(source.name, `${path}.name`),
+    executorsCount: integer(source.executorsCount, `${path}.executorsCount`),
+    queueCapacity: optionalInteger(source.queueCapacity, `${path}.queueCapacity`) ?? 0,
+    properties: properties(source, keys)
+  };
+}
+
+function parseModule(source: RecordValue, path: string): ModuleConfig {
+  const keys = new Set(["name", "path"]);
+  return {
+    name: stringValue(source.name, `${path}.name`),
+    path: optionalString(source.path, `${path}.path`) ?? "",
+    properties: properties(source, keys)
+  };
+}
+
+function parseType(source: RecordValue, path: string): TypeConfig {
+  const keys = new Set([
+    "name",
+    "type",
+    "typeDefinition",
+    "typeImport",
+    "valueType",
+    "keyType",
+    "package",
+    "module",
+    "definitionFormat",
+    "publicType",
+    "transferByValue",
+    "useAlias"
+  ]);
+  return {
+    name: stringValue(source.name, `${path}.name`),
+    type: stringValue(source.type, `${path}.type`),
+    typeDefinition: optionalString(source.typeDefinition, `${path}.typeDefinition`),
+    typeImport: optionalString(source.typeImport, `${path}.typeImport`),
+    valueType: optionalString(source.valueType, `${path}.valueType`),
+    keyType: optionalString(source.keyType, `${path}.keyType`),
+    package: optionalString(source.package, `${path}.package`),
+    module: optionalString(source.module, `${path}.module`),
+    definitionFormat: optionalInteger(source.definitionFormat, `${path}.definitionFormat`),
+    publicType: optionalBoolean(source.publicType, `${path}.publicType`) ?? false,
+    transferByValue: optionalBoolean(source.transferByValue, `${path}.transferByValue`) ?? false,
+    useAlias: optionalBoolean(source.useAlias, `${path}.useAlias`) ?? false,
+    properties: properties(source, keys)
+  };
+}
+
+const rootKeys = new Set([
+  "settings",
+  "services",
+  "streams",
+  "dataConnectors",
+  "endpoints",
+  "pools",
+  "links",
+  "modules",
+  "types"
+]);
+
+export function parseCanonicalConfig(value: unknown): CanonicalConfig {
+  const root = record(value, "config");
+  return {
+    services: namedSection(root, "services", parseService),
+    streams: namedSection(root, "streams", parseStream),
+    dataConnectors: namedSection(root, "dataConnectors", parseConnector),
+    endpoints: namedSection(root, "endpoints", parseEndpoint),
+    pools: namedSection(root, "pools", parsePool),
+    links: namedSection(root, "links", parseLink),
+    modules: namedSection(root, "modules", parseModule),
+    types: namedSection(root, "types", parseType),
+    properties: properties(root, rootKeys)
+  };
+}
+
+export const canonicalConfigSchema = { parse: parseCanonicalConfig };

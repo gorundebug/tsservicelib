@@ -1,0 +1,1 @@
+{"version":3,"file":"key-value.d.ts","sourceRoot":"","sources":["../../../src/runtime/datastruct/key-value.ts"],"names":[],"mappings":"AAAA,MAAM,WAAW,QAAQ,CAAC,CAAC,EAAE,CAAC;IAC5B,QAAQ,CAAC,GAAG,EAAE,CAAC,CAAC;IAChB,QAAQ,CAAC,KAAK,EAAE,CAAC,CAAC;CACnB"}

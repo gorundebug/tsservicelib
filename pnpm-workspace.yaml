@@ -1,0 +1,6 @@
+packages:
+  - .
+
+allowBuilds:
+  "@confluentinc/kafka-javascript": true
+  protobufjs: false

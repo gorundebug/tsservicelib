@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package servicegen.interop.v1;
+
+option go_package = "github.com/gorundebug/tsservicelib/test/interop/gen;interopv1";
+
+message Echo {
+  int64 value = 1;
+  string text = 2;
+}
+
+service InteropService {
+  rpc Unary(Echo) returns (Echo);
+  rpc ClientStreaming(stream Echo) returns (Echo);
+  rpc ServerStreaming(Echo) returns (stream Echo);
+  rpc BidirectionalStreaming(stream Echo) returns (stream Echo);
+}

@@ -1,0 +1,163 @@
+{
+  "name": "@gorundebug/tsservicelib",
+  "version": "0.2.5",
+  "description": "TypeScript runtime for generated ServiceLib stream-processing services",
+  "type": "module",
+  "engines": {
+    "node": "24.19.0"
+  },
+  "packageManager": "pnpm@11.18.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "import": "./dist/api/index.js"
+    },
+    "./datasource": {
+      "types": "./dist/datasource/index.d.ts",
+      "import": "./dist/datasource/index.js"
+    },
+    "./datasource/http": {
+      "types": "./dist/datasource/http/index.d.ts",
+      "import": "./dist/datasource/http/index.js"
+    },
+    "./datasource/kafka": {
+      "types": "./dist/datasource/kafka/index.d.ts",
+      "import": "./dist/datasource/kafka/index.js"
+    },
+    "./datasource/grpc": {
+      "types": "./dist/datasource/grpc/index.d.ts",
+      "import": "./dist/datasource/grpc/index.js"
+    },
+    "./datasource/localsource": {
+      "types": "./dist/datasource/localsource/index.d.ts",
+      "import": "./dist/datasource/localsource/index.js"
+    },
+    "./datasink": {
+      "types": "./dist/datasink/index.d.ts",
+      "import": "./dist/datasink/index.js"
+    },
+    "./datasink/http": {
+      "types": "./dist/datasink/http/index.d.ts",
+      "import": "./dist/datasink/http/index.js"
+    },
+    "./datasink/kafka": {
+      "types": "./dist/datasink/kafka/index.d.ts",
+      "import": "./dist/datasink/kafka/index.js"
+    },
+    "./datasink/grpc": {
+      "types": "./dist/datasink/grpc/index.d.ts",
+      "import": "./dist/datasink/grpc/index.js"
+    },
+    "./datasink/localsink": {
+      "types": "./dist/datasink/localsink/index.d.ts",
+      "import": "./dist/datasink/localsink/index.js"
+    },
+    "./operators": {
+      "types": "./dist/operators/index.d.ts",
+      "import": "./dist/operators/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    },
+    "./transformation": {
+      "types": "./dist/transformation/index.d.ts",
+      "import": "./dist/transformation/index.js"
+    },
+    "./runtime/config": {
+      "types": "./dist/runtime/config/index.d.ts",
+      "import": "./dist/runtime/config/index.js"
+    },
+    "./runtime/logging": {
+      "types": "./dist/runtime/logging/index.d.ts",
+      "import": "./dist/runtime/logging/index.js"
+    },
+    "./runtime/datastruct": {
+      "types": "./dist/runtime/datastruct/index.d.ts",
+      "import": "./dist/runtime/datastruct/index.js"
+    },
+    "./runtime/pool": {
+      "types": "./dist/runtime/pool/index.d.ts",
+      "import": "./dist/runtime/pool/index.js"
+    },
+    "./runtime/serde": {
+      "types": "./dist/runtime/serde/index.d.ts",
+      "import": "./dist/runtime/serde/index.js"
+    },
+    "./runtime/status": {
+      "types": "./dist/runtime/status/index.d.ts",
+      "import": "./dist/runtime/status/index.js"
+    },
+    "./runtime/store": {
+      "types": "./dist/runtime/store/index.d.ts",
+      "import": "./dist/runtime/store/index.js"
+    },
+    "./runtime/telemetry": {
+      "types": "./dist/runtime/telemetry/index.d.ts",
+      "import": "./dist/runtime/telemetry/index.js"
+    },
+    "./runtime/testmetrics": {
+      "types": "./dist/runtime/testmetrics/index.d.ts",
+      "import": "./dist/runtime/testmetrics/index.js"
+    },
+    "./runtime/testlog": {
+      "types": "./dist/runtime/testlog/index.d.ts",
+      "import": "./dist/runtime/testlog/index.js"
+    },
+    "./runtime/testtracing": {
+      "types": "./dist/runtime/testtracing/index.d.ts",
+      "import": "./dist/runtime/testtracing/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json && node scripts/copy-status-assets.mjs dist",
+    "clean": "tsc --build tsconfig.build.json --clean && node scripts/clean.mjs",
+    "typecheck": "tsc --build tsconfig.json",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/**/*.test.js",
+    "test:coverage": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --experimental-test-coverage --enable-source-maps dist-test/test/**/*.test.js",
+    "test:event-loop-stress": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/runtime-diagnostics-stress.test.js",
+    "benchmark:tracing-disabled": "node scripts/benchmark-disabled-tracing.mjs",
+    "test:lifecycle-process": "node scripts/check-no-leaked-handles.mjs",
+    "check:structure": "node scripts/check-structure.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "check:packed-package": "node scripts/check-packed-package.mjs",
+    "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.14.0",
+    "@confluentinc/kafka-javascript": "1.9.0",
+    "@grpc/grpc-js": "1.14.4",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.221.0",
+    "@opentelemetry/core": "2.10.0",
+    "@opentelemetry/exporter-logs-otlp-grpc": "0.221.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-logs": "0.221.0",
+    "@opentelemetry/sdk-trace-node": "2.10.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
+    "prom-client": "15.1.3",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.3",
+    "eslint": "10.8.1",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0"
+  },
+  "license": "BSD-3-Clause"
+}

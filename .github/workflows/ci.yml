@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        node: [24.19.0, 26]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.18.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  linux-runtime-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.18.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: Production package build
+        run: pnpm build && pnpm check:package && pnpm check:packed-package
+      - name: Coverage
+        run: pnpm test:coverage
+      - name: Event-loop stress
+        run: pnpm test:event-loop-stress
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.18.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: Record production dependency licenses
+        run: mkdir -p .artifacts/security && pnpm licenses list --prod --json > .artifacts/security/dependency-licenses.json
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: .artifacts/security/sbom.spdx.json
+      - name: Enforce the high-severity vulnerability policy
+        run: pnpm audit --prod --audit-level high
+      - name: Upload supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsservicelib-supply-chain
+          path: .artifacts/security
