@@ -3,6 +3,9 @@ import { Context, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsu
 class CronEndpoint extends DataSourceEndpoint {
     #binding;
     #job;
+    #timer;
+    #running = false;
+    #generation = 0;
     bind(binding) {
         if (this.#binding !== undefined) {
             throw new Error(`consumer already assigned to cron endpoint ${this.name}`);
@@ -22,37 +25,76 @@ class CronEndpoint extends DataSourceEndpoint {
         const job = new Cron(config.schedule, {
             name: `${this.dataSource().name}.${this.name}`,
             paused: true,
-            timezone: config.timezone,
-            protect: config.overlapPolicy === "Skip",
-            catch: (failure) => {
-                this.runtimeEnvironment()
-                    .log()
-                    .error(Context.background(), "cron endpoint execution failed", str("endpoint", this.name), err(failure instanceof Error ? failure : new Error(String(failure))));
-            }
-        }, async (current) => {
-            const firedAt = new Date().toISOString();
-            const scheduledAt = (current.currentRun() ?? new Date()).toISOString();
-            const context = new MessageContext().withStreamId(newStreamId());
-            const started = this.onRequestStart(context);
-            let failure;
-            try {
-                const trigger = makeScheduleTrigger(this.id, this.name, scheduledAt, firedAt, ScheduleBackend.Local);
-                await binding.consume(context, trigger);
-            }
-            catch (error) {
-                failure = error instanceof Error ? error : new Error(String(error));
-                throw failure;
-            }
-            finally {
-                this.onRequestEnd(context, started, failure);
-            }
+            timezone: config.timezone
         });
         this.#job = job;
-        job.resume();
+        const next = job.nextRun();
+        if (next === null)
+            throw new Error(`cron endpoint ${this.name} has no next occurrence`);
+        this.#schedule(next, binding, config, this.#generation);
     }
     stop() {
+        this.#generation += 1;
+        if (this.#timer !== undefined)
+            clearTimeout(this.#timer);
+        this.#timer = undefined;
         this.#job?.stop();
         this.#job = undefined;
+    }
+    #schedule(next, binding, config, generation) {
+        const delay = Math.min(Math.max(next.getTime() - Date.now(), 0), 30_000);
+        this.#timer = setTimeout(() => {
+            if (generation !== this.#generation || this.#job === undefined)
+                return;
+            const now = new Date();
+            if (now < next) {
+                this.#schedule(next, binding, config, generation);
+                return;
+            }
+            const due = [];
+            let candidate = next;
+            while (candidate !== null && candidate <= now) {
+                // Croner remains the sole parser/evaluator. match() rejects a shifted
+                // spring-gap candidate; Croner itself emits only the first fall fold.
+                if (this.#job.match(candidate))
+                    due.push(candidate);
+                candidate = this.#job.nextRun(candidate);
+            }
+            if (due.length === 1) {
+                for (const occurrence of due) {
+                    void this.#dispatch(binding, occurrence, config);
+                }
+            }
+            else if (due.length > 1 && config.missedRunPolicy === "FireOnce") {
+                const occurrence = due.at(-1);
+                if (occurrence !== undefined)
+                    void this.#dispatch(binding, occurrence, config);
+            }
+            if (candidate !== null)
+                this.#schedule(candidate, binding, config, generation);
+        }, delay);
+    }
+    async #dispatch(binding, scheduledAt, config) {
+        if (this.#running && config.overlapPolicy === "Skip")
+            return;
+        this.#running = true;
+        const context = new MessageContext().withStreamId(newStreamId());
+        const started = this.onRequestStart(context);
+        let failure;
+        try {
+            const trigger = makeScheduleTrigger(this.id, this.name, scheduledAt.toISOString(), new Date().toISOString(), ScheduleBackend.Local);
+            await binding.consume(context, trigger);
+        }
+        catch (error) {
+            failure = error instanceof Error ? error : new Error(String(error));
+            this.runtimeEnvironment()
+                .log()
+                .error(Context.background(), "cron endpoint execution failed", str("endpoint", this.name), err(failure));
+        }
+        finally {
+            this.#running = false;
+            this.onRequestEnd(context, started, failure);
+        }
     }
     cronConfig() {
         const config = this.config();

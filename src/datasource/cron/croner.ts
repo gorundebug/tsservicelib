@@ -26,6 +26,10 @@ type CronEndpointBinding = InputEndpointConsumer & Consumer<ScheduleTrigger>;
 class CronEndpoint extends DataSourceEndpoint {
   #binding: CronEndpointBinding | undefined;
   #job: Cron | undefined;
+  #timer: NodeJS.Timeout | undefined;
+  #running = false;
+  #generation = 0;
+  readonly #active = new Set<Promise<void>>();
 
   public bind(binding: CronEndpointBinding): void {
     if (this.#binding !== undefined) {
@@ -41,54 +45,106 @@ class CronEndpoint extends DataSourceEndpoint {
     if (!config.enabled) return;
     const binding = this.#binding;
     if (binding === undefined) throw new Error(`cron endpoint ${this.name} has no consumer`);
-    const job = new Cron(
-      config.schedule,
-      {
-        name: `${this.dataSource().name}.${this.name}`,
-        paused: true,
-        timezone: config.timezone,
-        protect: config.overlapPolicy === "Skip",
-        catch: (failure) => {
-          this.runtimeEnvironment()
-            .log()
-            .error(
-              Context.background(),
-              "cron endpoint execution failed",
-              str("endpoint", this.name),
-              err(failure instanceof Error ? failure : new Error(String(failure)))
-            );
-        }
-      },
-      async (current) => {
-        const firedAt = new Date().toISOString();
-        const scheduledAt = (current.currentRun() ?? new Date()).toISOString();
-        const context = new MessageContext().withStreamId(newStreamId());
-        const started = this.onRequestStart(context);
-        let failure: Error | undefined;
-        try {
-          const trigger = makeScheduleTrigger(
-            this.id,
-            this.name,
-            scheduledAt,
-            firedAt,
-            ScheduleBackend.Local
-          );
-          await binding.consume(context, trigger);
-        } catch (error: unknown) {
-          failure = error instanceof Error ? error : new Error(String(error));
-          throw failure;
-        } finally {
-          this.onRequestEnd(context, started, failure);
-        }
-      }
-    );
+    const job = new Cron(config.schedule, {
+      name: `${this.dataSource().name}.${this.name}`,
+      paused: true,
+      timezone: config.timezone
+    });
     this.#job = job;
-    job.resume();
+    const next = job.nextRun();
+    if (next === null) throw new Error(`cron endpoint ${this.name} has no next occurrence`);
+    this.#schedule(next, binding, config, this.#generation);
   }
 
-  public stop(): void {
+  public async stop(): Promise<void> {
+    this.#generation += 1;
+    if (this.#timer !== undefined) clearTimeout(this.#timer);
+    this.#timer = undefined;
     this.#job?.stop();
     this.#job = undefined;
+    await Promise.allSettled(this.#active);
+  }
+
+  #schedule(
+    next: Date,
+    binding: CronEndpointBinding,
+    config: CronEndpointConfig,
+    generation: number
+  ): void {
+    const delay = Math.min(Math.max(next.getTime() - Date.now(), 0), 30_000);
+    this.#timer = setTimeout(() => {
+      if (generation !== this.#generation || this.#job === undefined) return;
+      const now = new Date();
+      if (now < next) {
+        this.#schedule(next, binding, config, generation);
+        return;
+      }
+
+      const due: Date[] = [];
+      let candidate: Date | null = next;
+      while (candidate !== null && candidate <= now) {
+        // Croner remains the sole parser/evaluator. match() rejects a shifted
+        // spring-gap candidate; Croner itself emits only the first fall fold.
+        if (this.#job.match(candidate)) due.push(candidate);
+        candidate = this.#job.nextRun(candidate);
+      }
+      if (due.length === 1) {
+        for (const occurrence of due) {
+          this.#startDispatch(binding, occurrence, config);
+        }
+      } else if (due.length > 1 && config.missedRunPolicy === "FireOnce") {
+        const occurrence = due.at(-1);
+        if (occurrence !== undefined) this.#startDispatch(binding, occurrence, config);
+      }
+      if (candidate !== null) this.#schedule(candidate, binding, config, generation);
+    }, delay);
+  }
+
+  #startDispatch(
+    binding: CronEndpointBinding,
+    scheduledAt: Date,
+    config: CronEndpointConfig
+  ): void {
+    const execution = this.#dispatch(binding, scheduledAt, config);
+    this.#active.add(execution);
+    void execution.finally(() => {
+      this.#active.delete(execution);
+    });
+  }
+
+  async #dispatch(
+    binding: CronEndpointBinding,
+    scheduledAt: Date,
+    config: CronEndpointConfig
+  ): Promise<void> {
+    if (this.#running && config.overlapPolicy === "Skip") return;
+    this.#running = true;
+    const context = new MessageContext().withStreamId(newStreamId());
+    const started = this.onRequestStart(context);
+    let failure: Error | undefined;
+    try {
+      const trigger = makeScheduleTrigger(
+        this.id,
+        this.name,
+        scheduledAt.toISOString(),
+        new Date().toISOString(),
+        ScheduleBackend.Local
+      );
+      await binding.consume(context, trigger);
+    } catch (error: unknown) {
+      failure = error instanceof Error ? error : new Error(String(error));
+      this.runtimeEnvironment()
+        .log()
+        .error(
+          Context.background(),
+          "cron endpoint execution failed",
+          str("endpoint", this.name),
+          err(failure)
+        );
+    } finally {
+      this.#running = false;
+      this.onRequestEnd(context, started, failure);
+    }
   }
 
   private cronConfig(): CronEndpointConfig {
@@ -136,7 +192,7 @@ export class CronDataSource extends InputDataSource {
       return Promise.resolve();
     } catch (error: unknown) {
       this.#started = false;
-      for (const endpoint of this.cronEndpoints()) endpoint.stop();
+      for (const endpoint of this.cronEndpoints()) void endpoint.stop();
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -145,8 +201,9 @@ export class CronDataSource extends InputDataSource {
     void _context;
     if (!this.#started) return Promise.resolve();
     this.#started = false;
-    for (const endpoint of this.cronEndpoints()) endpoint.stop();
-    return Promise.resolve();
+    return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop())).then(
+      () => undefined
+    );
   }
 
   private cronEndpoints(): readonly CronEndpoint[] {

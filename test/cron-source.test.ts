@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { Cron } from "croner";
+
 import { makeCronEndpointConsumer } from "@gorundebug/tsservicelib/datasource/cron";
 import { InputStream } from "@gorundebug/tsservicelib/operators";
 import {
@@ -96,4 +98,26 @@ await test("Croner datasource directly activates the configured input stream", a
   assert.equal(trigger.scheduleId, endpoint.name);
   assert.equal(trigger.backend, ScheduleBackend.Local);
   assert.match(trigger.triggerId, /^[0-9a-f]{64}$/u);
+});
+
+await test("Croner candidates satisfy the portable DST contract", () => {
+  const spring = new Cron("30 2 * * *", {
+    paused: true,
+    timezone: "America/New_York"
+  });
+  const shifted = spring.nextRun(new Date("2026-03-07T08:00:00Z"));
+  assert.ok(shifted);
+  assert.equal(shifted.toISOString(), "2026-03-08T07:30:00.000Z");
+  assert.equal(spring.match(shifted), false, "shifted gap candidate is filtered");
+
+  const fall = new Cron("30 1 * * *", {
+    paused: true,
+    timezone: "America/New_York"
+  });
+  const first = fall.nextRun(new Date("2026-10-31T06:00:00Z"));
+  assert.ok(first);
+  const next = fall.nextRun(first);
+  assert.ok(next);
+  assert.equal(first.toISOString(), "2026-11-01T05:30:00.000Z");
+  assert.equal(next.toISOString(), "2026-11-02T06:30:00.000Z");
 });
