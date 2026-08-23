@@ -244,7 +244,12 @@ function makeRuntimePools(
   const task = new Map<string, TaskPool>();
   const priority = new Map<string, PriorityTaskPool>();
   const use = (semantics: CallSemanticsGroup | undefined): void => {
-    if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
+    if (
+      semantics === undefined ||
+      "functionCall" in semantics ||
+      "parallelCall" in semantics ||
+      "durableCall" in semantics
+    ) {
       return;
     }
     const poolName =

@@ -72,6 +72,11 @@ export class RuntimeCallerFactory implements CallerFactory {
         { type: "prioritytaskpool", taskPoolName: pool.name() }
       );
     }
+    if ("durableCall" in semantics) {
+      throw new Error(
+        `durable caller for Temporal connector ${String(semantics.durableCall.idDataConnector)} is not registered`
+      );
+    }
     return setCallerMetadata(new ParallelCaller(this.#options.tasks, consumer), {
       type: "parallel"
     });

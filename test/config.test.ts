@@ -197,6 +197,52 @@ await test("runtime config rejects mismatched endpoint transports, pools and ran
   );
 });
 
+await test("runtime config requires DurableCall to reference a Temporal connector", () => {
+  const base = canonicalConfig();
+  const temporal = {
+    id: 21,
+    name: "temporal",
+    type: 6 as const,
+    implementation: "temporal/typescript",
+    address: "temporal:7233",
+    namespace: "default",
+    identity: "",
+    maxConcurrentActivities: 8,
+    maxConcurrentWorkflows: 4,
+    properties: {}
+  };
+  assert.doesNotThrow(
+    () =>
+      new RuntimeConfig({
+        ...base,
+        dataConnectors: [...base.dataConnectors, temporal],
+        links: [
+          {
+            from: 10,
+            to: 10,
+            callSemantics: { durableCall: { idDataConnector: temporal.id } },
+            properties: {}
+          }
+        ]
+      })
+  );
+  assert.throws(
+    () =>
+      new RuntimeConfig({
+        ...base,
+        links: [
+          {
+            from: 10,
+            to: 10,
+            callSemantics: { durableCall: { idDataConnector: 20 } },
+            properties: {}
+          }
+        ]
+      }),
+    /requires a Temporal data connector/
+  );
+});
+
 await test("reload retains the last valid snapshot and publishes a valid one once", async () => {
   const initial = new RuntimeConfig(canonicalConfig());
   const store = new RuntimeConfigStore(initial);

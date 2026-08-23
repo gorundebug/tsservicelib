@@ -166,7 +166,10 @@ function makeRuntimePools(config, metrics, service, logger) {
     const task = new Map();
     const priority = new Map();
     const use = (semantics) => {
-        if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
+        if (semantics === undefined ||
+            "functionCall" in semantics ||
+            "parallelCall" in semantics ||
+            "durableCall" in semantics) {
             return;
         }
         const poolName = "taskPool" in semantics ? semantics.taskPool.poolName : semantics.priorityTaskPool.poolName;

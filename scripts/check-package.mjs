@@ -10,6 +10,7 @@ const requiredExports = [
   "./datasource/http",
   "./datasource/kafka",
   "./datasource/grpc",
+  "./datasource/cron",
   "./datasource/localsource",
   "./datasink",
   "./datasink/http",

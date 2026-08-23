@@ -139,7 +139,11 @@ export class RuntimeConfig {
                     ? 2
                     : "topic" in endpoint
                         ? 3
-                        : 4;
+                        : "taskQueue" in endpoint
+                            ? 6
+                            : "schedule" in endpoint
+                                ? 5
+                                : 4;
             if (connector.type !== endpointType) {
                 throw new Error(`endpoint ${endpoint.name} type does not match data connector ${connector.name}`);
             }
@@ -153,6 +157,16 @@ export class RuntimeConfig {
     }
     validateCallSemantics(semantics, owner) {
         if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
+            return;
+        }
+        if ("durableCall" in semantics) {
+            const connector = this.#connectors.byId.get(semantics.durableCall.idDataConnector);
+            if (connector === undefined) {
+                throw new Error(`${owner} references missing Temporal data connector ${String(semantics.durableCall.idDataConnector)}`);
+            }
+            if (connector.type !== 6) {
+                throw new Error(`${owner} requires a Temporal data connector`);
+            }
             return;
         }
         const poolName = "taskPool" in semantics ? semantics.taskPool.poolName : semantics.priorityTaskPool.poolName;

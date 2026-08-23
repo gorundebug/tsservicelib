@@ -1,4 +1,6 @@
 import { BytesSerde, StringSerde } from "./bytes.js";
+import { JsonSerde } from "./json.js";
+import { isScheduleTrigger } from "../schedule.js";
 import { BoolArraySerde, Float32ArraySerde, Float64ArraySerde, Int8ArraySerde, Int16ArraySerde, Int32ArraySerde, Int64ArraySerde, IntArraySerde, StringArraySerde, UInt8ArraySerde, UInt16ArraySerde, UInt32ArraySerde, UInt64ArraySerde, UIntArraySerde } from "./collection.js";
 import { BoolSerde, Float32Serde, Float64Serde, Int8Serde, Int16Serde, Int32Serde, Int64Serde, IntSerde, RuneSerde, UInt8Serde, UInt16Serde, UInt32Serde, UInt64Serde, UIntSerde } from "./scalar.js";
 import { SerdeRegistry, SerdeType } from "./registry.js";
@@ -21,6 +23,7 @@ export const runeSerdeType = new SerdeType("rune", isInt32);
 export const stringSerdeType = new SerdeType("string", (value) => isString(value));
 export const bytesSerdeType = new SerdeType("[]byte", (value) => isBytes(value));
 export const errorSerdeType = new SerdeType("error", (value) => value instanceof Error);
+export const scheduleTriggerSerdeType = new SerdeType("schedule trigger", isScheduleTrigger);
 export const boolArraySerdeType = makeArrayType("[]bool", boolSerdeType);
 export const int8ArraySerdeType = makeArrayType("[]int8", int8SerdeType);
 export const int16ArraySerdeType = makeArrayType("[]int16", int16SerdeType);
@@ -54,6 +57,7 @@ export function makeDefaultSerdeRegistry() {
     registry.register(stringSerdeType, makeStreamSerde(new StringSerde()));
     registry.register(bytesSerdeType, makeStreamSerde(new BytesSerde()));
     registry.register(errorSerdeType, makeStreamSerde(new StubSerde()));
+    registry.register(scheduleTriggerSerdeType, makeStreamSerde(new JsonSerde(scheduleTriggerSerdeType)));
     registry.register(boolArraySerdeType, makeStreamSerde(new BoolArraySerde()));
     registry.register(int8ArraySerdeType, makeStreamSerde(new Int8ArraySerde()));
     registry.register(int16ArraySerdeType, makeStreamSerde(new Int16ArraySerde()));

@@ -13,6 +13,7 @@ export * from "./environment/index.js";
 export * from "./lifecycle.js";
 export * from "./logging/index.js";
 export * from "./pool/index.js";
+export * from "./schedule.js";
 export * from "./service-app.js";
 export * from "./service-runtime.js";
 export * from "./service-http-server.js";

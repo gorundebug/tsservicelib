@@ -38,7 +38,9 @@ export const DataConnectorType = {
     HTTP: 1,
     GRPC: 2,
     Kafka: 3,
-    Custom: 4
+    Custom: 4,
+    Cron: 5,
+    Temporal: 6
 };
 export const HTTPMethodType = {
     Undefined: "",

@@ -184,3 +184,52 @@ await test("gRPC connector defaults connectionsCount to one", () => {
   const config = parseCanonicalConfig(document);
   assert.equal(requireGrpcDataConnectorConfig(config.dataConnectors[0]).connectionsCount, 1);
 });
+
+await test("Cron, Temporal and DurableCall documents normalize without losing policy", () => {
+  const document = canonicalDocument();
+  document["dataConnectors"] = {
+    temporal: {
+      id: 7,
+      name: "Temporal",
+      type: 6,
+      implementation: "temporal/typescript",
+      address: "temporal:7233",
+      namespace: "default",
+      maxConcurrentActivities: 8,
+      maxConcurrentWorkflows: 4
+    }
+  };
+  document["endpoints"] = {
+    scheduledJob: {
+      id: 8,
+      name: "Scheduled Job",
+      idDataConnector: 7,
+      enabled: true,
+      taskQueue: "automation",
+      schedule: "*/5 * * * *",
+      scheduleId: "scheduled-job",
+      timezone: "UTC",
+      overlapPolicy: "Skip",
+      missedRunPolicy: "FireOnce",
+      activityStartToCloseTimeout: 30_000,
+      maximumAttempts: 3
+    }
+  };
+  document["links"] = {
+    durable: { from: 12, to: 13, callSemantics: 6, idDataConnector: 7 }
+  };
+
+  const config = parseCanonicalConfig(document);
+  const connector = config.dataConnectors[0];
+  const endpoint = config.endpoints[0];
+  const link = config.links[0];
+  assert.ok(connector && endpoint && link);
+  assert.equal(connector.type, 6);
+  assert("namespace" in connector);
+  assert.equal(connector.namespace, "default");
+  assert("taskQueue" in endpoint);
+  assert.equal(endpoint.taskQueue, "automation");
+  assert("overlapPolicy" in endpoint);
+  assert.equal(endpoint.overlapPolicy, "Skip");
+  assert.deepEqual(link.callSemantics, { durableCall: { idDataConnector: 7 } });
+});

@@ -41,6 +41,7 @@ interface RecordValue extends Record<string, unknown> {
   readonly taskPool?: unknown;
   readonly priorityTaskPool?: unknown;
   readonly parallelCall?: unknown;
+  readonly durableCall?: unknown;
   readonly async?: unknown;
   readonly poolName?: unknown;
   readonly priority?: unknown;
@@ -81,6 +82,10 @@ interface RecordValue extends Record<string, unknown> {
   readonly saslMechanism?: unknown;
   readonly username?: unknown;
   readonly password?: unknown;
+  readonly namespace?: unknown;
+  readonly identity?: unknown;
+  readonly maxConcurrentActivities?: unknown;
+  readonly maxConcurrentWorkflows?: unknown;
   readonly idDataConnector?: unknown;
   readonly enabled?: unknown;
   readonly httpMethodType?: unknown;
@@ -92,6 +97,16 @@ interface RecordValue extends Record<string, unknown> {
   readonly partitions?: unknown;
   readonly consumerGroup?: unknown;
   readonly replicationFactor?: unknown;
+  readonly schedule?: unknown;
+  readonly scheduleId?: unknown;
+  readonly timezone?: unknown;
+  readonly overlapPolicy?: unknown;
+  readonly missedRunPolicy?: unknown;
+  readonly taskQueue?: unknown;
+  readonly workflowExecutionTimeout?: unknown;
+  readonly activityStartToCloseTimeout?: unknown;
+  readonly activityHeartbeatTimeout?: unknown;
+  readonly maximumAttempts?: unknown;
   readonly callSemantics?: unknown;
   readonly from?: unknown;
   readonly to?: unknown;
@@ -239,6 +254,8 @@ function callSemantics(value: unknown, path: string): CallSemanticsGroup | undef
         return { priorityTaskPool: { poolName: "", priority: 0 } };
       case 5:
         return { parallelCall: {} };
+      case 6:
+        return { durableCall: { idDataConnector: 0 } };
       default:
         throw new Error(`${path} has an unknown call semantics value`);
     }
@@ -266,6 +283,14 @@ function callSemantics(value: unknown, path: string): CallSemanticsGroup | undef
   if ("parallelCall" in source) {
     record(source.parallelCall, `${path}.parallelCall`);
     return { parallelCall: {} };
+  }
+  if ("durableCall" in source) {
+    const config = record(source.durableCall, `${path}.durableCall`);
+    return {
+      durableCall: {
+        idDataConnector: integer(config.idDataConnector, `${path}.durableCall.idDataConnector`)
+      }
+    };
   }
   throw new Error(`${path} must select exactly one call semantics`);
 }
@@ -510,7 +535,11 @@ const connectorKeys = new Set([
   "securityProtocol",
   "saslMechanism",
   "username",
-  "password"
+  "password",
+  "namespace",
+  "identity",
+  "maxConcurrentActivities",
+  "maxConcurrentWorkflows"
 ]);
 
 function parseConnector(source: RecordValue, path: string): AnyDataConnectorConfig {
@@ -576,7 +605,21 @@ function parseConnector(source: RecordValue, path: string): AnyDataConnectorConf
         password: optionalString(source.password, `${path}.password`)
       };
     case 4:
-      return common;
+      return { ...common, type: 4 };
+    case 5:
+      return { ...common, type: 5 };
+    case 6:
+      return {
+        ...common,
+        type: 6,
+        address: optionalString(source.address, `${path}.address`) ?? "",
+        namespace: optionalString(source.namespace, `${path}.namespace`) ?? "default",
+        identity: optionalString(source.identity, `${path}.identity`) ?? "",
+        maxConcurrentActivities:
+          optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
+        maxConcurrentWorkflows:
+          optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0
+      };
     default:
       throw new Error(`${path}.type has an unknown data connector type`);
   }
@@ -595,6 +638,16 @@ const endpointKeys = new Set([
   "partitions",
   "consumerGroup",
   "replicationFactor",
+  "schedule",
+  "scheduleId",
+  "timezone",
+  "overlapPolicy",
+  "missedRunPolicy",
+  "taskQueue",
+  "workflowExecutionTimeout",
+  "activityStartToCloseTimeout",
+  "activityHeartbeatTimeout",
+  "maximumAttempts",
   "functionPackage",
   "functionName",
   "publicFunction",
@@ -656,10 +709,62 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
       consumerGroup: optionalString(source.consumerGroup, `${path}.consumerGroup`) ?? "",
       replicationFactor: optionalInteger(source.replicationFactor, `${path}.replicationFactor`) ?? 0
     };
+  if (source.taskQueue !== undefined || source.scheduleId !== undefined)
+    return {
+      ...common,
+      ...functions,
+      enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
+      taskQueue: optionalString(source.taskQueue, `${path}.taskQueue`) ?? "",
+      schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
+      scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
+      timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",
+      overlapPolicy:
+        optionalEnum(source.overlapPolicy, `${path}.overlapPolicy`, ["Allow", "Skip"] as const) ??
+        "Skip",
+      missedRunPolicy:
+        optionalEnum(source.missedRunPolicy, `${path}.missedRunPolicy`, [
+          "FireOnce",
+          "Skip"
+        ] as const) ?? "Skip",
+      workflowExecutionTimeout:
+        optionalInteger(source.workflowExecutionTimeout, `${path}.workflowExecutionTimeout`) ?? 0,
+      activityStartToCloseTimeout:
+        optionalInteger(
+          source.activityStartToCloseTimeout,
+          `${path}.activityStartToCloseTimeout`
+        ) ?? 0,
+      activityHeartbeatTimeout:
+        optionalInteger(source.activityHeartbeatTimeout, `${path}.activityHeartbeatTimeout`) ?? 0,
+      maximumAttempts: optionalInteger(source.maximumAttempts, `${path}.maximumAttempts`) ?? 0
+    };
+  if (source.schedule !== undefined)
+    return {
+      ...common,
+      ...functions,
+      enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
+      schedule: stringValue(source.schedule, `${path}.schedule`),
+      timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",
+      overlapPolicy:
+        optionalEnum(source.overlapPolicy, `${path}.overlapPolicy`, ["Allow", "Skip"] as const) ??
+        "Skip",
+      missedRunPolicy:
+        optionalEnum(source.missedRunPolicy, `${path}.missedRunPolicy`, [
+          "FireOnce",
+          "Skip"
+        ] as const) ?? "Skip"
+    };
   return { ...common, ...functions };
 }
 
-const linkKeys = new Set(["from", "to", "callSemantics", "poolName", "priority", "async"]);
+const linkKeys = new Set([
+  "from",
+  "to",
+  "callSemantics",
+  "poolName",
+  "priority",
+  "async",
+  "idDataConnector"
+]);
 
 function parseLink(source: RecordValue, path: string): LinkConfig {
   const semantics = callSemantics(source.callSemantics, `${path}.callSemantics`);
@@ -673,6 +778,12 @@ function parseLink(source: RecordValue, path: string): LinkConfig {
       priorityTaskPool: {
         poolName: stringValue(source.poolName, `${path}.poolName`),
         priority: integer(source.priority, `${path}.priority`)
+      }
+    };
+  if (semantics !== undefined && "durableCall" in semantics && source.idDataConnector !== undefined)
+    effective = {
+      durableCall: {
+        idDataConnector: integer(source.idDataConnector, `${path}.idDataConnector`)
       }
     };
   return {

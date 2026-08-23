@@ -241,7 +241,9 @@ export const DataConnectorType = {
   HTTP: 1,
   GRPC: 2,
   Kafka: 3,
-  Custom: 4
+  Custom: 4,
+  Cron: 5,
+  Temporal: 6
 } as const;
 
 export type DataConnectorType = (typeof DataConnectorType)[keyof typeof DataConnectorType];
@@ -273,12 +275,29 @@ export interface KafkaDataConnectorConfig extends DataConnectorConfig {
   readonly password?: string | undefined;
 }
 
-export type CustomDataConnectorConfig = DataConnectorConfig;
+export interface CustomDataConnectorConfig extends DataConnectorConfig {
+  readonly type: typeof DataConnectorType.Custom;
+}
+
+export interface CronDataConnectorConfig extends DataConnectorConfig {
+  readonly type: typeof DataConnectorType.Cron;
+}
+
+export interface TemporalDataConnectorConfig extends DataConnectorConfig {
+  readonly type: typeof DataConnectorType.Temporal;
+  readonly address: string;
+  readonly namespace: string;
+  readonly identity: string;
+  readonly maxConcurrentActivities: number;
+  readonly maxConcurrentWorkflows: number;
+}
 
 export type AnyDataConnectorConfig =
   | HttpDataConnectorConfig
   | GrpcDataConnectorConfig
   | KafkaDataConnectorConfig
+  | CronDataConnectorConfig
+  | TemporalDataConnectorConfig
   | CustomDataConnectorConfig;
 
 export interface EndpointConfig extends NamedIdentity {
@@ -315,10 +334,40 @@ export interface KafkaEndpointConfig extends EndpointConfig, FunctionConfig {
   readonly replicationFactor: number;
 }
 
+export type ScheduleOverlapPolicy = "Allow" | "Skip";
+export type ScheduleMissedRunPolicy = "FireOnce" | "Skip";
+
+export interface CronEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly schedule: string;
+  readonly timezone: string;
+  readonly overlapPolicy: ScheduleOverlapPolicy;
+  readonly missedRunPolicy: ScheduleMissedRunPolicy;
+}
+
+export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly taskQueue: string;
+  readonly schedule: string;
+  readonly scheduleId: string;
+  readonly timezone: string;
+  readonly overlapPolicy: ScheduleOverlapPolicy;
+  readonly missedRunPolicy: ScheduleMissedRunPolicy;
+  readonly workflowExecutionTimeout: number;
+  readonly activityStartToCloseTimeout: number;
+  readonly activityHeartbeatTimeout: number;
+  readonly maximumAttempts: number;
+}
+
 export type CustomEndpointConfig = EndpointConfig & FunctionConfig;
 
 export type AnyEndpointConfig =
-  HttpEndpointConfig | GrpcEndpointConfig | KafkaEndpointConfig | CustomEndpointConfig;
+  | HttpEndpointConfig
+  | GrpcEndpointConfig
+  | KafkaEndpointConfig
+  | CronEndpointConfig
+  | TemporalEndpointConfig
+  | CustomEndpointConfig;
 
 export interface PoolConfig {
   readonly name: string;
@@ -342,11 +391,16 @@ export interface PriorityTaskPoolCallSemanticsConfig {
 
 export type ParallelCallSemanticsConfig = Readonly<Record<string, never>>;
 
+export interface DurableCallSemanticsConfig {
+  readonly idDataConnector: number;
+}
+
 export type CallSemanticsGroup =
   | { readonly functionCall: FunctionCallSemanticsConfig }
   | { readonly taskPool: TaskPoolCallSemanticsConfig }
   | { readonly priorityTaskPool: PriorityTaskPoolCallSemanticsConfig }
-  | { readonly parallelCall: ParallelCallSemanticsConfig };
+  | { readonly parallelCall: ParallelCallSemanticsConfig }
+  | { readonly durableCall: DurableCallSemanticsConfig };
 
 export interface LinkConfig {
   readonly from: number;
@@ -405,7 +459,7 @@ export interface ConfigDocumentIdentity {
   readonly [property: string]: unknown;
 }
 
-export type CallSemanticsDocument = 0 | 1 | 2 | 3 | 4 | 5 | CallSemanticsGroup;
+export type CallSemanticsDocument = 0 | 1 | 2 | 3 | 4 | 5 | 6 | CallSemanticsGroup;
 
 export interface ServiceConfigDocument extends ConfigDocumentIdentity {
   readonly color: string;
@@ -575,6 +629,19 @@ export interface CustomDataConnectorConfigDocument extends DataConnectorConfigDo
   readonly type: 4;
 }
 
+export interface CronDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly type: 5;
+}
+
+export interface TemporalDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly type: 6;
+  readonly address?: string | undefined;
+  readonly namespace?: string | undefined;
+  readonly identity?: string | undefined;
+  readonly maxConcurrentActivities?: number | undefined;
+  readonly maxConcurrentWorkflows?: number | undefined;
+}
+
 interface EndpointConfigDocumentBase extends ConfigDocumentIdentity, FunctionConfigDocument {
   readonly idDataConnector: number;
 }
@@ -598,6 +665,23 @@ export interface KafkaEndpointConfigDocument extends EndpointConfigDocumentBase 
   readonly replicationFactor?: number | undefined;
 }
 
+export interface CronEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly schedule?: string | undefined;
+  readonly timezone?: string | undefined;
+  readonly overlapPolicy?: ScheduleOverlapPolicy | undefined;
+  readonly missedRunPolicy?: ScheduleMissedRunPolicy | undefined;
+}
+
+export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocument {
+  readonly taskQueue?: string | undefined;
+  readonly scheduleId?: string | undefined;
+  readonly workflowExecutionTimeout?: number | undefined;
+  readonly activityStartToCloseTimeout?: number | undefined;
+  readonly activityHeartbeatTimeout?: number | undefined;
+  readonly maximumAttempts?: number | undefined;
+}
+
 export type CustomEndpointConfigDocument = EndpointConfigDocumentBase;
 
 export interface PoolConfigDocument {
@@ -614,6 +698,7 @@ export interface LinkConfigDocument {
   readonly poolName?: string | undefined;
   readonly priority?: number | undefined;
   readonly async?: boolean | undefined;
+  readonly idDataConnector?: number | undefined;
   readonly [property: string]: unknown;
 }
 

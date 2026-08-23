@@ -1,3 +1,4 @@
+import { type ScheduleTrigger } from "../schedule.js";
 import { SerdeRegistry, SerdeType } from "./registry.js";
 export declare const boolSerdeType: SerdeType<boolean>;
 export declare const int8SerdeType: SerdeType<number>;
@@ -16,6 +17,7 @@ export declare const runeSerdeType: SerdeType<number>;
 export declare const stringSerdeType: SerdeType<string>;
 export declare const bytesSerdeType: SerdeType<Uint8Array<ArrayBufferLike>>;
 export declare const errorSerdeType: SerdeType<Error>;
+export declare const scheduleTriggerSerdeType: SerdeType<ScheduleTrigger>;
 export declare const boolArraySerdeType: SerdeType<readonly boolean[]>;
 export declare const int8ArraySerdeType: SerdeType<readonly number[]>;
 export declare const int16ArraySerdeType: SerdeType<readonly number[]>;

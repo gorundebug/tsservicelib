@@ -32,6 +32,10 @@
       "types": "./dist/datasource/grpc/index.d.ts",
       "import": "./dist/datasource/grpc/index.js"
     },
+    "./datasource/cron": {
+      "types": "./dist/datasource/cron/index.d.ts",
+      "import": "./dist/datasource/cron/index.js"
+    },
     "./datasource/localsource": {
       "types": "./dist/datasource/localsource/index.d.ts",
       "import": "./dist/datasource/localsource/index.js"
@@ -148,6 +152,7 @@
     "@opentelemetry/sdk-logs": "0.221.0",
     "@opentelemetry/sdk-trace-node": "2.10.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
+    "croner": "10.0.1",
     "prom-client": "15.1.3",
     "yaml": "2.9.0"
   },
