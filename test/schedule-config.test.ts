@@ -40,6 +40,10 @@ await test("Cron config guards preserve the generated typed contract", () => {
     () => requireCronEndpointConfig({ ...endpoint, overlapPolicy: "invalid" } as EndpointConfig),
     /invalid Cron endpoint config/
   );
+  assert.throws(
+    () => requireCronEndpointConfig({ ...endpoint, timezone: "Europe\/Moscow" } as EndpointConfig),
+    /invalid Cron endpoint config/
+  );
 });
 
 await test("Temporal config guards reject incomplete durable transport settings", () => {

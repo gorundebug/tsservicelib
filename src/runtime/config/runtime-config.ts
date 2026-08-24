@@ -258,6 +258,13 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           );
         }
       }
+      if (
+        "schedule" in endpoint &&
+        "timezone" in endpoint &&
+        endpoint.timezone !== "UTC"
+      ) {
+        throw new Error(`scheduled endpoint ${endpoint.name} requires timezone UTC`);
+      }
     }
     for (const link of this.#config.links) {
       if (!this.#streams.byId.has(link.from) || !this.#streams.byId.has(link.to)) {
