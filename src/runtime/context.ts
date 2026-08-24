@@ -17,9 +17,15 @@ interface ContextState {
 }
 
 interface MessageContextState extends ContextState {
+  readonly durableInvocation: DurableInvocationScope | undefined;
   readonly metadata: ReadonlyMap<string, string> | undefined;
   readonly openTelemetryContext: OpenTelemetryContext | undefined;
   readonly priority: number | undefined;
+}
+
+interface DurableInvocationScope {
+  readonly parentCallId: string;
+  readonly occurrences: Map<string, number>;
 }
 
 const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
@@ -134,6 +140,7 @@ export class MessageContext extends Context {
     super(signal);
     this.#messageState = {
       ...this.state(),
+      durableInvocation: undefined,
       metadata: undefined,
       openTelemetryContext: undefined,
       priority: undefined
@@ -266,6 +273,28 @@ export class MessageContext extends Context {
       }
     }
     return result;
+  }
+
+  /** @internal Propagates deterministic child-call identity across an Activity retry. */
+  public withDurableInvocation(parentCallId: string): MessageContext {
+    return this.clone({
+      durableInvocation: { parentCallId, occurrences: new Map() }
+    });
+  }
+
+  /** @internal Returns and advances this invocation's per-payload occurrence. */
+  public durableInvocation():
+    { readonly parentCallId: string; readonly occurrence: (key: string) => number } | undefined {
+    const scope = this.#messageState.durableInvocation;
+    if (scope === undefined) return undefined;
+    return {
+      parentCallId: scope.parentCallId,
+      occurrence(key: string): number {
+        const next = (scope.occurrences.get(key) ?? 0) + 1;
+        scope.occurrences.set(key, next);
+        return next;
+      }
+    };
   }
 }
 

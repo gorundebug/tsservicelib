@@ -1,5 +1,5 @@
 import type { Caller } from "./stream.js";
-export type CallerType = "taskpool" | "prioritytaskpool" | "parallel";
+export type CallerType = "taskpool" | "prioritytaskpool" | "parallel" | "durable";
 export interface CallerMetadata {
     readonly type: CallerType;
     readonly taskPoolName?: string | undefined;

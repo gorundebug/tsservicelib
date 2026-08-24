@@ -216,7 +216,15 @@ await test("Cron, Temporal and DurableCall documents normalize without losing po
     }
   };
   document["links"] = {
-    durable: { from: 12, to: 13, callSemantics: 6, idDataConnector: 7 }
+    durable: {
+      from: 12,
+      to: 13,
+      callSemantics: 6,
+      idDataConnector: 7,
+      taskQueue: "automation",
+      activityStartToCloseTimeout: 30_000,
+      maximumAttempts: 3
+    }
   };
 
   const config = parseCanonicalConfig(document);
@@ -231,5 +239,14 @@ await test("Cron, Temporal and DurableCall documents normalize without losing po
   assert.equal(endpoint.taskQueue, "automation");
   assert("overlapPolicy" in endpoint);
   assert.equal(endpoint.overlapPolicy, "Skip");
-  assert.deepEqual(link.callSemantics, { durableCall: { idDataConnector: 7 } });
+  assert.deepEqual(link.callSemantics, {
+    durableCall: {
+      idDataConnector: 7,
+      taskQueue: "automation",
+      workflowExecutionTimeout: 0,
+      activityStartToCloseTimeout: 30_000,
+      activityHeartbeatTimeout: 0,
+      maximumAttempts: 3
+    }
+  });
 });

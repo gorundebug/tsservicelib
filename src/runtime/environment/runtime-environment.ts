@@ -4,6 +4,7 @@ import type { MessageContext } from "../context.js";
 import { callerMetadata } from "../caller-metadata.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
+import type { DurableTransport } from "../durable.js";
 import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
@@ -54,6 +55,9 @@ export interface RuntimeEnvironment {
   addDataSink(dataSink: DataSink): void;
   dataSinkById(id: number): DataSink | undefined;
   dataSinks(): readonly DataSink[];
+  addDurableTransport(transport: DurableTransport): void;
+  durableTransportById(id: number): DurableTransport | undefined;
+  durableTransports(): readonly DurableTransport[];
   log(): Logger;
   metrics(): Metrics;
   tracing(): Tracing | undefined;
@@ -100,6 +104,7 @@ export class ServiceEnvironment<
   readonly #streams = new Map<number, Stream>();
   readonly #dataSources = new Map<number, DataSource>();
   readonly #dataSinks = new Map<number, DataSink>();
+  readonly #durableTransports = new Map<number, DurableTransport>();
   readonly #storages = new Set<Storage>();
   readonly #buildables = new Set<RuntimeBuildable>();
   readonly #logger: Logger;
@@ -275,6 +280,22 @@ export class ServiceEnvironment<
 
   public dataSinks(): readonly DataSink[] {
     return [...this.#dataSinks.values()];
+  }
+
+  public addDurableTransport(transport: DurableTransport): void {
+    const existing = this.#durableTransports.get(transport.id);
+    if (existing !== undefined && existing !== transport) {
+      throw new Error(`durable transport ${String(transport.id)} is already registered`);
+    }
+    this.#durableTransports.set(transport.id, transport);
+  }
+
+  public durableTransportById(id: number): DurableTransport | undefined {
+    return this.#durableTransports.get(id);
+  }
+
+  public durableTransports(): readonly DurableTransport[] {
+    return [...this.#durableTransports.values()];
   }
 
   public log(): Logger {

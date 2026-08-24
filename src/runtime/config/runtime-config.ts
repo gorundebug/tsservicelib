@@ -9,6 +9,7 @@ import type {
   PoolConfig,
   ServiceConfig,
   StreamConfig,
+  TemporalEndpointConfig,
   TypeConfig
 } from "./types.js";
 import { deepFreeze } from "./immutable.js";
@@ -158,6 +159,32 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           `gRPC data connector ${connector.name} connectionsCount`
         );
       }
+      if (connector.type === 6) {
+        if (!("address" in connector) || connector.address === "") {
+          throw new Error(`Temporal data connector ${connector.name} requires address`);
+        }
+        if (!("namespace" in connector) || connector.namespace === "") {
+          throw new Error(`Temporal data connector ${connector.name} requires namespace`);
+        }
+        const cert = "tlsCertFile" in connector ? connector.tlsCertFile : "";
+        const key = "tlsKeyFile" in connector ? connector.tlsKeyFile : "";
+        const ca = "tlsCaFile" in connector ? connector.tlsCaFile : "";
+        const serverName = "tlsServerName" in connector ? connector.tlsServerName : "";
+        if ((cert === "") !== (key === "")) {
+          throw new Error(
+            `Temporal data connector ${connector.name} requires both TLS cert and key`
+          );
+        }
+        if (
+          "tlsEnabled" in connector &&
+          !connector.tlsEnabled &&
+          (cert !== "" || key !== "" || ca !== "" || serverName !== "")
+        ) {
+          throw new Error(
+            `Temporal data connector ${connector.name} cannot configure TLS files while TLS is disabled`
+          );
+        }
+      }
     }
     for (const stream of this.#config.streams) {
       if (!this.#services.byId.has(stream.idService)) {
@@ -205,6 +232,32 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           `endpoint ${endpoint.name} type does not match data connector ${connector.name}`
         );
       }
+      if (isTemporalEndpoint(endpoint)) {
+        if (endpoint.taskQueue === "") {
+          throw new Error(`Temporal endpoint ${endpoint.name} requires taskQueue`);
+        }
+        if (endpoint.activityStartToCloseTimeout < 1) {
+          throw new Error(
+            `Temporal endpoint ${endpoint.name} requires activityStartToCloseTimeout`
+          );
+        }
+        if (endpoint.maximumAttempts < 1) {
+          throw new Error(`Temporal endpoint ${endpoint.name} requires maximumAttempts`);
+        }
+        if (endpoint.schedule !== "" && (endpoint.scheduleId === "" || endpoint.timezone === "")) {
+          throw new Error(
+            `scheduled Temporal endpoint ${endpoint.name} requires scheduleId, timezone and policies`
+          );
+        }
+        if (
+          endpoint.schedule === "" &&
+          (endpoint.scheduleId !== "" || endpoint.timezone !== "UTC")
+        ) {
+          throw new Error(
+            `on-demand Temporal endpoint ${endpoint.name} cannot configure scheduleId or timezone`
+          );
+        }
+      }
     }
     for (const link of this.#config.links) {
       if (!this.#streams.byId.has(link.from) || !this.#streams.byId.has(link.to)) {
@@ -233,6 +286,15 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
       if (connector.type !== 6) {
         throw new Error(`${owner} requires a Temporal data connector`);
       }
+      if (semantics.durableCall.taskQueue === "") {
+        throw new Error(`${owner} DurableCall requires taskQueue`);
+      }
+      if (semantics.durableCall.activityStartToCloseTimeout < 1) {
+        throw new Error(`${owner} DurableCall requires activityStartToCloseTimeout`);
+      }
+      if (semantics.durableCall.maximumAttempts < 1) {
+        throw new Error(`${owner} DurableCall requires maximumAttempts`);
+      }
       return;
     }
     const poolName =
@@ -241,6 +303,10 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
       throw new Error(`${owner} references missing pool ${poolName}`);
     }
   }
+}
+
+function isTemporalEndpoint(endpoint: EndpointConfig): endpoint is TemporalEndpointConfig {
+  return "taskQueue" in endpoint && typeof endpoint.taskQueue === "string";
 }
 
 function validatePort(value: number, path: string): void {

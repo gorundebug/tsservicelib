@@ -6,6 +6,7 @@ class CronEndpoint extends DataSourceEndpoint {
     #timer;
     #running = false;
     #generation = 0;
+    #active = new Set();
     bind(binding) {
         if (this.#binding !== undefined) {
             throw new Error(`consumer already assigned to cron endpoint ${this.name}`);
@@ -33,13 +34,14 @@ class CronEndpoint extends DataSourceEndpoint {
             throw new Error(`cron endpoint ${this.name} has no next occurrence`);
         this.#schedule(next, binding, config, this.#generation);
     }
-    stop() {
+    async stop() {
         this.#generation += 1;
         if (this.#timer !== undefined)
             clearTimeout(this.#timer);
         this.#timer = undefined;
         this.#job?.stop();
         this.#job = undefined;
+        await Promise.allSettled(this.#active);
     }
     #schedule(next, binding, config, generation) {
         const delay = Math.min(Math.max(next.getTime() - Date.now(), 0), 30_000);
@@ -62,17 +64,24 @@ class CronEndpoint extends DataSourceEndpoint {
             }
             if (due.length === 1) {
                 for (const occurrence of due) {
-                    void this.#dispatch(binding, occurrence, config);
+                    this.#startDispatch(binding, occurrence, config);
                 }
             }
             else if (due.length > 1 && config.missedRunPolicy === "FireOnce") {
                 const occurrence = due.at(-1);
                 if (occurrence !== undefined)
-                    void this.#dispatch(binding, occurrence, config);
+                    this.#startDispatch(binding, occurrence, config);
             }
             if (candidate !== null)
                 this.#schedule(candidate, binding, config, generation);
         }, delay);
+    }
+    #startDispatch(binding, scheduledAt, config) {
+        const execution = this.#dispatch(binding, scheduledAt, config);
+        this.#active.add(execution);
+        void execution.finally(() => {
+            this.#active.delete(execution);
+        });
     }
     async #dispatch(binding, scheduledAt, config) {
         if (this.#running && config.overlapPolicy === "Skip")
@@ -138,7 +147,7 @@ export class CronDataSource extends InputDataSource {
         catch (error) {
             this.#started = false;
             for (const endpoint of this.cronEndpoints())
-                endpoint.stop();
+                void endpoint.stop();
             return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
     }
@@ -147,9 +156,7 @@ export class CronDataSource extends InputDataSource {
         if (!this.#started)
             return Promise.resolve();
         this.#started = false;
-        for (const endpoint of this.cronEndpoints())
-            endpoint.stop();
-        return Promise.resolve();
+        return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop())).then(() => undefined);
     }
     cronEndpoints() {
         return this.endpoints().map((endpoint) => {

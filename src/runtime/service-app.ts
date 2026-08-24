@@ -100,7 +100,8 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
         serviceId,
         taskPools: pools.task,
         priorityTaskPools: pools.priority,
-        tasks
+        tasks,
+        durableTransport: (id) => this.#environment.durableTransportById(id)
       });
     this.#environment = new ServiceEnvironment(
       config,
@@ -181,6 +182,13 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     }
     for (const dataSink of this.#environment.dataSinks()) {
       this.#runtime.register({ category: "dataSink", name: dataSink.name, lifecycle: dataSink });
+    }
+    for (const transport of this.#environment.durableTransports()) {
+      this.#runtime.register({
+        category: "durableTransport",
+        name: transport.name,
+        lifecycle: transport
+      });
     }
     for (const [index, storage] of this.#environment.storages().entries()) {
       this.#runtime.register({

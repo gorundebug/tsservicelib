@@ -179,6 +179,12 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
     readonly address: string;
     readonly namespace: string;
     readonly identity: string;
+    readonly apiKey: string;
+    readonly tlsEnabled: boolean;
+    readonly tlsServerName: string;
+    readonly tlsCaFile: string;
+    readonly tlsCertFile: string;
+    readonly tlsKeyFile: string;
     readonly maxConcurrentActivities: number;
     readonly maxConcurrentWorkflows: number;
 }
@@ -252,6 +258,11 @@ export interface PriorityTaskPoolCallSemanticsConfig {
 export type ParallelCallSemanticsConfig = Readonly<Record<string, never>>;
 export interface DurableCallSemanticsConfig {
     readonly idDataConnector: number;
+    readonly taskQueue: string;
+    readonly workflowExecutionTimeout: number;
+    readonly activityStartToCloseTimeout: number;
+    readonly activityHeartbeatTimeout: number;
+    readonly maximumAttempts: number;
 }
 export type CallSemanticsGroup = {
     readonly functionCall: FunctionCallSemanticsConfig;
@@ -460,6 +471,12 @@ export interface TemporalDataConnectorConfigDocument extends DataConnectorConfig
     readonly address?: string | undefined;
     readonly namespace?: string | undefined;
     readonly identity?: string | undefined;
+    readonly apiKey?: string | undefined;
+    readonly tlsEnabled?: boolean | undefined;
+    readonly tlsServerName?: string | undefined;
+    readonly tlsCaFile?: string | undefined;
+    readonly tlsCertFile?: string | undefined;
+    readonly tlsKeyFile?: string | undefined;
     readonly maxConcurrentActivities?: number | undefined;
     readonly maxConcurrentWorkflows?: number | undefined;
 }

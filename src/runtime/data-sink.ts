@@ -18,6 +18,7 @@ import {
   type RuntimeEnvironment
 } from "./environment/index.js";
 import type { Lifecycle } from "./lifecycle.js";
+import type { StreamSerde } from "./serde/index.js";
 import type {
   Completion,
   Consumer,
@@ -31,6 +32,7 @@ export interface TypedSinkStream<T, E> extends TypedStreamConsumer<T> {
   endpointId(): number;
   errorStream(): TypedConsumedStream<E>;
   setSinkConsumer(consumer: Consumer<T>): void;
+  inputSerde(): StreamSerde<T>;
 }
 
 /** Runtime boundary implemented structurally by the result-producing Sink operator. */
@@ -39,6 +41,7 @@ export interface TypedSinkStreamWithResult<T, R, E> extends TypedStream<R>, Type
   errorStream(): TypedConsumedStream<E>;
   setSinkConsumer(consumer: Consumer<T>): void;
   consumeResult(context: MessageContext, value: R): Completion;
+  inputSerde(): StreamSerde<T>;
 }
 
 /** Common typed collector context passed to datasink endpoint handlers. */

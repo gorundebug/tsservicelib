@@ -57,6 +57,7 @@ try {
       "",
       "allowBuilds:",
       '  "@confluentinc/kafka-javascript": true',
+      '  "@swc/core": false',
       "  protobufjs: false",
       ""
     ].join("\n")

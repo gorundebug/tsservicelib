@@ -14,6 +14,7 @@ export declare class ServiceRuntime {
     private stopOnce;
     private rollback;
     private stopConcurrent;
+    private stopAdmission;
     private stopSequential;
     private logStopError;
 }

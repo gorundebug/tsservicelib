@@ -5,6 +5,7 @@ import { RuntimeTaskRegistry } from "./task-registry.js";
 const START_ORDER = [
     "dataSource",
     "dataSink",
+    "durableTransport",
     "storage",
     "delayPool",
     "taskPool",
@@ -15,6 +16,7 @@ const START_ORDER = [
 ];
 const ADMISSION_CATEGORIES = new Set([
     "dataSource",
+    "durableTransport",
     "delayPool",
     "taskPool",
     "priorityTaskPool",
@@ -104,7 +106,7 @@ export class ServiceRuntime {
         }
         this.#state = "stopping";
         const admission = this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category));
-        await this.stopConcurrent(admission, context);
+        await this.stopAdmission(admission, context);
         try {
             await this.#tasks.drain(drainTimeoutMs);
             this.#tasks.stopAdmission();
@@ -115,7 +117,9 @@ export class ServiceRuntime {
             throw error;
         }
         finally {
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink" || item.category === "storage"), context);
+            await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink" ||
+                item.category === "durableTransport" ||
+                item.category === "storage"), context);
             await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), context);
             this.#started.length = 0;
             this.#state = "stopped";
@@ -135,6 +139,22 @@ export class ServiceRuntime {
     }
     async stopConcurrent(components, context) {
         const results = await Promise.allSettled(components.toReversed().map(async (item) => item.lifecycle.stop(context)));
+        for (const [index, result] of results.entries()) {
+            if (result.status === "rejected") {
+                const component = components[components.length - index - 1];
+                if (component !== undefined)
+                    this.logStopError(context, component, result.reason);
+            }
+        }
+    }
+    async stopAdmission(components, context) {
+        const results = await Promise.allSettled(components.toReversed().map(async (item) => {
+            if (item.category === "durableTransport" && "stopAdmission" in item.lifecycle) {
+                await item.lifecycle.stopAdmission(context);
+                return;
+            }
+            await item.lifecycle.stop(context);
+        }));
         for (const [index, result] of results.entries()) {
             if (result.status === "rejected") {
                 const component = components[components.length - index - 1];

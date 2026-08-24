@@ -3,11 +3,13 @@ import { ErrorStream } from "./error.js";
 export class SinkStream extends ServiceStream {
     #endpointId;
     #errorStream;
+    #inputSerde;
     #sinkConsumer;
     constructor(config, source) {
         const environment = source.runtimeEnvironment();
         super(config, environment);
         this.#endpointId = config.idEndpoint;
+        this.#inputSerde = source.serde();
         this.#errorStream = new ErrorStream(config, environment, environment.streamErrorSerde(config.id), this);
         source.setConsumer(this);
         environment.registerStream(this);
@@ -20,6 +22,9 @@ export class SinkStream extends ServiceStream {
     }
     setSinkConsumer(consumer) {
         this.#sinkConsumer = consumer;
+    }
+    inputSerde() {
+        return this.#inputSerde;
     }
     consume(context, value) {
         const consumer = this.#sinkConsumer;
@@ -38,11 +43,13 @@ export class SinkStream extends ServiceStream {
 export class SinkStreamWithResult extends ConsumedStream {
     #endpointId;
     #errorStream;
+    #inputSerde;
     #sinkConsumer;
     constructor(config, source) {
         const environment = source.runtimeEnvironment();
         super(config, environment, environment.serdeByName(requireResultType(config)));
         this.#endpointId = config.idEndpoint;
+        this.#inputSerde = source.serde();
         this.#errorStream = new ErrorStream(config, environment, environment.streamErrorSerde(config.id), this);
         source.setConsumer(this);
         environment.registerStream(this);
@@ -55,6 +62,9 @@ export class SinkStreamWithResult extends ConsumedStream {
     }
     setSinkConsumer(consumer) {
         this.#sinkConsumer = consumer;
+    }
+    inputSerde() {
+        return this.#inputSerde;
     }
     consume(context, value) {
         const consumer = this.#sinkConsumer;

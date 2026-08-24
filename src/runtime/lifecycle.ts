@@ -5,9 +5,14 @@ export interface Lifecycle {
   stop(context: Context): Promise<void>;
 }
 
+export interface AdmissionLifecycle extends Lifecycle {
+  stopAdmission(context: Context): Promise<void>;
+}
+
 export type ComponentCategory =
   | "dataSource"
   | "dataSink"
+  | "durableTransport"
   | "storage"
   | "delayPool"
   | "taskPool"

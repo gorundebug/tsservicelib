@@ -18,6 +18,7 @@ export class ServiceEnvironment {
     #streams = new Map();
     #dataSources = new Map();
     #dataSinks = new Map();
+    #durableTransports = new Map();
     #storages = new Set();
     #buildables = new Set();
     #logger;
@@ -152,6 +153,19 @@ export class ServiceEnvironment {
     }
     dataSinks() {
         return [...this.#dataSinks.values()];
+    }
+    addDurableTransport(transport) {
+        const existing = this.#durableTransports.get(transport.id);
+        if (existing !== undefined && existing !== transport) {
+            throw new Error(`durable transport ${String(transport.id)} is already registered`);
+        }
+        this.#durableTransports.set(transport.id, transport);
+    }
+    durableTransportById(id) {
+        return this.#durableTransports.get(id);
+    }
+    durableTransports() {
+        return [...this.#durableTransports.values()];
     }
     log() {
         return this.#logger;

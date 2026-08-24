@@ -17,7 +17,7 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": false,
+    "skipLibCheck": true,
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,

@@ -105,7 +105,16 @@ function callSemantics(value, path) {
             case 5:
                 return { parallelCall: {} };
             case 6:
-                return { durableCall: { idDataConnector: 0 } };
+                return {
+                    durableCall: {
+                        idDataConnector: 0,
+                        taskQueue: "",
+                        workflowExecutionTimeout: 0,
+                        activityStartToCloseTimeout: 0,
+                        activityHeartbeatTimeout: 0,
+                        maximumAttempts: 0
+                    }
+                };
             default:
                 throw new Error(`${path} has an unknown call semantics value`);
         }
@@ -138,7 +147,12 @@ function callSemantics(value, path) {
         const config = record(source.durableCall, `${path}.durableCall`);
         return {
             durableCall: {
-                idDataConnector: integer(config.idDataConnector, `${path}.durableCall.idDataConnector`)
+                idDataConnector: integer(config.idDataConnector, `${path}.durableCall.idDataConnector`),
+                taskQueue: optionalString(config.taskQueue, `${path}.durableCall.taskQueue`) ?? "",
+                workflowExecutionTimeout: optionalInteger(config.workflowExecutionTimeout, `${path}.durableCall.workflowExecutionTimeout`) ?? 0,
+                activityStartToCloseTimeout: optionalInteger(config.activityStartToCloseTimeout, `${path}.durableCall.activityStartToCloseTimeout`) ?? 0,
+                activityHeartbeatTimeout: optionalInteger(config.activityHeartbeatTimeout, `${path}.durableCall.activityHeartbeatTimeout`) ?? 0,
+                maximumAttempts: optionalInteger(config.maximumAttempts, `${path}.durableCall.maximumAttempts`) ?? 0
             }
         };
     }
@@ -369,6 +383,12 @@ const connectorKeys = new Set([
     "password",
     "namespace",
     "identity",
+    "apiKey",
+    "tlsEnabled",
+    "tlsServerName",
+    "tlsCaFile",
+    "tlsCertFile",
+    "tlsKeyFile",
     "maxConcurrentActivities",
     "maxConcurrentWorkflows"
 ]);
@@ -435,6 +455,12 @@ function parseConnector(source, path) {
                 address: optionalString(source.address, `${path}.address`) ?? "",
                 namespace: optionalString(source.namespace, `${path}.namespace`) ?? "default",
                 identity: optionalString(source.identity, `${path}.identity`) ?? "",
+                apiKey: optionalString(source.apiKey, `${path}.apiKey`) ?? "",
+                tlsEnabled: optionalBoolean(source.tlsEnabled, `${path}.tlsEnabled`) ?? false,
+                tlsServerName: optionalString(source.tlsServerName, `${path}.tlsServerName`) ?? "",
+                tlsCaFile: optionalString(source.tlsCaFile, `${path}.tlsCaFile`) ?? "",
+                tlsCertFile: optionalString(source.tlsCertFile, `${path}.tlsCertFile`) ?? "",
+                tlsKeyFile: optionalString(source.tlsKeyFile, `${path}.tlsKeyFile`) ?? "",
                 maxConcurrentActivities: optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
                 maxConcurrentWorkflows: optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0
             };
@@ -562,7 +588,12 @@ const linkKeys = new Set([
     "poolName",
     "priority",
     "async",
-    "idDataConnector"
+    "idDataConnector",
+    "taskQueue",
+    "workflowExecutionTimeout",
+    "activityStartToCloseTimeout",
+    "activityHeartbeatTimeout",
+    "maximumAttempts"
 ]);
 function parseLink(source, path) {
     const semantics = callSemantics(source.callSemantics, `${path}.callSemantics`);
@@ -578,10 +609,27 @@ function parseLink(source, path) {
                 priority: integer(source.priority, `${path}.priority`)
             }
         };
-    if (semantics !== undefined && "durableCall" in semantics && source.idDataConnector !== undefined)
+    if (semantics !== undefined && "durableCall" in semantics)
         effective = {
             durableCall: {
-                idDataConnector: integer(source.idDataConnector, `${path}.idDataConnector`)
+                idDataConnector: source.idDataConnector === undefined
+                    ? semantics.durableCall.idDataConnector
+                    : integer(source.idDataConnector, `${path}.idDataConnector`),
+                taskQueue: source.taskQueue === undefined
+                    ? semantics.durableCall.taskQueue
+                    : stringValue(source.taskQueue, `${path}.taskQueue`),
+                workflowExecutionTimeout: source.workflowExecutionTimeout === undefined
+                    ? semantics.durableCall.workflowExecutionTimeout
+                    : integer(source.workflowExecutionTimeout, `${path}.workflowExecutionTimeout`),
+                activityStartToCloseTimeout: source.activityStartToCloseTimeout === undefined
+                    ? semantics.durableCall.activityStartToCloseTimeout
+                    : integer(source.activityStartToCloseTimeout, `${path}.activityStartToCloseTimeout`),
+                activityHeartbeatTimeout: source.activityHeartbeatTimeout === undefined
+                    ? semantics.durableCall.activityHeartbeatTimeout
+                    : integer(source.activityHeartbeatTimeout, `${path}.activityHeartbeatTimeout`),
+                maximumAttempts: source.maximumAttempts === undefined
+                    ? semantics.durableCall.maximumAttempts
+                    : integer(source.maximumAttempts, `${path}.maximumAttempts`)
             }
         };
     return {

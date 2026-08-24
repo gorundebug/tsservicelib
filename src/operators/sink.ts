@@ -6,19 +6,22 @@ import {
   type MessageContext,
   type SinkStreamConfig,
   type TypedStream,
-  type TypedStreamConsumer
+  type TypedStreamConsumer,
+  type StreamSerde
 } from "../runtime/index.js";
 import { ErrorStream } from "./error.js";
 
 export class SinkStream<T, E> extends ServiceStream implements TypedStreamConsumer<T> {
   readonly #endpointId: number;
   readonly #errorStream: ErrorStream<E>;
+  readonly #inputSerde: StreamSerde<T>;
   #sinkConsumer: Consumer<T> | undefined;
 
   public constructor(config: SinkStreamConfig, source: TypedStream<T>) {
     const environment = source.runtimeEnvironment();
     super(config, environment);
     this.#endpointId = config.idEndpoint;
+    this.#inputSerde = source.serde();
     this.#errorStream = new ErrorStream(
       config,
       environment,
@@ -39,6 +42,10 @@ export class SinkStream<T, E> extends ServiceStream implements TypedStreamConsum
 
   public setSinkConsumer(consumer: Consumer<T>): void {
     this.#sinkConsumer = consumer;
+  }
+
+  public inputSerde(): StreamSerde<T> {
+    return this.#inputSerde;
   }
 
   public consume(context: MessageContext, value: T): Completion {
@@ -65,12 +72,14 @@ export class SinkStreamWithResult<T, R, E>
 {
   readonly #endpointId: number;
   readonly #errorStream: ErrorStream<E>;
+  readonly #inputSerde: StreamSerde<T>;
   #sinkConsumer: Consumer<T> | undefined;
 
   public constructor(config: SinkStreamConfig, source: TypedStream<T>) {
     const environment = source.runtimeEnvironment();
     super(config, environment, environment.serdeByName<R>(requireResultType(config)));
     this.#endpointId = config.idEndpoint;
+    this.#inputSerde = source.serde();
     this.#errorStream = new ErrorStream(
       config,
       environment,
@@ -91,6 +100,10 @@ export class SinkStreamWithResult<T, R, E>
 
   public setSinkConsumer(consumer: Consumer<T>): void {
     this.#sinkConsumer = consumer;
+  }
+
+  public inputSerde(): StreamSerde<T> {
+    return this.#inputSerde;
   }
 
   public consume(context: MessageContext, value: T): Completion {

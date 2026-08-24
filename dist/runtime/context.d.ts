@@ -48,6 +48,13 @@ export declare class MessageContext extends Context {
     openTelemetryContext(): OpenTelemetryContext | undefined;
     withOpenTelemetryContext(context: OpenTelemetryContext): MessageContext;
     transportMetadata(): ReadonlyMap<string, string>;
+    /** @internal Propagates deterministic child-call identity across an Activity retry. */
+    withDurableInvocation(parentCallId: string): MessageContext;
+    /** @internal Returns and advances this invocation's per-payload occurrence. */
+    durableInvocation(): {
+        readonly parentCallId: string;
+        readonly occurrence: (key: string) => number;
+    } | undefined;
 }
 export {};
 //# sourceMappingURL=context.d.ts.map

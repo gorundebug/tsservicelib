@@ -12,9 +12,11 @@ import {
   type Caller,
   type CallerFactory,
   type Stream,
+  type TypedStream,
   type TypedStreamConsumer
 } from "./stream.js";
 import type { RuntimeTaskRegistry } from "./task-registry.js";
+import { DurableCaller, makeDurableLinkHandler, type DurableTransport } from "./durable.js";
 
 export interface RuntimeCallerFactoryOptions {
   readonly config: () => RuntimeConfig;
@@ -22,6 +24,7 @@ export interface RuntimeCallerFactoryOptions {
   readonly taskPools: ReadonlyMap<string, TaskPool>;
   readonly priorityTaskPools: ReadonlyMap<string, PriorityTaskPool>;
   readonly tasks: RuntimeTaskRegistry;
+  readonly durableTransport?: ((id: number) => DurableTransport | undefined) | undefined;
   readonly onRejected?: CallerRejectionHandler | undefined;
 }
 
@@ -73,14 +76,29 @@ export class RuntimeCallerFactory implements CallerFactory {
       );
     }
     if ("durableCall" in semantics) {
-      throw new Error(
-        `durable caller for Temporal connector ${String(semantics.durableCall.idDataConnector)} is not registered`
-      );
+      const transport = this.#options.durableTransport?.(semantics.durableCall.idDataConnector);
+      if (transport === undefined) {
+        throw new Error(
+          `durable caller for Temporal connector ${String(semantics.durableCall.idDataConnector)} is not registered`
+        );
+      }
+      if (!isTypedStream(source)) {
+        throw new Error(`durable source stream ${source.name} has no serde`);
+      }
+      const link = { from: source.id, to: consumer.id };
+      transport.registerLink(link, makeDurableLinkHandler(consumer, source.serde()));
+      return setCallerMetadata(new DurableCaller(link, transport, source.serde()), {
+        type: "durable"
+      });
     }
     return setCallerMetadata(new ParallelCaller(this.#options.tasks, consumer), {
       type: "parallel"
     });
   }
+}
+
+function isTypedStream<T>(stream: Stream): stream is TypedStream<T> {
+  return "serde" in stream && typeof stream.serde === "function";
 }
 
 const DEFAULT_CALL_SEMANTICS = { functionCall: { async: false } } as const;

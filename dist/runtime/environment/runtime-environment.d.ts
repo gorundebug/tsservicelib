@@ -3,6 +3,7 @@ import type { RuntimeConfig, RuntimeConfigStore } from "../config/index.js";
 import type { MessageContext } from "../context.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
+import type { DurableTransport } from "../durable.js";
 import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
@@ -29,6 +30,9 @@ export interface RuntimeEnvironment {
     addDataSink(dataSink: DataSink): void;
     dataSinkById(id: number): DataSink | undefined;
     dataSinks(): readonly DataSink[];
+    addDurableTransport(transport: DurableTransport): void;
+    durableTransportById(id: number): DurableTransport | undefined;
+    durableTransports(): readonly DurableTransport[];
     log(): Logger;
     metrics(): Metrics;
     tracing(): Tracing | undefined;
@@ -80,6 +84,9 @@ export declare class ServiceEnvironment<T extends CanonicalConfig = CanonicalCon
     addDataSink(dataSink: DataSink): void;
     dataSinkById(id: number): DataSink | undefined;
     dataSinks(): readonly DataSink[];
+    addDurableTransport(transport: DurableTransport): void;
+    durableTransportById(id: number): DurableTransport | undefined;
+    durableTransports(): readonly DurableTransport[];
     log(): Logger;
     metrics(): Metrics;
     tracing(): Tracing | undefined;

@@ -207,6 +207,12 @@ await test("runtime config requires DurableCall to reference a Temporal connecto
     address: "temporal:7233",
     namespace: "default",
     identity: "",
+    apiKey: "",
+    tlsEnabled: false,
+    tlsServerName: "",
+    tlsCaFile: "",
+    tlsCertFile: "",
+    tlsKeyFile: "",
     maxConcurrentActivities: 8,
     maxConcurrentWorkflows: 4,
     properties: {}
@@ -220,7 +226,16 @@ await test("runtime config requires DurableCall to reference a Temporal connecto
           {
             from: 10,
             to: 10,
-            callSemantics: { durableCall: { idDataConnector: temporal.id } },
+            callSemantics: {
+              durableCall: {
+                idDataConnector: temporal.id,
+                taskQueue: "automation",
+                workflowExecutionTimeout: 0,
+                activityStartToCloseTimeout: 30_000,
+                activityHeartbeatTimeout: 0,
+                maximumAttempts: 3
+              }
+            },
             properties: {}
           }
         ]
@@ -234,7 +249,16 @@ await test("runtime config requires DurableCall to reference a Temporal connecto
           {
             from: 10,
             to: 10,
-            callSemantics: { durableCall: { idDataConnector: 20 } },
+            callSemantics: {
+              durableCall: {
+                idDataConnector: 20,
+                taskQueue: "automation",
+                workflowExecutionTimeout: 0,
+                activityStartToCloseTimeout: 30_000,
+                activityHeartbeatTimeout: 0,
+                maximumAttempts: 3
+              }
+            },
             properties: {}
           }
         ]
