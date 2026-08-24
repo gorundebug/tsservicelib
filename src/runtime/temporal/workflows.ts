@@ -5,6 +5,7 @@ import type {
   EndpointWireResult,
   EndpointWorkflowRequest
 } from "./contracts.js";
+import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 
 export async function servicegenDurableLinkV1(request: DurableWorkflowRequest): Promise<void> {
   await scheduleActivity(request.activityType, [request.envelope], activityOptions(request));
@@ -20,7 +21,7 @@ export async function servicegenTemporalEndpointV1(
       ...envelope,
       executionId: info.workflowId,
       streamId: info.workflowId,
-      scheduledAtUnixMillis: info.startTime.getTime(),
+      scheduledAtUnixMillis: scheduledTimeFromWorkflowId(info.workflowId, info.startTime),
       firedAtUnixMillis: Date.now()
     };
   }

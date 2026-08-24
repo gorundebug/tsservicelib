@@ -12,3 +12,16 @@ await test("Temporal workflow bundle exports the stable cross-language contract 
     workflows.servicegenTemporalEndpointV1
   );
 });
+
+await test("scheduled time uses the Temporal Schedule workflow ID suffix", async () => {
+  const moduleUrl = pathToFileURL(resolve("dist/runtime/temporal/scheduled-time.js")).href;
+  const {
+    scheduledTimeFromWorkflowId
+  }: typeof import("../src/runtime/temporal/scheduled-time.js") = await import(moduleUrl);
+  const fallback = new Date("2026-08-24T12:35:01Z");
+  assert.equal(
+    scheduledTimeFromWorkflowId("servicegen/schedule/1/3-2026-08-24T12:30:00.123Z", fallback),
+    Date.parse("2026-08-24T12:30:00.123Z")
+  );
+  assert.equal(scheduledTimeFromWorkflowId("manual-workflow", fallback), fallback.getTime());
+});
