@@ -4,9 +4,12 @@ import {
   InputDataSource,
   MessageContext,
   ScheduleBackend,
+  errorFromUnknown,
   makeScheduleTrigger,
   makeTemporalConnector,
   newStreamId,
+  spanError,
+  stringAttribute,
   type Completion,
   type Context,
   type Consumer,
@@ -16,7 +19,9 @@ import {
   type InputEndpointConsumer,
   type RuntimeEnvironment,
   type ScheduleTrigger,
+  type Span,
   type TemporalConnector,
+  type Tracer,
   type TypedInputStream
 } from "../../runtime/index.js";
 
@@ -50,6 +55,7 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
   readonly #stream: TypedInputStream<T, R, E>;
   readonly #decode: (envelope: EndpointEnvelope) => T;
   readonly #pending = new Map<string, PendingResult<R>>();
+  readonly #tracer: Tracer | undefined;
 
   public constructor(
     endpoint: DataSourceEndpoint,
@@ -60,6 +66,10 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
     this.#endpoint = endpoint;
     this.#stream = stream;
     this.#decode = decode;
+    this.#tracer = stream
+      .runtimeEnvironment()
+      .tracing()
+      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     if (stream.resultStream() !== undefined) {
       stream.setResultConsumer({
         consume: (context, value) => {
@@ -99,6 +109,15 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
     }
     const streamId = context.streamId();
     if (streamId === undefined) throw new Error("Temporal endpoint stream ID was not created");
+    let span: Span | undefined;
+    if (this.#tracer !== undefined && context.samplingEnabled()) {
+      const startedSpan = this.#tracer.start(context, "temporal.input", [
+        stringAttribute("stream", this.#stream.name),
+        stringAttribute("endpoint", this.#endpoint.name)
+      ]);
+      context = startedSpan.context;
+      span = startedSpan.span;
+    }
     const started = this.#endpoint.onRequestStart(context);
     const expectsResult = this.#stream.resultStream() !== undefined;
     let pending: PendingResult<R> | undefined;
@@ -120,7 +139,8 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
         throw new Error("Temporal endpoint result stream disappeared");
       return { payload: resultStream.serde().serialize(value) };
     } catch (error: unknown) {
-      failure = error instanceof Error ? error : new Error(String(error));
+      failure = errorFromUnknown(error);
+      spanError(span, failure);
       throw failure;
     } finally {
       if (pending !== undefined) {
@@ -128,6 +148,7 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
         this.#endpoint.onPendingRemove(context, streamId);
       }
       this.#endpoint.onRequestEnd(context, started, failure);
+      span?.end();
     }
   }
 

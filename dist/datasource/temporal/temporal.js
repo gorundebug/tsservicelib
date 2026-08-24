@@ -1,4 +1,4 @@
-import { DataConnectorType, DataSourceEndpoint, InputDataSource, MessageContext, ScheduleBackend, makeScheduleTrigger, makeTemporalConnector, newStreamId } from "../../runtime/index.js";
+import { DataConnectorType, DataSourceEndpoint, InputDataSource, MessageContext, ScheduleBackend, errorFromUnknown, makeScheduleTrigger, makeTemporalConnector, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 class TemporalDataSource extends InputDataSource {
     constructor(connectorId, environment) {
         super(connectorId, environment);
@@ -20,10 +20,15 @@ class TemporalEndpointConsumer {
     #stream;
     #decode;
     #pending = new Map();
+    #tracer;
     constructor(endpoint, stream, connector, decode) {
         this.#endpoint = endpoint;
         this.#stream = stream;
         this.#decode = decode;
+        this.#tracer = stream
+            .runtimeEnvironment()
+            .tracing()
+            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         if (stream.resultStream() !== undefined) {
             stream.setResultConsumer({
                 consume: (context, value) => {
@@ -56,6 +61,15 @@ class TemporalEndpointConsumer {
         const streamId = context.streamId();
         if (streamId === undefined)
             throw new Error("Temporal endpoint stream ID was not created");
+        let span;
+        if (this.#tracer !== undefined && context.samplingEnabled()) {
+            const startedSpan = this.#tracer.start(context, "temporal.input", [
+                stringAttribute("stream", this.#stream.name),
+                stringAttribute("endpoint", this.#endpoint.name)
+            ]);
+            context = startedSpan.context;
+            span = startedSpan.span;
+        }
         const started = this.#endpoint.onRequestStart(context);
         const expectsResult = this.#stream.resultStream() !== undefined;
         let pending;
@@ -79,7 +93,8 @@ class TemporalEndpointConsumer {
             return { payload: resultStream.serde().serialize(value) };
         }
         catch (error) {
-            failure = error instanceof Error ? error : new Error(String(error));
+            failure = errorFromUnknown(error);
+            spanError(span, failure);
             throw failure;
         }
         finally {
@@ -88,6 +103,7 @@ class TemporalEndpointConsumer {
                 this.#endpoint.onPendingRemove(context, streamId);
             }
             this.#endpoint.onRequestEnd(context, started, failure);
+            span?.end();
         }
     }
     consumeResult(context, value) {

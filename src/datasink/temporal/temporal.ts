@@ -2,8 +2,11 @@ import {
   DataConnectorType,
   DataSinkEndpoint,
   OutputDataSink,
+  errorFromUnknown,
   makeTemporalConnector,
   newStreamId,
+  spanError,
+  stringAttribute,
   type Consumer,
   type Context,
   type EndpointEnvelope,
@@ -11,7 +14,9 @@ import {
   type MessageContext,
   type RuntimeEnvironment,
   type SinkEndpoint,
+  type Span,
   type TemporalConnector,
+  type Tracer,
   type TypedSinkStream,
   type TypedSinkStreamWithResult
 } from "../../runtime/index.js";
@@ -36,18 +41,34 @@ class TemporalDataSink extends OutputDataSink {
 }
 
 class TemporalSinkConsumer<T, R, E> implements Consumer<T>, OutputEndpointConsumer {
+  readonly #tracer: Tracer | undefined;
+
   public constructor(
     private readonly sinkEndpoint: DataSinkEndpoint,
     private readonly connector: TemporalConnector,
     private readonly stream: TypedSinkStream<T, E> | TypedSinkStreamWithResult<T, R, E>,
     private readonly withResult: boolean
-  ) {}
+  ) {
+    this.#tracer = stream
+      .runtimeEnvironment()
+      .tracing()
+      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+  }
 
   public endpoint(): SinkEndpoint {
     return this.sinkEndpoint;
   }
 
   public async consume(context: MessageContext, value: T): Promise<void> {
+    let span: Span | undefined;
+    if (this.#tracer !== undefined && context.samplingEnabled()) {
+      const startedSpan = this.#tracer.start(context, "temporal.output", [
+        stringAttribute("stream", this.stream.name),
+        stringAttribute("endpoint", this.sinkEndpoint.name)
+      ]);
+      context = startedSpan.context;
+      span = startedSpan.span;
+    }
     const started = this.sinkEndpoint.onRequestStart(context);
     let failure: Error | undefined;
     try {
@@ -78,10 +99,12 @@ class TemporalSinkConsumer<T, R, E> implements Consumer<T>, OutputEndpointConsum
         await resultStream.consumeResult(context, resultStream.serde().deserialize(result.payload));
       }
     } catch (error: unknown) {
-      failure = error instanceof Error ? error : new Error(String(error));
+      failure = errorFromUnknown(error);
+      spanError(span, failure);
       throw failure;
     } finally {
       this.sinkEndpoint.onRequestEnd(context, started, failure);
+      span?.end();
     }
   }
 }

@@ -1,4 +1,4 @@
-import { DataConnectorType, DataSinkEndpoint, OutputDataSink, makeTemporalConnector, newStreamId } from "../../runtime/index.js";
+import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, makeTemporalConnector, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 class TemporalDataSink extends OutputDataSink {
     constructor(connectorId, environment) {
         super(connectorId, environment);
@@ -20,16 +20,30 @@ class TemporalSinkConsumer {
     connector;
     stream;
     withResult;
+    #tracer;
     constructor(sinkEndpoint, connector, stream, withResult) {
         this.sinkEndpoint = sinkEndpoint;
         this.connector = connector;
         this.stream = stream;
         this.withResult = withResult;
+        this.#tracer = stream
+            .runtimeEnvironment()
+            .tracing()
+            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     }
     endpoint() {
         return this.sinkEndpoint;
     }
     async consume(context, value) {
+        let span;
+        if (this.#tracer !== undefined && context.samplingEnabled()) {
+            const startedSpan = this.#tracer.start(context, "temporal.output", [
+                stringAttribute("stream", this.stream.name),
+                stringAttribute("endpoint", this.sinkEndpoint.name)
+            ]);
+            context = startedSpan.context;
+            span = startedSpan.span;
+        }
         const started = this.sinkEndpoint.onRequestStart(context);
         let failure;
         try {
@@ -56,11 +70,13 @@ class TemporalSinkConsumer {
             }
         }
         catch (error) {
-            failure = error instanceof Error ? error : new Error(String(error));
+            failure = errorFromUnknown(error);
+            spanError(span, failure);
             throw failure;
         }
         finally {
             this.sinkEndpoint.onRequestEnd(context, started, failure);
+            span?.end();
         }
     }
 }
