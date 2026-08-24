@@ -1,4 +1,5 @@
 import { scheduleActivity, workflowInfo } from "@temporalio/workflow";
+import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 export async function servicegenDurableLinkV1(request) {
     await scheduleActivity(request.activityType, [request.envelope], activityOptions(request));
 }
@@ -10,7 +11,7 @@ export async function servicegenTemporalEndpointV1(request) {
             ...envelope,
             executionId: info.workflowId,
             streamId: info.workflowId,
-            scheduledAtUnixMillis: info.startTime.getTime(),
+            scheduledAtUnixMillis: scheduledTimeFromWorkflowId(info.workflowId, info.startTime),
             firedAtUnixMillis: Date.now()
         };
     }
