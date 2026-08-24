@@ -88,12 +88,15 @@ await test("DurableCall serializes transport context and leaves the target consu
   assert.equal(serde.deserialize(envelope.payload), "payload");
 
   const consumer = new RecordingConsumer();
-  await makeDurableLinkHandler(consumer, serde)(envelope);
+  const cancellation = new AbortController();
+  await makeDurableLinkHandler(consumer, serde)(envelope, cancellation.signal);
   assert.ok(consumer.received);
   assert.equal(consumer.received.value, "payload");
   assert.equal(consumer.received.context.streamId(), "request-1");
   assert.equal(consumer.received.context.priority(), -1);
   assert.equal(consumer.received.context.samplingEnabled(), true);
+  cancellation.abort();
+  assert.equal(consumer.received.context.signal().aborted, true);
 });
 
 await test("nested DurableCall identities are stable across Activity retry and distinct per emission", async () => {
