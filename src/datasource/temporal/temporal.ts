@@ -98,6 +98,7 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
       throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
     }
     let context = new MessageContext()
+      .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
       .withStreamId(envelope.streamId || newStreamId())
       .withPriority(envelope.priority)
       .withSampling(envelope.samplingEnabled);

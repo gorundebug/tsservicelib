@@ -240,6 +240,7 @@ export class TemporalConnector {
             priority: 0,
             deadlineUnixMillis: 0,
             samplingEnabled: false,
+            traceCarrier: {},
             scheduled: true,
             scheduleId: config.scheduleId,
             scheduledAtUnixMillis: 0,

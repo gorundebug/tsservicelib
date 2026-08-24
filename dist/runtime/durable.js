@@ -25,6 +25,7 @@ export class DurableCaller {
             priority: context.priority() ?? 0,
             deadlineUnixMillis: remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
             samplingEnabled: context.samplingEnabled(),
+            traceCarrier: Object.fromEntries(context.transportMetadata()),
             payload
         });
     }
@@ -35,6 +36,7 @@ export function makeDurableLinkHandler(consumer, serde) {
             throw new Error("invalid DurableCall envelope");
         }
         let context = new MessageContext()
+            .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
             .withStreamId(envelope.streamId || randomUUID())
             .withPriority(envelope.priority)
             .withSampling(envelope.samplingEnabled)

@@ -20,6 +20,7 @@ export interface DurableEnvelope {
   readonly priority: number;
   readonly deadlineUnixMillis: number;
   readonly samplingEnabled: boolean;
+  readonly traceCarrier: Readonly<Record<string, string>>;
   readonly payload: Uint8Array;
 }
 
@@ -62,6 +63,7 @@ export class DurableCaller<T> implements Caller<T> {
       deadlineUnixMillis:
         remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
       samplingEnabled: context.samplingEnabled(),
+      traceCarrier: Object.fromEntries(context.transportMetadata()),
       payload
     });
   }
@@ -76,6 +78,7 @@ export function makeDurableLinkHandler<T>(
       throw new Error("invalid DurableCall envelope");
     }
     let context = new MessageContext()
+      .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
       .withStreamId(envelope.streamId || randomUUID())
       .withPriority(envelope.priority)
       .withSampling(envelope.samplingEnabled)

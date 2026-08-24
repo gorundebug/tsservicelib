@@ -306,6 +306,7 @@ export class TemporalConnector implements DurableTransport {
       priority: 0,
       deadlineUnixMillis: 0,
       samplingEnabled: false,
+      traceCarrier: {},
       scheduled: true,
       scheduleId: config.scheduleId,
       scheduledAtUnixMillis: 0,

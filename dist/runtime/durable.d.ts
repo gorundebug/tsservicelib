@@ -16,6 +16,7 @@ export interface DurableEnvelope {
     readonly priority: number;
     readonly deadlineUnixMillis: number;
     readonly samplingEnabled: boolean;
+    readonly traceCarrier: Readonly<Record<string, string>>;
     readonly payload: Uint8Array;
 }
 export type DurableLinkHandler = (envelope: DurableEnvelope, cancellationSignal?: AbortSignal) => Promise<void>;

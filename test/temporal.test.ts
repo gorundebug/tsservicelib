@@ -74,6 +74,9 @@ await test("DurableCall serializes transport context and leaves the target consu
   const link = { from: 1, to: 2 };
   const caller = new DurableCaller(link, transport, serde);
   const context = new MessageContext()
+    .withMetadata(
+      new Map([["traceparent", "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"]])
+    )
     .withStreamId("request-1")
     .withPriority(-1)
     .withSampling(true)
@@ -85,6 +88,10 @@ await test("DurableCall serializes transport context and leaves the target consu
   assert.equal(envelope.streamId, "request-1");
   assert.equal(envelope.priority, -1);
   assert.equal(envelope.samplingEnabled, true);
+  assert.equal(
+    envelope.traceCarrier["traceparent"],
+    "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
+  );
   assert.equal(serde.deserialize(envelope.payload), "payload");
 
   const consumer = new RecordingConsumer();
@@ -95,6 +102,10 @@ await test("DurableCall serializes transport context and leaves the target consu
   assert.equal(consumer.received.context.streamId(), "request-1");
   assert.equal(consumer.received.context.priority(), -1);
   assert.equal(consumer.received.context.samplingEnabled(), true);
+  assert.equal(
+    consumer.received.context.metadata().get("traceparent"),
+    envelope.traceCarrier["traceparent"]
+  );
   cancellation.abort();
   assert.equal(consumer.received.context.signal().aborted, true);
 });
