@@ -60,7 +60,7 @@ function installSdkMetricsRuntime(): void {
   }
   Runtime.install({
     telemetryOptions: {
-      metrics: { prometheus: { bindAddress: address } }
+      metrics: { prometheus: { bindAddress: address, useSecondsForDurations: true } }
     }
   });
   sdkMetricsBindAddress = address;
