@@ -54,7 +54,7 @@ export function isCronEndpointConfig(value) {
         "schedule" in value &&
         typeof value.schedule === "string" &&
         "timezone" in value &&
-        typeof value.timezone === "string" &&
+        value.timezone === "UTC" &&
         "overlapPolicy" in value &&
         (value.overlapPolicy === "Allow" || value.overlapPolicy === "Skip") &&
         "missedRunPolicy" in value &&
