@@ -9,7 +9,7 @@ import {
 } from "@temporalio/client";
 import { cancellationSignal } from "@temporalio/activity";
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
-import { NativeConnection, Worker } from "@temporalio/worker";
+import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
 
 import {
   DataConnectorType,
@@ -44,6 +44,27 @@ import {
 const MANAGED_BY = "servicegen.managedBy";
 const OWNER = "servicegen.owner";
 const CALL_ID = "servicegen.callId";
+const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
+let sdkMetricsBindAddress: string | undefined;
+
+function installSdkMetricsRuntime(): void {
+  const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
+  if (address === undefined || address === "") return;
+  if (sdkMetricsBindAddress !== undefined) {
+    if (sdkMetricsBindAddress !== address) {
+      throw new Error(
+        `Temporal SDK metrics already listen on ${sdkMetricsBindAddress}, cannot also use ${address}`
+      );
+    }
+    return;
+  }
+  Runtime.install({
+    telemetryOptions: {
+      metrics: { prometheus: { bindAddress: address } }
+    }
+  });
+  sdkMetricsBindAddress = address;
+}
 
 export type TemporalEndpointHandler = (
   envelope: EndpointEnvelope,
@@ -243,6 +264,7 @@ export class TemporalConnector implements DurableTransport {
     config: TemporalDataConnectorConfig,
     context: Context
   ): Promise<NativeConnection> {
+    installSdkMetricsRuntime();
     const tls = await tlsOptions(config);
     const connect = NativeConnection.connect({
       address: config.address,
