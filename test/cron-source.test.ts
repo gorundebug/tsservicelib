@@ -29,7 +29,7 @@ const streamConfig: InputStreamConfig = {
   xPos: 0,
   yPos: 0,
   idEndpoint: 100,
-  valueType: "schedule trigger"
+  valueType: "ScheduleTrigger"
 };
 
 const endpoint: CronEndpointConfig = {

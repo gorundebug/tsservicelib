@@ -64,7 +64,7 @@ export const errorSerdeType = new SerdeType(
   (value): value is Error => value instanceof Error
 );
 export const scheduleTriggerSerdeType = new SerdeType<ScheduleTrigger>(
-  "schedule trigger",
+  "ScheduleTrigger",
   isScheduleTrigger
 );
 export const boolArraySerdeType = makeArrayType("[]bool", boolSerdeType);

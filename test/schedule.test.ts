@@ -40,8 +40,10 @@ await test("schedule trigger uses the built-in typed JSON serde", () => {
     "2026-08-24T12:30:00.223456Z",
     ScheduleBackend.Local
   );
-  const serde = makeDefaultSerdeRegistry().require(scheduleTriggerSerdeType);
+  const registry = makeDefaultSerdeRegistry();
+  const serde = registry.require(scheduleTriggerSerdeType);
   assert.deepEqual(serde.deserialize(serde.serialize(trigger)), trigger);
+  assert.equal(registry.requireByName("ScheduleTrigger"), serde);
 });
 
 await test("Temporal priority normalization is bounded and monotonic", () => {
