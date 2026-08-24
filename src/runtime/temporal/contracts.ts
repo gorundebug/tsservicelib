@@ -22,6 +22,21 @@ export interface EndpointResult {
   readonly payload: Uint8Array;
 }
 
+// Temporal's default JSON payload converter does not preserve nested
+// Uint8Array values. Wire envelopes therefore use plain byte arrays while the
+// graph-facing runtime keeps the idiomatic Uint8Array representation.
+export interface DurableWireEnvelope extends Omit<DurableEnvelope, "payload"> {
+  readonly payload: readonly number[];
+}
+
+export interface EndpointWireEnvelope extends Omit<EndpointEnvelope, "payload"> {
+  readonly payload: readonly number[];
+}
+
+export interface EndpointWireResult {
+  readonly payload: readonly number[];
+}
+
 export interface TemporalActivityPolicy {
   readonly activityType: string;
   readonly activityStartToCloseTimeout: number;
@@ -31,9 +46,9 @@ export interface TemporalActivityPolicy {
 }
 
 export interface DurableWorkflowRequest extends TemporalActivityPolicy {
-  readonly envelope: DurableEnvelope;
+  readonly envelope: DurableWireEnvelope;
 }
 
 export interface EndpointWorkflowRequest extends TemporalActivityPolicy {
-  readonly envelope: EndpointEnvelope;
+  readonly envelope: EndpointWireEnvelope;
 }

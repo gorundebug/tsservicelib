@@ -2,7 +2,7 @@ import { scheduleActivity, workflowInfo } from "@temporalio/workflow";
 
 import type {
   DurableWorkflowRequest,
-  EndpointResult,
+  EndpointWireResult,
   EndpointWorkflowRequest
 } from "./contracts.js";
 
@@ -12,7 +12,7 @@ export async function servicegenDurableLinkV1(request: DurableWorkflowRequest): 
 
 export async function servicegenTemporalEndpointV1(
   request: EndpointWorkflowRequest
-): Promise<EndpointResult> {
+): Promise<EndpointWireResult> {
   let envelope = request.envelope;
   if (envelope.scheduled) {
     const info = workflowInfo();
@@ -24,7 +24,7 @@ export async function servicegenTemporalEndpointV1(
       firedAtUnixMillis: Date.now()
     };
   }
-  return scheduleActivity<EndpointResult>(
+  return scheduleActivity<EndpointWireResult>(
     request.activityType,
     [envelope],
     activityOptions(request)
