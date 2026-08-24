@@ -7,12 +7,14 @@ import { makeCronEndpointConsumer } from "@gorundebug/tsservicelib/datasource/cr
 import { InputStream } from "@gorundebug/tsservicelib/operators";
 import {
   Context,
+  type Collector,
   DataConnectorType,
   ScheduleBackend,
   ServiceStream,
   type CronEndpointConfig,
   type InputStreamConfig,
   type MessageContext,
+  type ScheduleEndpointFunction,
   type ScheduleTrigger
 } from "@gorundebug/tsservicelib/runtime";
 import { makeTestEnvironment, makeTestSerde } from "./support/environment.js";
@@ -45,14 +47,20 @@ const endpoint: CronEndpointConfig = {
 };
 
 class TriggerConsumer extends ServiceStream {
-  public readonly received = Promise.withResolvers<ScheduleTrigger>();
+  public readonly received = Promise.withResolvers<string>();
 
-  public consume(_context: MessageContext, trigger: ScheduleTrigger): void {
-    this.received.resolve(trigger);
+  public consume(_context: MessageContext, value: string): void {
+    this.received.resolve(value);
   }
 }
 
-await test("Croner datasource directly activates the configured input stream", async () => {
+const function_: ScheduleEndpointFunction<string> = {
+  onTrigger(context: MessageContext, trigger: Readonly<ScheduleTrigger>, out: Collector<string>) {
+    return out.out(context, `${trigger.scheduleId}:${trigger.backend}`);
+  }
+};
+
+await test("Croner datasource invokes the endpoint function before the input stream", async () => {
   const consumerConfig = {
     ...streamConfig,
     id: 2,
@@ -72,7 +80,7 @@ await test("Croner datasource directly activates the configured input stream", a
     ],
     endpoints: [endpoint]
   });
-  const input = new InputStream<ScheduleTrigger, never, Error>(
+  const input = new InputStream<string, never, Error>(
     streamConfig,
     environment,
     makeTestSerde(),
@@ -80,12 +88,12 @@ await test("Croner datasource directly activates the configured input stream", a
   );
   const consumer = new TriggerConsumer(consumerConfig, environment);
   input.setConsumer(consumer);
-  makeCronEndpointConsumer(input);
+  makeCronEndpointConsumer(input, function_);
   const dataSource = environment.dataSourceById(10);
   assert.ok(dataSource);
 
   await dataSource.start(Context.background());
-  const trigger = await Promise.race([
+  const value = await Promise.race([
     consumer.received.promise,
     new Promise<never>((_resolve, reject) => {
       setTimeout(() => {
@@ -95,9 +103,7 @@ await test("Croner datasource directly activates the configured input stream", a
   ]);
   await dataSource.stop(Context.background());
 
-  assert.equal(trigger.scheduleId, endpoint.name);
-  assert.equal(trigger.backend, ScheduleBackend.Local);
-  assert.match(trigger.triggerId, /^[0-9a-f]{64}$/u);
+  assert.equal(value, `${endpoint.name}:${ScheduleBackend.Local}`);
 });
 
 await test("Croner evaluates the portable schedule in UTC", () => {

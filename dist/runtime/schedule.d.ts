@@ -1,3 +1,6 @@
+import type { Collector } from "./collector.js";
+import type { MessageContext } from "./context.js";
+import type { Completion } from "./stream.js";
 export declare const ScheduleBackend: {
     readonly Local: "local";
     readonly Temporal: "temporal";
@@ -10,6 +13,10 @@ export interface ScheduleTrigger {
     readonly scheduledAt: string;
     readonly firedAt: string;
     readonly backend: ScheduleBackend;
+}
+/** User-defined conversion boundary between a schedule and its graph input. */
+export interface ScheduleEndpointFunction<T> {
+    onTrigger(context: MessageContext, trigger: Readonly<ScheduleTrigger>, out: Collector<T>): Completion;
 }
 export declare function isScheduleTrigger(value: unknown): value is ScheduleTrigger;
 /**

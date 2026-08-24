@@ -4,7 +4,7 @@ import {
   Context,
   DataConnectorType,
   DataSourceEndpoint,
-  DataSourceEndpointConsumer,
+  FunctionCollector,
   InputDataSource,
   MessageContext,
   ScheduleBackend,
@@ -17,11 +17,39 @@ import {
   type EndpointConfig,
   type InputEndpointConsumer,
   type RuntimeEnvironment,
+  type ScheduleEndpointFunction,
   type ScheduleTrigger,
   type TypedInputStream
 } from "../../runtime/index.js";
 
 type CronEndpointBinding = InputEndpointConsumer & Consumer<ScheduleTrigger>;
+
+class CronEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consumer<ScheduleTrigger> {
+  readonly #endpoint: DataSourceEndpoint;
+  readonly #function: ScheduleEndpointFunction<T>;
+  readonly #collector: FunctionCollector<T>;
+
+  public constructor(
+    endpoint: DataSourceEndpoint,
+    stream: TypedInputStream<T, R, E>,
+    function_: ScheduleEndpointFunction<T>
+  ) {
+    this.#endpoint = endpoint;
+    this.#function = function_;
+    this.#collector = new FunctionCollector((context, value) => stream.consume(context, value));
+  }
+
+  public endpoint(): DataSourceEndpoint {
+    return this.#endpoint;
+  }
+
+  public consume(
+    context: MessageContext,
+    trigger: ScheduleTrigger
+  ): ReturnType<Consumer<ScheduleTrigger>["consume"]> {
+    return this.#function.onTrigger(context, trigger, this.#collector);
+  }
+}
 
 class CronEndpoint extends DataSourceEndpoint {
   #binding: CronEndpointBinding | undefined;
@@ -216,8 +244,9 @@ export class CronDataSource extends InputDataSource {
   }
 }
 
-export function makeCronEndpointConsumer<R, E>(
-  stream: TypedInputStream<ScheduleTrigger, R, E>
+export function makeCronEndpointConsumer<T, R, E>(
+  stream: TypedInputStream<T, R, E>,
+  function_: ScheduleEndpointFunction<T>
 ): Consumer<ScheduleTrigger> {
   const environment = stream.runtimeEnvironment();
   const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
@@ -229,7 +258,7 @@ export function makeCronEndpointConsumer<R, E>(
     throw new Error(`endpoint ${endpointConfig.name} already exists`);
   }
   const endpoint = new CronEndpoint(dataSource, endpointConfig.id);
-  const consumer = new DataSourceEndpointConsumer(endpoint, stream);
+  const consumer = new CronEndpointConsumer(endpoint, stream, function_);
   endpoint.bind(consumer);
   dataSource.addEndpoint(endpoint);
   return consumer;

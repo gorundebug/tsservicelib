@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+import type { Collector } from "./collector.js";
+import type { MessageContext } from "./context.js";
+import type { Completion } from "./stream.js";
+
 export const ScheduleBackend = {
   Local: "local",
   Temporal: "temporal"
@@ -14,6 +18,15 @@ export interface ScheduleTrigger {
   readonly scheduledAt: string;
   readonly firedAt: string;
   readonly backend: ScheduleBackend;
+}
+
+/** User-defined conversion boundary between a schedule and its graph input. */
+export interface ScheduleEndpointFunction<T> {
+  onTrigger(
+    context: MessageContext,
+    trigger: Readonly<ScheduleTrigger>,
+    out: Collector<T>
+  ): Completion;
 }
 
 export function isScheduleTrigger(value: unknown): value is ScheduleTrigger {

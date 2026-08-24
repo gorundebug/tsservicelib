@@ -1,5 +1,21 @@
 import { Cron } from "croner";
-import { Context, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, InputDataSource, MessageContext, ScheduleBackend, err, makeScheduleTrigger, newStreamId, str } from "../../runtime/index.js";
+import { Context, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, err, makeScheduleTrigger, newStreamId, str } from "../../runtime/index.js";
+class CronEndpointConsumer {
+    #endpoint;
+    #function;
+    #collector;
+    constructor(endpoint, stream, function_) {
+        this.#endpoint = endpoint;
+        this.#function = function_;
+        this.#collector = new FunctionCollector((context, value) => stream.consume(context, value));
+    }
+    endpoint() {
+        return this.#endpoint;
+    }
+    consume(context, trigger) {
+        return this.#function.onTrigger(context, trigger, this.#collector);
+    }
+}
 class CronEndpoint extends DataSourceEndpoint {
     #binding;
     #job;
@@ -167,7 +183,7 @@ export class CronDataSource extends InputDataSource {
         });
     }
 }
-export function makeCronEndpointConsumer(stream) {
+export function makeCronEndpointConsumer(stream, function_) {
     const environment = stream.runtimeEnvironment();
     const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
     if (endpointConfig === undefined) {
@@ -178,7 +194,7 @@ export function makeCronEndpointConsumer(stream) {
         throw new Error(`endpoint ${endpointConfig.name} already exists`);
     }
     const endpoint = new CronEndpoint(dataSource, endpointConfig.id);
-    const consumer = new DataSourceEndpointConsumer(endpoint, stream);
+    const consumer = new CronEndpointConsumer(endpoint, stream, function_);
     endpoint.bind(consumer);
     dataSource.addEndpoint(endpoint);
     return consumer;

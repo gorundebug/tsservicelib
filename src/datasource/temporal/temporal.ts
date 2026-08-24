@@ -1,6 +1,7 @@
 import {
   DataConnectorType,
   DataSourceEndpoint,
+  FunctionCollector,
   InputDataSource,
   MessageContext,
   ScheduleBackend,
@@ -18,6 +19,7 @@ import {
   type InputEndpoint,
   type InputEndpointConsumer,
   type RuntimeEnvironment,
+  type ScheduleEndpointFunction,
   type ScheduleTrigger,
   type Span,
   type TemporalConnector,
@@ -50,10 +52,11 @@ interface PendingResult<R> {
   settled: boolean;
 }
 
-class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consumer<T> {
+class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer, Consumer<Input> {
   readonly #endpoint: DataSourceEndpoint;
   readonly #stream: TypedInputStream<T, R, E>;
-  readonly #decode: (envelope: EndpointEnvelope) => T;
+  readonly #decode: (envelope: EndpointEnvelope) => Input;
+  readonly #activateInput: (context: MessageContext, value: Input) => Completion;
   readonly #pending = new Map<string, PendingResult<R>>();
   readonly #tracer: Tracer | undefined;
 
@@ -61,11 +64,13 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
     endpoint: DataSourceEndpoint,
     stream: TypedInputStream<T, R, E>,
     connector: TemporalConnector,
-    decode: (envelope: EndpointEnvelope) => T
+    decode: (envelope: EndpointEnvelope) => Input,
+    activateInput: (context: MessageContext, value: Input) => Completion
   ) {
     this.#endpoint = endpoint;
     this.#stream = stream;
     this.#decode = decode;
+    this.#activateInput = activateInput;
     this.#tracer = stream
       .runtimeEnvironment()
       .tracing()
@@ -86,8 +91,8 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
     return this.#endpoint;
   }
 
-  public consume(context: MessageContext, value: T): Completion {
-    return this.#stream.consume(context, value);
+  public consume(context: MessageContext, value: Input): Completion {
+    return this.#activateInput(context, value);
   }
 
   public async activate(
@@ -132,7 +137,7 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
         this.#pending.set(streamId, pending);
         this.#endpoint.onPendingAdd(context, streamId);
       }
-      await this.#stream.consume(context, this.#decode(envelope));
+      await this.consume(context, this.#decode(envelope));
       if (pending === undefined) return { payload: new Uint8Array() };
       const value = await pending.promise;
       const resultStream = this.#stream.resultStream();
@@ -176,35 +181,46 @@ class TemporalEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consum
 export function makeTemporalEndpointConsumer<T, R, E>(
   stream: TypedInputStream<T, R, E>
 ): Consumer<T> {
-  return makeEndpointConsumer(stream, (envelope) => stream.serde().deserialize(envelope.payload));
+  return makeEndpointConsumer(
+    stream,
+    (envelope) => stream.serde().deserialize(envelope.payload),
+    (context, value) => stream.consume(context, value)
+  );
 }
 
-export function makeTemporalScheduleEndpointConsumer<R, E>(
-  stream: TypedInputStream<ScheduleTrigger, R, E>
-): Consumer<ScheduleTrigger> {
-  return makeEndpointConsumer(stream, (envelope) => {
-    if (
-      !envelope.scheduled ||
-      envelope.scheduleId === "" ||
-      envelope.scheduledAtUnixMillis <= 0 ||
-      envelope.firedAtUnixMillis <= 0
-    ) {
-      throw new Error(`invalid Temporal schedule envelope for ${String(envelope.endpointId)}`);
-    }
-    return makeScheduleTrigger(
-      envelope.endpointId,
-      envelope.scheduleId,
-      new Date(envelope.scheduledAtUnixMillis).toISOString(),
-      new Date(envelope.firedAtUnixMillis).toISOString(),
-      ScheduleBackend.Temporal
-    );
-  });
-}
-
-function makeEndpointConsumer<T, R, E>(
+export function makeTemporalScheduleEndpointConsumer<T, R, E>(
   stream: TypedInputStream<T, R, E>,
-  decode: (envelope: EndpointEnvelope) => T
-): Consumer<T> {
+  function_: ScheduleEndpointFunction<T>
+): Consumer<ScheduleTrigger> {
+  const collector = new FunctionCollector<T>((context, value) => stream.consume(context, value));
+  return makeEndpointConsumer(
+    stream,
+    (envelope) => {
+      if (
+        !envelope.scheduled ||
+        envelope.scheduleId === "" ||
+        envelope.scheduledAtUnixMillis <= 0 ||
+        envelope.firedAtUnixMillis <= 0
+      ) {
+        throw new Error(`invalid Temporal schedule envelope for ${String(envelope.endpointId)}`);
+      }
+      return makeScheduleTrigger(
+        envelope.endpointId,
+        envelope.scheduleId,
+        new Date(envelope.scheduledAtUnixMillis).toISOString(),
+        new Date(envelope.firedAtUnixMillis).toISOString(),
+        ScheduleBackend.Temporal
+      );
+    },
+    (context, trigger) => function_.onTrigger(context, trigger, collector)
+  );
+}
+
+function makeEndpointConsumer<Input, T, R, E>(
+  stream: TypedInputStream<T, R, E>,
+  decode: (envelope: EndpointEnvelope) => Input,
+  activateInput: (context: MessageContext, value: Input) => Completion
+): Consumer<Input> {
   const environment = stream.runtimeEnvironment();
   const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
   if (endpointConfig === undefined) {
@@ -216,7 +232,7 @@ function makeEndpointConsumer<T, R, E>(
     throw new Error(`Temporal endpoint ${endpointConfig.name} already exists`);
   }
   const endpoint = new DataSourceEndpoint(dataSource, endpointConfig.id);
-  const consumer = new TemporalEndpointConsumer(endpoint, stream, connector, decode);
+  const consumer = new TemporalEndpointConsumer(endpoint, stream, connector, decode, activateInput);
   endpoint.addEndpointConsumer(consumer);
   dataSource.addEndpoint(endpoint);
   return consumer;
