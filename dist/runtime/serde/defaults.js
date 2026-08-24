@@ -23,7 +23,7 @@ export const runeSerdeType = new SerdeType("rune", isInt32);
 export const stringSerdeType = new SerdeType("string", (value) => isString(value));
 export const bytesSerdeType = new SerdeType("[]byte", (value) => isBytes(value));
 export const errorSerdeType = new SerdeType("error", (value) => value instanceof Error);
-export const scheduleTriggerSerdeType = new SerdeType("schedule trigger", isScheduleTrigger);
+export const scheduleTriggerSerdeType = new SerdeType("ScheduleTrigger", isScheduleTrigger);
 export const boolArraySerdeType = makeArrayType("[]bool", boolSerdeType);
 export const int8ArraySerdeType = makeArrayType("[]int8", int8SerdeType);
 export const int16ArraySerdeType = makeArrayType("[]int16", int16SerdeType);

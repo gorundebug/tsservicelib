@@ -135,7 +135,7 @@ export class TemporalConnector {
             activityHeartbeatTimeout: policy.activityHeartbeatTimeout,
             maximumAttempts: policy.maximumAttempts,
             priority: normalizeTemporalPriority(envelope.priority),
-            envelope
+            envelope: durableEnvelopeToWire(envelope)
         };
         const serviceId = this.#environment.serviceConfig().id;
         const owner = `servicegen/${String(serviceId)}/link/${String(link.from)}/${String(link.to)}/v1`;
@@ -179,9 +179,10 @@ export class TemporalConnector {
             priority: { priorityKey: request.priority }
         });
         await validateWorkflowOwnership(handle, ENDPOINT_WORKFLOW_TYPE, owner, envelope.executionId);
-        return waitForResult
-            ? (await handle.result())
-            : { payload: new Uint8Array() };
+        if (!waitForResult)
+            return { payload: new Uint8Array() };
+        const result = (await handle.result());
+        return { payload: bytesFromWire(result.payload) };
     }
     async connect(config, context) {
         const tls = await tlsOptions(config);
@@ -204,14 +205,17 @@ export class TemporalConnector {
             return created;
         };
         for (const registration of this.#links.values()) {
-            queue(this.linkConfig(registration.link).taskQueue)[registration.activityType] = async (value) => registration.handler(value, cancellationSignal());
+            queue(this.linkConfig(registration.link).taskQueue)[registration.activityType] = async (value) => registration.handler(durableEnvelopeFromWire(value), cancellationSignal());
         }
         for (const registration of this.#endpoints.values()) {
             const config = this.endpointConfig(registration.endpointId);
             if (!config.enabled || registration.handler === undefined)
                 continue;
             const handler = registration.handler;
-            queue(config.taskQueue)[registration.activityType] = async (value) => handler(value, cancellationSignal());
+            queue(config.taskQueue)[registration.activityType] = async (value) => {
+                const result = await handler(endpointEnvelopeFromWire(value), cancellationSignal());
+                return { payload: bytesToWire(result.payload) };
+            };
         }
         return queues;
     }
@@ -352,8 +356,30 @@ function endpointRequest(registration, config, envelope) {
         activityHeartbeatTimeout: config.activityHeartbeatTimeout,
         maximumAttempts: config.maximumAttempts,
         priority: normalizeTemporalPriority(envelope.priority),
-        envelope
+        envelope: endpointEnvelopeToWire(envelope)
     };
+}
+function durableEnvelopeToWire(envelope) {
+    return { ...envelope, payload: bytesToWire(envelope.payload) };
+}
+function durableEnvelopeFromWire(envelope) {
+    return { ...envelope, payload: bytesFromWire(envelope.payload) };
+}
+function endpointEnvelopeToWire(envelope) {
+    return { ...envelope, payload: bytesToWire(envelope.payload) };
+}
+function endpointEnvelopeFromWire(envelope) {
+    return { ...envelope, payload: bytesFromWire(envelope.payload) };
+}
+function bytesToWire(value) {
+    return Array.from(value);
+}
+function bytesFromWire(value) {
+    if (!Array.isArray(value) ||
+        value.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) {
+        throw new TypeError("invalid Temporal byte payload");
+    }
+    return Uint8Array.from(value);
 }
 function ownershipMemo(owner, callId) {
     return { [MANAGED_BY]: "servicegen", [OWNER]: owner, [CALL_ID]: callId };

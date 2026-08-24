@@ -16,6 +16,9 @@ export async function servicegenTemporalEndpointV1(request) {
     }
     return scheduleActivity(request.activityType, [envelope], activityOptions(request));
 }
+// Temporal dispatches a Workflow by the exported bundle key. Keep the
+// cross-language contract names stable without leaking them into graph nodes.
+export { servicegenDurableLinkV1 as "servicegen.durable-link.v1", servicegenTemporalEndpointV1 as "servicegen.temporal-endpoint.v1" };
 function activityOptions(request) {
     return {
         startToCloseTimeout: request.activityStartToCloseTimeout,

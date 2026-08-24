@@ -18,6 +18,15 @@ export interface EndpointEnvelope {
 export interface EndpointResult {
     readonly payload: Uint8Array;
 }
+export interface DurableWireEnvelope extends Omit<DurableEnvelope, "payload"> {
+    readonly payload: readonly number[];
+}
+export interface EndpointWireEnvelope extends Omit<EndpointEnvelope, "payload"> {
+    readonly payload: readonly number[];
+}
+export interface EndpointWireResult {
+    readonly payload: readonly number[];
+}
 export interface TemporalActivityPolicy {
     readonly activityType: string;
     readonly activityStartToCloseTimeout: number;
@@ -26,9 +35,9 @@ export interface TemporalActivityPolicy {
     readonly priority: number;
 }
 export interface DurableWorkflowRequest extends TemporalActivityPolicy {
-    readonly envelope: DurableEnvelope;
+    readonly envelope: DurableWireEnvelope;
 }
 export interface EndpointWorkflowRequest extends TemporalActivityPolicy {
-    readonly envelope: EndpointEnvelope;
+    readonly envelope: EndpointWireEnvelope;
 }
 //# sourceMappingURL=contracts.d.ts.map
