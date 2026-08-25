@@ -5,8 +5,8 @@ import { cancellationSignal, heartbeat } from "@temporalio/activity";
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
 import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
 import { DataConnectorType } from "../../runtime/config/index.js";
-import { DurableCallContext, DurableCallEvent, runDurableCallActivity } from "../../runtime/durable-call-context.js";
-import { err, str } from "../../runtime/environment/index.js";
+import { DurableCallContext, DurableCallEvent, bindDurableCallSpan, runDurableCallActivity } from "../../runtime/durable-call-context.js";
+import { err, str, stringAttribute } from "../../runtime/environment/index.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import { DURABLE_WORKFLOW_TYPE, ENDPOINT_WORKFLOW_TYPE } from "./contracts.js";
 import { currentTemporalActivityMessageContext, runWithTemporalSubmissionContext, temporalActivityInterceptors, temporalWorkflowClientInterceptor } from "./context-propagation.js";
@@ -312,8 +312,9 @@ export class TemporalConnector {
             activities[this.continuationActivityType()] = async (value) => {
                 const continuation = durableContinuationFromWire(value);
                 const signal = cancellationSignal();
-                const durable = new DurableCallContext(continuation.callId, heartbeat, this.durableDiagnostics("continuation", `${continuation.fromName}:${continuation.toName}`, currentTemporalActivityMessageContext()));
-                let context = currentTemporalActivityMessageContext()
+                const activityContext = currentTemporalActivityMessageContext();
+                const durable = new DurableCallContext(continuation.callId, heartbeat, this.durableDiagnostics("continuation", `${continuation.fromName}:${continuation.toName}`, activityContext));
+                let context = activityContext
                     .withStreamId(continuation.streamId)
                     .withPriority(continuation.priority)
                     .withExternalCancellation(signal)
@@ -321,7 +322,28 @@ export class TemporalConnector {
                 if (continuation.deadlineUnixMillis > 0) {
                     context = context.bounded(Math.max(0, continuation.deadlineUnixMillis - Date.now()));
                 }
-                const result = await runDurableCallActivity(signal, durable, () => this.#environment.resumeDurableContinuation(context, continuation));
+                const result = await runDurableCallActivity(signal, durable, async () => {
+                    const tracer = context.samplingEnabled()
+                        ? this.#environment.tracing()?.tracer(this.#environment.serviceConfig().name)
+                        : undefined;
+                    if (tracer === undefined) {
+                        await this.#environment.resumeDurableContinuation(context, continuation);
+                        return;
+                    }
+                    const started = tracer.start(context, "temporal.activity", [
+                        stringAttribute("boundary", "durable_delay"),
+                        stringAttribute("from", continuation.fromName),
+                        stringAttribute("to", continuation.toName)
+                    ]);
+                    const durableSpan = bindDurableCallSpan(started.context, started.span);
+                    try {
+                        await this.#environment.resumeDurableContinuation(started.context, continuation);
+                    }
+                    finally {
+                        if (!durableSpan)
+                            started.span.end();
+                    }
+                });
                 return durableActivityResultToWire(result);
             };
         }
