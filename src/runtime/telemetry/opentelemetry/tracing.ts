@@ -25,6 +25,12 @@ import {
   type SpanExporter
 } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  OpenTelemetryPlugin,
+  OpenTelemetryWorkflowClientInterceptor
+} from "@temporalio/interceptors-opentelemetry";
+import type { WorkflowClientInterceptor } from "@temporalio/client";
+import type { WorkerPlugin } from "@temporalio/worker";
 
 import type { Context, MessageContext } from "../../context.js";
 import {
@@ -74,15 +80,26 @@ export class OpenTelemetryTracingEngine implements TracingEngine {
   public constructor(options: OpenTelemetryTracingOptions) {
     const exporter = options.exporter ?? makeExporter(options);
     const processor = new BatchSpanProcessor(exporter, options.batch);
+    const resource = resourceFromAttributes({
+      ...options.resourceAttributes,
+      [ATTR_SERVICE_NAME]: options.serviceName
+    });
     this.#provider = new NodeTracerProvider({
-      resource: resourceFromAttributes({
-        ...options.resourceAttributes,
-        [ATTR_SERVICE_NAME]: options.serviceName
-      }),
+      resource,
       sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
       spanProcessors: [processor]
     });
-    this.#tracing = new OpenTelemetryTracing(this.#provider);
+    this.#tracing = new OpenTelemetryTracing(
+      this.#provider,
+      // Temporal 1.21 pins the OTel 1.x structural interfaces while the
+      // application runtime uses OTel 2.x. SpanProcessor and Resource keep the
+      // same runtime contract; isolate the compatibility boundary here.
+      new OpenTelemetryPlugin({
+        tracer: this.#provider.getTracer("@gorundebug/tsservicelib-temporal"),
+        resource,
+        spanProcessor: processor as never
+      })
+    );
   }
 
   public tracing(): Tracing {
@@ -97,9 +114,11 @@ export class OpenTelemetryTracingEngine implements TracingEngine {
 
 class OpenTelemetryTracing implements Tracing {
   readonly #provider: NodeTracerProvider;
+  readonly #temporalPlugin: OpenTelemetryPlugin;
 
-  public constructor(provider: NodeTracerProvider) {
+  public constructor(provider: NodeTracerProvider, temporalPlugin: OpenTelemetryPlugin) {
     this.#provider = provider;
+    this.#temporalPlugin = temporalPlugin;
   }
 
   public enabled(): boolean {
@@ -108,6 +127,16 @@ class OpenTelemetryTracing implements Tracing {
 
   public tracer(name: string): Tracer {
     return new TracerAdapter(this.#provider.getTracer(name));
+  }
+
+  public temporalWorkerPlugin(): WorkerPlugin {
+    return this.#temporalPlugin;
+  }
+
+  public temporalWorkflowClientInterceptor(): WorkflowClientInterceptor {
+    return new OpenTelemetryWorkflowClientInterceptor({
+      tracer: this.#provider.getTracer("@gorundebug/tsservicelib-temporal-client")
+    });
   }
 }
 

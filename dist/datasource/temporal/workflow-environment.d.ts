@@ -4,12 +4,11 @@ import type { MessageContext } from "../../runtime/context.js";
 import type { DataSink } from "../../runtime/data-sink.js";
 import type { DataSource } from "../../runtime/data-source.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
-import { type Logger } from "../../runtime/environment/log.js";
+import type { Logger } from "../../runtime/environment/log.js";
 import type { Metrics } from "../../runtime/environment/metrics/metrics.js";
 import type { RuntimeBuildable, RuntimeEnvironment, RuntimeGraphLink } from "../../runtime/environment/runtime-environment.js";
 import type { Tracing } from "../../runtime/environment/tracing/index.js";
-import { PriorityTaskPool } from "../../runtime/pool/priority-task-pool.js";
-import { TaskPool } from "../../runtime/pool/task-pool.js";
+import type { PriorityTaskPoolLike, TaskPoolLike } from "../../runtime/pool/index.js";
 import { type SerdeRegistry, type SerdeType } from "../../runtime/serde/registry.js";
 import type { StreamSerde } from "../../runtime/serde/serde.js";
 import type { ServiceHTTPServer, HTTPHandler } from "../../runtime/service-http-server.js";
@@ -25,7 +24,11 @@ import type { Caller, Stream, TypedStreamConsumer } from "../../runtime/stream.j
  */
 export declare class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     #private;
-    constructor(config: CanonicalConfig, serviceId: number, serdeRegistry: SerdeRegistry);
+    constructor(config: CanonicalConfig, serviceId: number, serdeRegistry: SerdeRegistry, telemetry?: {
+        readonly logger?: Logger;
+        readonly metrics?: Metrics;
+        readonly tracing?: Tracing;
+    });
     runtimeConfig(): RuntimeConfig;
     serviceConfig(): ServiceConfig;
     registerStream(stream: Stream): void;
@@ -60,8 +63,8 @@ export declare class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     assertSerdeValue<T>(name: string, value: unknown): asserts value is T;
     streamValueSerde<T>(streamId: number): StreamSerde<T>;
     streamErrorSerde<T>(streamId: number): StreamSerde<T>;
-    taskPool(name: string): TaskPool | undefined;
-    priorityTaskPool(name: string): PriorityTaskPool | undefined;
+    taskPool(name: string): TaskPoolLike | undefined;
+    priorityTaskPool(name: string): PriorityTaskPoolLike | undefined;
     makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
     makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
     delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;

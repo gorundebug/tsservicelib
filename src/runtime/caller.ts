@@ -1,18 +1,17 @@
 import type { MessageContext } from "./context.js";
-import type { PriorityTaskPool } from "./pool/priority-task-pool.js";
-import type { TaskPool } from "./pool/task-pool.js";
+import type { PriorityTaskPoolLike, TaskPoolLike } from "./pool/pool.js";
 import type { Caller, Consumer } from "./stream.js";
 import type { RuntimeTaskRegistry } from "./task-registry.js";
 
 export type CallerRejectionHandler = (error: unknown) => void;
 
 export class TaskPoolCaller<T> implements Caller<T> {
-  readonly #pool: TaskPool;
+  readonly #pool: TaskPoolLike;
   readonly #consumer: Consumer<T>;
   readonly #onRejected: CallerRejectionHandler;
 
   public constructor(
-    pool: TaskPool,
+    pool: TaskPoolLike,
     consumer: Consumer<T>,
     onRejected: CallerRejectionHandler = () => undefined
   ) {
@@ -35,13 +34,13 @@ export class TaskPoolCaller<T> implements Caller<T> {
 }
 
 export class PriorityTaskPoolCaller<T> implements Caller<T> {
-  readonly #pool: PriorityTaskPool;
+  readonly #pool: PriorityTaskPoolLike;
   readonly #consumer: Consumer<T>;
   readonly #defaultPriority: number;
   readonly #onRejected: CallerRejectionHandler;
 
   public constructor(
-    pool: PriorityTaskPool,
+    pool: PriorityTaskPoolLike,
     consumer: Consumer<T>,
     defaultPriority: number,
     onRejected: CallerRejectionHandler = () => undefined

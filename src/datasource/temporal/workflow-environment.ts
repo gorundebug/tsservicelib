@@ -10,8 +10,7 @@ import { RuntimeCallerFactory } from "../../runtime/caller-factory.js";
 import type { DataSink } from "../../runtime/data-sink.js";
 import type { DataSource } from "../../runtime/data-source.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
-import { noopLogger, type Logger } from "../../runtime/environment/log.js";
-import { noopMetrics } from "../../runtime/environment/metrics/noop.js";
+import type { Logger } from "../../runtime/environment/log.js";
 import type { Metrics } from "../../runtime/environment/metrics/metrics.js";
 import type {
   RuntimeBuildable,
@@ -19,8 +18,7 @@ import type {
   RuntimeGraphLink
 } from "../../runtime/environment/runtime-environment.js";
 import type { Tracing } from "../../runtime/environment/tracing/index.js";
-import { PriorityTaskPool } from "../../runtime/pool/priority-task-pool.js";
-import { TaskPool } from "../../runtime/pool/task-pool.js";
+import type { PriorityTaskPoolLike, TaskPoolLike } from "../../runtime/pool/index.js";
 import { type SerdeRegistry, type SerdeType } from "../../runtime/serde/registry.js";
 import type { StreamSerde } from "../../runtime/serde/serde.js";
 import type { ServiceHTTPServer, HTTPHandler } from "../../runtime/service-http-server.js";
@@ -32,6 +30,8 @@ import {
 } from "../../runtime/store/join-storage.js";
 import type { Caller, Stream, TypedStream, TypedStreamConsumer } from "../../runtime/stream.js";
 import { RuntimeTaskRegistry } from "../../runtime/task-registry.js";
+import { WorkflowPriorityTaskPool, WorkflowTaskPool } from "./workflow-pool.js";
+import { WorkflowMetrics, WorkflowTracing, workflowLogger } from "./workflow-telemetry.js";
 
 /**
  * Workflow-isolate implementation of the ordinary graph environment.
@@ -52,16 +52,31 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   readonly #buildables = new Set<RuntimeBuildable>();
   readonly #linkCallCounts = new Map<string, number>();
   readonly #tasks: RuntimeTaskRegistry;
-  readonly #taskPools: ReadonlyMap<string, TaskPool>;
-  readonly #priorityTaskPools: ReadonlyMap<string, PriorityTaskPool>;
+  readonly #taskPools: ReadonlyMap<string, WorkflowTaskPool>;
+  readonly #priorityTaskPools: ReadonlyMap<string, WorkflowPriorityTaskPool>;
+  readonly #logger: Logger;
+  readonly #metrics: Metrics;
+  readonly #tracing: Tracing | undefined;
   readonly #callerFactory: RuntimeCallerFactory;
   #failure: Error | undefined;
   #started = false;
 
-  public constructor(config: CanonicalConfig, serviceId: number, serdeRegistry: SerdeRegistry) {
+  public constructor(
+    config: CanonicalConfig,
+    serviceId: number,
+    serdeRegistry: SerdeRegistry,
+    telemetry: {
+      readonly logger?: Logger;
+      readonly metrics?: Metrics;
+      readonly tracing?: Tracing;
+    } = {}
+  ) {
     this.#config = new RuntimeConfig(config);
     this.#serviceId = serviceId;
     this.#serdeRegistry = serdeRegistry;
+    this.#logger = telemetry.logger ?? workflowLogger;
+    this.#metrics = telemetry.metrics ?? new WorkflowMetrics();
+    this.#tracing = telemetry.tracing ?? new WorkflowTracing();
     this.#tasks = new RuntimeTaskRegistry((error) => {
       this.recordFailure(error);
     });
@@ -156,15 +171,15 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   }
 
   public log(): Logger {
-    return noopLogger;
+    return this.#logger;
   }
 
   public metrics(): Metrics {
-    return noopMetrics;
+    return this.#metrics;
   }
 
   public tracing(): Tracing | undefined {
-    return undefined;
+    return this.#tracing;
   }
 
   public registerHttpHandler(path: string, handler: HTTPHandler): void {
@@ -258,11 +273,11 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     return this.#serdeRegistry.requireStreamError(streamId);
   }
 
-  public taskPool(name: string): TaskPool | undefined {
+  public taskPool(name: string): TaskPoolLike | undefined {
     return this.#taskPools.get(name);
   }
 
-  public priorityTaskPool(name: string): PriorityTaskPool | undefined {
+  public priorityTaskPool(name: string): PriorityTaskPoolLike | undefined {
     return this.#priorityTaskPools.get(name);
   }
 
@@ -302,8 +317,8 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     this.validateRuntimeTopology();
     const context = Context.background();
     for (const storage of this.#storages) await storage.start(context);
-    for (const pool of this.#taskPools.values()) await pool.start(context);
-    for (const pool of this.#priorityTaskPools.values()) await pool.start(context);
+    for (const pool of this.#taskPools.values()) pool.start();
+    for (const pool of this.#priorityTaskPools.values()) pool.start();
     this.#started = true;
   }
 
@@ -312,8 +327,8 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     await this.waitForQuiescence();
     this.#tasks.stopAdmission();
     const context = Context.background();
-    for (const pool of this.#taskPools.values()) await pool.stop(context);
-    for (const pool of this.#priorityTaskPools.values()) await pool.stop(context);
+    for (const pool of this.#taskPools.values()) await pool.stop();
+    for (const pool of this.#priorityTaskPools.values()) await pool.stop();
     await this.#tasks.drain();
     for (const storage of this.#storages) await storage.stop(context);
     this.#started = false;
@@ -325,11 +340,12 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   }
 
   private makePools(): {
-    readonly task: ReadonlyMap<string, TaskPool>;
-    readonly priority: ReadonlyMap<string, PriorityTaskPool>;
+    readonly task: ReadonlyMap<string, WorkflowTaskPool>;
+    readonly priority: ReadonlyMap<string, WorkflowPriorityTaskPool>;
   } {
-    const task = new Map<string, TaskPool>();
-    const priority = new Map<string, PriorityTaskPool>();
+    const task = new Map<string, WorkflowTaskPool>();
+    const priority = new Map<string, WorkflowPriorityTaskPool>();
+    const service = this.serviceConfig().name;
     const use = (semantics: ServiceConfig["defaultCallSemantics"]): void => {
       if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics)
         return;
@@ -341,25 +357,23 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
         if (!task.has(name)) {
           task.set(
             name,
-            new TaskPool({
-              name,
-              executorsCount: config.executorsCount,
-              onError: (error) => {
-                this.recordFailure(error);
-              }
+            new WorkflowTaskPool(name, config.executorsCount, this.#metrics, service, (error) => {
+              this.recordFailure(error);
             })
           );
         }
       } else if (!priority.has(name)) {
         priority.set(
           name,
-          new PriorityTaskPool({
+          new WorkflowPriorityTaskPool(
             name,
-            executorsCount: config.executorsCount,
-            onError: (error) => {
+            config.executorsCount,
+            this.#metrics,
+            service,
+            (error) => {
               this.recordFailure(error);
             }
-          })
+          )
         );
       }
     };

@@ -1,5 +1,6 @@
 import { continueAsNew, scheduleActivity, sleep, workflowInfo } from "@temporalio/workflow";
 import { DurableCallContext, TemporalContinueAsNewRequest, runDurableCallWorkflow } from "../../runtime/durable-call-context.js";
+import { isTemporalEndpointConfig } from "../../runtime/config/schedule.js";
 import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 import { currentTemporalWorkflowMessageContext } from "./workflow-context-interceptor.js";
 export async function servicelibTemporalEndpointV1(request) {
@@ -27,6 +28,12 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
     let context = currentTemporalWorkflowMessageContext()
         .withStreamId(envelope.streamId || messageId)
         .withPriority(envelope.priority);
+    const endpointConfig = endpoint.environment
+        .runtimeConfig()
+        .endpointById(endpoint.stream.endpointId());
+    if (isTemporalEndpointConfig(endpointConfig) && endpointConfig.tracingEnabled === true) {
+        context = context.withSampling(true);
+    }
     if (envelope.deadlineUnixMillis > 0) {
         context = context.bounded(Math.max(0, envelope.deadlineUnixMillis - Date.now()));
     }

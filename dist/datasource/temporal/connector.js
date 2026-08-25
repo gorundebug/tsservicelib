@@ -22,6 +22,8 @@ export class TemporalConnector {
     #environment;
     #endpoints = new Map();
     #activityEvents;
+    #telemetryPlugin;
+    #telemetryClientInterceptor;
     #connection;
     #client;
     #workers = [];
@@ -44,6 +46,9 @@ export class TemporalConnector {
             .metrics()
             .scope("temporal_activity", { connector: this.name })
             .counterVec("events_total", "Total number of Temporal Activity lifecycle events");
+        const tracing = environment.tracing();
+        this.#telemetryPlugin = temporalWorkerPlugin(tracing);
+        this.#telemetryClientInterceptor = getTemporalWorkflowClientInterceptor(tracing);
     }
     registerEndpoint(endpointId, handler) {
         if (this.#started)
@@ -81,7 +86,14 @@ export class TemporalConnector {
         this.#client = new Client({
             connection,
             namespace: config.namespace,
-            interceptors: { workflow: [temporalWorkflowClientInterceptor] },
+            interceptors: {
+                workflow: [
+                    temporalWorkflowClientInterceptor,
+                    ...(this.#telemetryClientInterceptor === undefined
+                        ? []
+                        : [this.#telemetryClientInterceptor])
+                ]
+            },
             ...(config.identity === "" ? {} : { identity: config.identity })
         });
         try {
@@ -98,6 +110,7 @@ export class TemporalConnector {
                             fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))
                         ]
                     },
+                    ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
                     ...(config.identity === "" ? {} : { identity: config.identity }),
                     ...(config.maxConcurrentActivities > 0
                         ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
@@ -407,6 +420,22 @@ function installSdkMetricsRuntime() {
         }
     });
     sdkMetricsBindAddress = address;
+}
+function temporalTracingIntegration(tracing) {
+    if (tracing === undefined ||
+        !("temporalWorkerPlugin" in tracing) ||
+        !("temporalWorkflowClientInterceptor" in tracing) ||
+        typeof tracing.temporalWorkerPlugin !== "function" ||
+        typeof tracing.temporalWorkflowClientInterceptor !== "function") {
+        return undefined;
+    }
+    return tracing;
+}
+function temporalWorkerPlugin(tracing) {
+    return temporalTracingIntegration(tracing)?.temporalWorkerPlugin();
+}
+function getTemporalWorkflowClientInterceptor(tracing) {
+    return temporalTracingIntegration(tracing)?.temporalWorkflowClientInterceptor();
 }
 async function tlsOptions(config) {
     if (!config.tlsEnabled)

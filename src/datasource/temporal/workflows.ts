@@ -8,6 +8,7 @@ import {
 import type { Completion, Consumer } from "../../runtime/stream.js";
 import type { TypedInputStream } from "../../runtime/data-source.js";
 import type { MessageContext } from "../../runtime/context.js";
+import { isTemporalEndpointConfig } from "../../runtime/config/schedule.js";
 import type {
   EndpointWireEnvelope,
   EndpointWireResult,
@@ -59,6 +60,12 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
   let context = currentTemporalWorkflowMessageContext()
     .withStreamId(envelope.streamId || messageId)
     .withPriority(envelope.priority);
+  const endpointConfig = endpoint.environment
+    .runtimeConfig()
+    .endpointById(endpoint.stream.endpointId());
+  if (isTemporalEndpointConfig(endpointConfig) && endpointConfig.tracingEnabled === true) {
+    context = context.withSampling(true);
+  }
   if (envelope.deadlineUnixMillis > 0) {
     context = context.bounded(Math.max(0, envelope.deadlineUnixMillis - Date.now()));
   }

@@ -5,7 +5,13 @@ import { callerMetadata } from "../caller-metadata.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
 import type { ManagedDataConnector } from "../data-connector.js";
-import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
+import {
+  DelayPool,
+  type PriorityTaskPool,
+  type PriorityTaskPoolLike,
+  type TaskPool,
+  type TaskPoolLike
+} from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
 import {
@@ -78,8 +84,8 @@ export interface RuntimeEnvironment {
   assertSerdeValue<T>(name: string, value: unknown): asserts value is T;
   streamValueSerde<T>(streamId: number): StreamSerde<T>;
   streamErrorSerde<T>(streamId: number): StreamSerde<T>;
-  taskPool(name: string): TaskPool | undefined;
-  priorityTaskPool(name: string): PriorityTaskPool | undefined;
+  taskPool(name: string): TaskPoolLike | undefined;
+  priorityTaskPool(name: string): PriorityTaskPoolLike | undefined;
   makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
   makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
   delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;

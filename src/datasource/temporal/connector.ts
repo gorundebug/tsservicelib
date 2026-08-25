@@ -10,6 +10,8 @@ import {
 import { cancellationSignal, heartbeat } from "@temporalio/activity";
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
 import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
+import type { WorkerPlugin } from "@temporalio/worker";
+import type { WorkflowClientInterceptor } from "@temporalio/client";
 
 import {
   DataConnectorType,
@@ -27,7 +29,7 @@ import {
   runDurableCallActivity,
   type DurableCallDiagnostics
 } from "../../runtime/durable-call-context.js";
-import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
+import type { RuntimeEnvironment, Tracing } from "../../runtime/environment/index.js";
 import { err, str, type Int64CounterVec } from "../../runtime/environment/index.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
@@ -81,6 +83,8 @@ export class TemporalConnector implements ManagedDataConnector {
   readonly #environment: RuntimeEnvironment;
   readonly #endpoints = new Map<number, EndpointRegistration>();
   readonly #activityEvents: Int64CounterVec;
+  readonly #telemetryPlugin: WorkerPlugin | undefined;
+  readonly #telemetryClientInterceptor: WorkflowClientInterceptor | undefined;
   #connection: NativeConnection | undefined;
   #client: Client | undefined;
   #workers: Worker[] = [];
@@ -108,6 +112,9 @@ export class TemporalConnector implements ManagedDataConnector {
       .metrics()
       .scope("temporal_activity", { connector: this.name })
       .counterVec("events_total", "Total number of Temporal Activity lifecycle events");
+    const tracing = environment.tracing();
+    this.#telemetryPlugin = temporalWorkerPlugin(tracing);
+    this.#telemetryClientInterceptor = getTemporalWorkflowClientInterceptor(tracing);
   }
 
   public registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void {
@@ -152,7 +159,14 @@ export class TemporalConnector implements ManagedDataConnector {
     this.#client = new Client({
       connection,
       namespace: config.namespace,
-      interceptors: { workflow: [temporalWorkflowClientInterceptor] },
+      interceptors: {
+        workflow: [
+          temporalWorkflowClientInterceptor,
+          ...(this.#telemetryClientInterceptor === undefined
+            ? []
+            : [this.#telemetryClientInterceptor])
+        ]
+      },
       ...(config.identity === "" ? {} : { identity: config.identity })
     });
     try {
@@ -169,6 +183,7 @@ export class TemporalConnector implements ManagedDataConnector {
               fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))
             ]
           },
+          ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
           ...(config.identity === "" ? {} : { identity: config.identity }),
           ...(config.maxConcurrentActivities > 0
             ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
@@ -551,6 +566,36 @@ function installSdkMetricsRuntime(): void {
     }
   });
   sdkMetricsBindAddress = address;
+}
+
+interface TemporalTracingIntegration {
+  temporalWorkerPlugin(): WorkerPlugin;
+  temporalWorkflowClientInterceptor(): WorkflowClientInterceptor;
+}
+
+function temporalTracingIntegration(
+  tracing: Tracing | undefined
+): TemporalTracingIntegration | undefined {
+  if (
+    tracing === undefined ||
+    !("temporalWorkerPlugin" in tracing) ||
+    !("temporalWorkflowClientInterceptor" in tracing) ||
+    typeof tracing.temporalWorkerPlugin !== "function" ||
+    typeof tracing.temporalWorkflowClientInterceptor !== "function"
+  ) {
+    return undefined;
+  }
+  return tracing as Tracing & TemporalTracingIntegration;
+}
+
+function temporalWorkerPlugin(tracing: Tracing | undefined): WorkerPlugin | undefined {
+  return temporalTracingIntegration(tracing)?.temporalWorkerPlugin();
+}
+
+function getTemporalWorkflowClientInterceptor(
+  tracing: Tracing | undefined
+): WorkflowClientInterceptor | undefined {
+  return temporalTracingIntegration(tracing)?.temporalWorkflowClientInterceptor();
 }
 
 async function tlsOptions(config: TemporalDataConnectorConfig): Promise<

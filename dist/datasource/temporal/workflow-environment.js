@@ -1,13 +1,11 @@
 import { RuntimeConfig } from "../../runtime/config/runtime-config.js";
 import { Context } from "../../runtime/context.js";
 import { RuntimeCallerFactory } from "../../runtime/caller-factory.js";
-import { noopLogger } from "../../runtime/environment/log.js";
-import { noopMetrics } from "../../runtime/environment/metrics/noop.js";
-import { PriorityTaskPool } from "../../runtime/pool/priority-task-pool.js";
-import { TaskPool } from "../../runtime/pool/task-pool.js";
 import {} from "../../runtime/serde/registry.js";
 import { makeJoinStorage } from "../../runtime/store/join-storage.js";
 import { RuntimeTaskRegistry } from "../../runtime/task-registry.js";
+import { WorkflowPriorityTaskPool, WorkflowTaskPool } from "./workflow-pool.js";
+import { WorkflowMetrics, WorkflowTracing, workflowLogger } from "./workflow-telemetry.js";
 /**
  * Workflow-isolate implementation of the ordinary graph environment.
  *
@@ -29,13 +27,19 @@ export class TemporalWorkflowEnvironment {
     #tasks;
     #taskPools;
     #priorityTaskPools;
+    #logger;
+    #metrics;
+    #tracing;
     #callerFactory;
     #failure;
     #started = false;
-    constructor(config, serviceId, serdeRegistry) {
+    constructor(config, serviceId, serdeRegistry, telemetry = {}) {
         this.#config = new RuntimeConfig(config);
         this.#serviceId = serviceId;
         this.#serdeRegistry = serdeRegistry;
+        this.#logger = telemetry.logger ?? workflowLogger;
+        this.#metrics = telemetry.metrics ?? new WorkflowMetrics();
+        this.#tracing = telemetry.tracing ?? new WorkflowTracing();
         this.#tasks = new RuntimeTaskRegistry((error) => {
             this.recordFailure(error);
         });
@@ -111,13 +115,13 @@ export class TemporalWorkflowEnvironment {
         return [...this.#connectors.values()];
     }
     log() {
-        return noopLogger;
+        return this.#logger;
     }
     metrics() {
-        return noopMetrics;
+        return this.#metrics;
     }
     tracing() {
-        return undefined;
+        return this.#tracing;
     }
     registerHttpHandler(path, handler) {
         void path;
@@ -232,9 +236,9 @@ export class TemporalWorkflowEnvironment {
         for (const storage of this.#storages)
             await storage.start(context);
         for (const pool of this.#taskPools.values())
-            await pool.start(context);
+            pool.start();
         for (const pool of this.#priorityTaskPools.values())
-            await pool.start(context);
+            pool.start();
         this.#started = true;
     }
     async finish() {
@@ -244,9 +248,9 @@ export class TemporalWorkflowEnvironment {
         this.#tasks.stopAdmission();
         const context = Context.background();
         for (const pool of this.#taskPools.values())
-            await pool.stop(context);
+            await pool.stop();
         for (const pool of this.#priorityTaskPools.values())
-            await pool.stop(context);
+            await pool.stop();
         await this.#tasks.drain();
         for (const storage of this.#storages)
             await storage.stop(context);
@@ -260,6 +264,7 @@ export class TemporalWorkflowEnvironment {
     makePools() {
         const task = new Map();
         const priority = new Map();
+        const service = this.serviceConfig().name;
         const use = (semantics) => {
             if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics)
                 return;
@@ -269,22 +274,14 @@ export class TemporalWorkflowEnvironment {
                 throw new Error(`pool config ${name} not found`);
             if ("taskPool" in semantics) {
                 if (!task.has(name)) {
-                    task.set(name, new TaskPool({
-                        name,
-                        executorsCount: config.executorsCount,
-                        onError: (error) => {
-                            this.recordFailure(error);
-                        }
+                    task.set(name, new WorkflowTaskPool(name, config.executorsCount, this.#metrics, service, (error) => {
+                        this.recordFailure(error);
                     }));
                 }
             }
             else if (!priority.has(name)) {
-                priority.set(name, new PriorityTaskPool({
-                    name,
-                    executorsCount: config.executorsCount,
-                    onError: (error) => {
-                        this.recordFailure(error);
-                    }
+                priority.set(name, new WorkflowPriorityTaskPool(name, config.executorsCount, this.#metrics, service, (error) => {
+                    this.recordFailure(error);
                 }));
             }
         };

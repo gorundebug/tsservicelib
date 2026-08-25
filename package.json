@@ -176,6 +176,7 @@
     "@temporalio/activity": "1.21.1",
     "@temporalio/client": "1.21.1",
     "@temporalio/common": "1.21.1",
+    "@temporalio/interceptors-opentelemetry": "1.21.1",
     "@temporalio/worker": "1.21.1",
     "@temporalio/workflow": "1.21.1",
     "croner": "10.0.1",
