@@ -21,6 +21,10 @@ export declare class DurableCallContextError extends Error {
 }
 export declare class DurableCallHeartbeatAfterCompletionError extends DurableCallContextError {
 }
+export declare class TemporalContinueAsNewRequest extends Error {
+    readonly nextInput: unknown;
+    constructor(nextInput: unknown);
+}
 /** Processing-side state for one Temporal endpoint Activity. */
 export declare class DurableCallContext {
     #private;
@@ -30,10 +34,13 @@ export declare class DurableCallContext {
     bindSpan(span: Span): void;
     heartbeat(message: unknown): void;
     delay(delayMs: number): Promise<boolean>;
+    continueAsNew(nextInput: unknown): never;
     close(error?: Error): void;
     private report;
 }
 export declare function durableCallHeartbeat(context: MessageContext, message: unknown): void;
+/** Terminate the current Workflow run with a new typed endpoint input. */
+export declare function temporalContinueAsNew(context: MessageContext, nextInput: unknown): never;
 /** Returns true when a Temporal Workflow timer handled the delay. */
 export declare function durableCallDelay(context: MessageContext, delayMs: number): Promise<boolean>;
 export declare function bindDurableCallSpan(context: MessageContext, span: Span): boolean;

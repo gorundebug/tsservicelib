@@ -1,4 +1,4 @@
-import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 import { makeTemporalConnector } from "./connector.js";
 class TemporalDataSource extends InputDataSource {
     constructor(connectorId, environment) {
@@ -16,7 +16,7 @@ class TemporalDataSource extends InputDataSource {
         return Promise.resolve();
     }
 }
-class TemporalEndpointConsumer {
+class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
     #endpoint;
     #stream;
     #decode;
@@ -24,6 +24,7 @@ class TemporalEndpointConsumer {
     #pending = new Map();
     #tracer;
     constructor(endpoint, stream, connector, decode, activateInput) {
+        super(endpoint, stream);
         this.#endpoint = endpoint;
         this.#stream = stream;
         this.#decode = decode;
@@ -40,12 +41,6 @@ class TemporalEndpointConsumer {
             });
         }
         connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal) => this.activate(envelope, context, cancellationSignal));
-    }
-    endpoint() {
-        return this.#endpoint;
-    }
-    consume(context, value) {
-        return this.#activateInput(context, value);
     }
     async activate(envelope, parent, cancellationSignal) {
         if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
@@ -88,7 +83,7 @@ class TemporalEndpointConsumer {
                 this.#pending.set(streamId, pending);
                 this.#endpoint.onPendingAdd(context, streamId);
             }
-            await this.consume(context, this.#decode(envelope));
+            await this.#activateInput(context, this.#decode(envelope));
             if (pending === undefined)
                 return { payload: new Uint8Array() };
             const value = await pending.promise;
@@ -137,14 +132,21 @@ export function makeTemporalEndpointConsumer(stream) {
 export function makeTemporalScheduleEndpointConsumer(stream, function_) {
     const collector = new FunctionCollector((context, value) => stream.consume(context, value));
     return makeEndpointConsumer(stream, (envelope) => {
-        if (!envelope.scheduled ||
-            envelope.scheduleId === "" ||
+        if (!envelope.scheduled) {
+            return { scheduled: false, value: stream.serde().deserialize(envelope.payload) };
+        }
+        if (envelope.scheduleId === "" ||
             envelope.scheduledAtUnixMillis <= 0 ||
             envelope.firedAtUnixMillis <= 0) {
             throw new Error(`invalid Temporal schedule envelope for ${String(envelope.endpointId)}`);
         }
-        return makeScheduleTrigger(envelope.endpointId, envelope.scheduleId, new Date(envelope.scheduledAtUnixMillis).toISOString(), new Date(envelope.firedAtUnixMillis).toISOString(), ScheduleBackend.Temporal);
-    }, (context, trigger) => function_.onTrigger(context, trigger, collector));
+        return {
+            scheduled: true,
+            trigger: makeScheduleTrigger(envelope.endpointId, envelope.scheduleId, new Date(envelope.scheduledAtUnixMillis).toISOString(), new Date(envelope.firedAtUnixMillis).toISOString(), ScheduleBackend.Temporal)
+        };
+    }, (context, activation) => activation.scheduled
+        ? function_.onTrigger(context, activation.trigger, collector)
+        : stream.consume(context, activation.value));
 }
 function makeEndpointConsumer(stream, decode, activateInput) {
     const environment = stream.runtimeEnvironment();
