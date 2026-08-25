@@ -55,9 +55,7 @@ class CronEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consumer<S
 class CronEndpoint extends DataSourceEndpoint {
   #binding: CronEndpointBinding | undefined;
   #job: Cron | undefined;
-  #timer: NodeJS.Timeout | undefined;
   #running = false;
-  #generation = 0;
   readonly #active = new Set<Promise<void>>();
 
   public bind(binding: CronEndpointBinding): void {
@@ -74,78 +72,60 @@ class CronEndpoint extends DataSourceEndpoint {
     if (!config.enabled) return;
     const binding = this.#binding;
     if (binding === undefined) throw new Error(`cron endpoint ${this.name} has no consumer`);
-    const job = new Cron(config.schedule, {
-      name: `${this.dataSource().name}.${this.name}`,
-      paused: true,
-      timezone: config.timezone
-    });
+    let nextScheduledAt: Date | null = null;
+    const job = new Cron(
+      config.schedule,
+      {
+        name: `${this.dataSource().name}.${this.name}`,
+        timezone: config.timezone,
+        protect: config.overlapPolicy === "Skip"
+      },
+      (current) => {
+        const scheduledAt = nextScheduledAt ?? current.currentRun() ?? new Date();
+        const next = current.nextRun(scheduledAt);
+        nextScheduledAt = next;
+        const currentConfig = this.cronConfig();
+        if (
+          currentConfig.missedRunPolicy === "Skip" &&
+          next !== null &&
+          next.getTime() <= Date.now()
+        ) {
+          return;
+        }
+        return this.#startDispatch(binding, scheduledAt);
+      }
+    );
     this.#job = job;
-    const next = job.nextRun();
-    if (next === null) throw new Error(`cron endpoint ${this.name} has no next occurrence`);
-    this.#schedule(next, binding, config, this.#generation);
+    nextScheduledAt = job.nextRun();
+    if (nextScheduledAt === null) {
+      job.stop();
+      this.#job = undefined;
+      throw new Error(`cron endpoint ${this.name} has no next occurrence`);
+    }
   }
 
   public async stop(): Promise<void> {
-    this.#generation += 1;
-    if (this.#timer !== undefined) clearTimeout(this.#timer);
-    this.#timer = undefined;
     this.#job?.stop();
     this.#job = undefined;
     await Promise.allSettled(this.#active);
   }
 
-  #schedule(
-    next: Date,
-    binding: CronEndpointBinding,
-    config: CronEndpointConfig,
-    generation: number
-  ): void {
-    const delay = Math.min(Math.max(next.getTime() - Date.now(), 0), 30_000);
-    this.#timer = setTimeout(() => {
-      if (generation !== this.#generation || this.#job === undefined) return;
-      const now = new Date();
-      if (now < next) {
-        this.#schedule(next, binding, config, generation);
-        return;
-      }
-
-      const due: Date[] = [];
-      let candidate: Date | null = next;
-      while (candidate !== null && candidate <= now) {
-        // Croner remains the sole parser/evaluator. match() rejects a shifted
-        // spring-gap candidate; Croner itself emits only the first fall fold.
-        if (this.#job.match(candidate)) due.push(candidate);
-        candidate = this.#job.nextRun(candidate);
-      }
-      if (due.length === 1) {
-        for (const occurrence of due) {
-          this.#startDispatch(binding, occurrence, config);
-        }
-      } else if (due.length > 1 && config.missedRunPolicy === "FireOnce") {
-        const occurrence = due.at(-1);
-        if (occurrence !== undefined) this.#startDispatch(binding, occurrence, config);
-      }
-      if (candidate !== null) this.#schedule(candidate, binding, config, generation);
-    }, delay);
-  }
-
   #startDispatch(
     binding: CronEndpointBinding,
-    scheduledAt: Date,
-    config: CronEndpointConfig
-  ): void {
-    const execution = this.#dispatch(binding, scheduledAt, config);
+    scheduledAt: Date
+  ): Promise<void> {
+    const execution = this.#dispatch(binding, scheduledAt);
     this.#active.add(execution);
-    void execution.finally(() => {
+    return execution.finally(() => {
       this.#active.delete(execution);
     });
   }
 
   async #dispatch(
     binding: CronEndpointBinding,
-    scheduledAt: Date,
-    config: CronEndpointConfig
+    scheduledAt: Date
   ): Promise<void> {
+    const config = this.cronConfig();
     if (this.#running && config.overlapPolicy === "Skip") return;
     this.#running = true;
     const context = applyDataSourceEndpointTracing(
