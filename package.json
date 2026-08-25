@@ -92,6 +92,10 @@
       "types": "./dist/runtime/config/index.d.ts",
       "import": "./dist/runtime/config/index.js"
     },
+    "./runtime/config/workflow": {
+      "types": "./dist/runtime/config/workflow.d.ts",
+      "import": "./dist/runtime/config/workflow.js"
+    },
     "./runtime/logging": {
       "types": "./dist/runtime/logging/index.d.ts",
       "import": "./dist/runtime/logging/index.js"

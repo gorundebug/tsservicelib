@@ -25,6 +25,7 @@ const requiredExports = [
   "./runtime/graph",
   "./transformation",
   "./runtime/config",
+  "./runtime/config/workflow",
   "./runtime/logging",
   "./runtime/datastruct",
   "./runtime/pool",
