@@ -1,5 +1,6 @@
 import {
   ConsumedStream,
+  durableCallDelay,
   errorFromUnknown,
   spanError,
   stringAttribute,
@@ -42,6 +43,25 @@ export class DelayStream<T> extends ConsumedStream<T> implements TypedStreamCons
     if (duration <= 0) {
       try {
         await this.emit(spanContext, value);
+      } finally {
+        started?.span.end();
+      }
+      return;
+    }
+    try {
+      if (await durableCallDelay(spanContext, duration)) {
+        try {
+          await this.emit(spanContext, value);
+        } finally {
+          started?.span.end();
+        }
+        return;
+      }
+    } catch (error: unknown) {
+      const failure = errorFromUnknown(error);
+      spanError(started?.span, failure);
+      try {
+        await this.#function.delayError(spanContext, this, value, failure, this);
       } finally {
         started?.span.end();
       }

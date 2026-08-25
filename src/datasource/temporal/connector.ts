@@ -231,15 +231,14 @@ export class TemporalConnector implements ManagedDataConnector {
       activities[registration.activityType] = async (value) => {
         const signal = cancellationSignal();
         const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
-        const durable = new DurableCallContext(
-          envelope.messageId,
+        const durable = new DurableCallContext(envelope.messageId, "Activity", {
           heartbeat,
-          this.activityDiagnostics(
+          diagnostics: this.activityDiagnostics(
             "endpoint",
             String(registration.endpointId),
             currentTemporalActivityMessageContext()
           )
-        );
+        });
         const context = currentTemporalActivityMessageContext()
           .withExternalCancellation(signal)
           .withDurableCallContext(durable);

@@ -7,6 +7,7 @@ import {
   ConsumedStream,
   Context,
   DelayPool,
+  DurableCallContext,
   MessageContext,
   ServiceStream,
   type DelayStreamConfig,
@@ -126,4 +127,25 @@ await test("delay scheduling rejection invokes delayError with the normal collec
   await source.emit(new MessageContext(), 1);
   assert.equal(errors.length, 1);
   assert.deepEqual(output.values, [2]);
+});
+
+await test("Workflow delay uses the durable timer and awaits it before emitting", async () => {
+  const delays: number[] = [];
+  const { output, source } = setup({
+    duration(): number {
+      return 250;
+    },
+    delayError(): void {
+      return undefined;
+    }
+  });
+  const durable = new DurableCallContext("workflow-message", "Workflow", {
+    timer: (delayMs) => {
+      delays.push(delayMs);
+      return Promise.resolve();
+    }
+  });
+  await source.emit(new MessageContext().withDurableCallContext(durable), 1);
+  assert.deepEqual(delays, [250]);
+  assert.deepEqual(output.values, [1]);
 });

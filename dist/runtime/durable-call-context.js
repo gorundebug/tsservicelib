@@ -12,20 +12,32 @@ export class DurableCallHeartbeatAfterCompletionError extends DurableCallContext
 /** Processing-side state for one Temporal endpoint Activity. */
 export class DurableCallContext {
     messageId;
+    executionType;
     #heartbeat;
+    #timer;
     #diagnostics;
     #closed = false;
     #span;
     #spanEnded = false;
-    constructor(messageId, heartbeat, diagnostics) {
+    constructor(messageId, executionType, options = {}) {
         this.messageId = messageId;
-        this.#heartbeat = heartbeat;
-        this.#diagnostics = diagnostics;
+        this.executionType = executionType;
+        this.#heartbeat = options.heartbeat;
+        this.#timer = options.timer;
+        this.#diagnostics = options.diagnostics;
+        if (executionType === "Activity" && this.#timer !== undefined) {
+            throw new Error("Temporal Activity durable context cannot own a Workflow timer");
+        }
+        if (executionType === "Workflow" && this.#heartbeat !== undefined) {
+            throw new Error("Temporal Workflow durable context cannot own an Activity heartbeat");
+        }
     }
     bindSpan(span) {
         this.#span = span;
     }
     heartbeat(message) {
+        if (this.executionType !== "Activity")
+            return;
         if (this.#closed) {
             const error = new DurableCallHeartbeatAfterCompletionError("durable call heartbeat after completion");
             this.report(DurableCallEvent.LateHeartbeat, error);
@@ -33,6 +45,17 @@ export class DurableCallContext {
         }
         this.#heartbeat?.(message);
         this.report(DurableCallEvent.Heartbeat);
+    }
+    async delay(delayMs) {
+        if (this.executionType !== "Workflow")
+            return false;
+        if (this.#closed)
+            throw new DurableCallContextError("durable call timer after completion");
+        if (this.#timer === undefined) {
+            throw new DurableCallContextError("Temporal Workflow durable timer is not configured");
+        }
+        await this.#timer(delayMs);
+        return true;
     }
     close(error) {
         if (this.#closed)
@@ -62,6 +85,11 @@ export function durableCallHeartbeat(context, message) {
     if (durable instanceof DurableCallContext)
         durable.heartbeat(message);
 }
+/** Returns true when a Temporal Workflow timer handled the delay. */
+export async function durableCallDelay(context, delayMs) {
+    const durable = context.durableCallContext();
+    return durable instanceof DurableCallContext ? durable.delay(delayMs) : false;
+}
 export function bindDurableCallSpan(context, span) {
     const durable = context.durableCallContext();
     if (!(durable instanceof DurableCallContext))
@@ -70,6 +98,21 @@ export function bindDurableCallSpan(context, span) {
     return true;
 }
 export async function runDurableCallActivity(durable, invoke) {
+    try {
+        const result = await invoke();
+        durable.close();
+        return result;
+    }
+    catch (error) {
+        const failure = errorFromUnknown(error);
+        durable.close(failure);
+        throw failure;
+    }
+}
+export async function runDurableCallWorkflow(durable, invoke) {
+    if (durable.executionType !== "Workflow") {
+        throw new DurableCallContextError("runDurableCallWorkflow requires a Workflow context");
+    }
     try {
         const result = await invoke();
         durable.close();

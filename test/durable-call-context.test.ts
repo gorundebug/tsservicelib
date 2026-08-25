@@ -7,8 +7,10 @@ import {
   MessageContext,
   SpanStatusCode,
   bindDurableCallSpan,
+  durableCallDelay,
   durableCallHeartbeat,
-  runDurableCallActivity
+  runDurableCallActivity,
+  runDurableCallWorkflow
 } from "@gorundebug/tsservicelib/runtime";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
 
@@ -18,8 +20,10 @@ await test("heartbeat outside Temporal is a silent no-op", () => {
 
 await test("Activity returns the handler result and closes successfully", async () => {
   const events: string[] = [];
-  const durable = new DurableCallContext("message-1", undefined, (event) => {
-    events.push(event);
+  const durable = new DurableCallContext("message-1", "Activity", {
+    diagnostics: (event) => {
+      events.push(event);
+    }
   });
   const context = new MessageContext().withDurableCallContext(durable);
   const result = await runDurableCallActivity(durable, () => {
@@ -33,11 +37,10 @@ await test("Activity returns the handler result and closes successfully", async 
 await test("Activity records heartbeat and automatic error", async () => {
   const heartbeats: unknown[] = [];
   const events: string[] = [];
-  const durable = new DurableCallContext(
-    "message-1",
-    (message) => heartbeats.push(message),
-    (event) => events.push(event)
-  );
+  const durable = new DurableCallContext("message-1", "Activity", {
+    heartbeat: (message) => heartbeats.push(message),
+    diagnostics: (event) => events.push(event)
+  });
   const context = new MessageContext().withDurableCallContext(durable);
   await assert.rejects(
     runDurableCallActivity(durable, () => {
@@ -55,7 +58,7 @@ await test("Activity records heartbeat and automatic error", async () => {
 
 await test("lifecycle events are attached to the Activity span", async () => {
   const tracing = new TestTracing();
-  const durable = new DurableCallContext("message-1");
+  const durable = new DurableCallContext("message-1", "Activity");
   await runDurableCallActivity(durable, () => {
     const context = new MessageContext().withSampling(true).withDurableCallContext(durable);
     const started = tracing.tracer("service").start(context, "temporal.activity");
@@ -71,4 +74,29 @@ await test("lifecycle events are attached to the Activity span", async () => {
     span.events.map(({ name }) => name),
     ["temporal.activity.heartbeat", "temporal.activity.success"]
   );
+});
+
+await test("Workflow uses its durable timer and heartbeat is a silent no-op", async () => {
+  const delays: number[] = [];
+  const heartbeats: unknown[] = [];
+  const durable = new DurableCallContext("message-2", "Workflow", {
+    timer: (delayMs) => {
+      delays.push(delayMs);
+      return Promise.resolve();
+    },
+    diagnostics: (event) => heartbeats.push(event)
+  });
+  const context = new MessageContext().withDurableCallContext(durable);
+  const result = await runDurableCallWorkflow(durable, async () => {
+    durableCallHeartbeat(context, "ignored");
+    assert.equal(await durableCallDelay(context, 1_250), true);
+    return "done";
+  });
+  assert.equal(result, "done");
+  assert.deepEqual(delays, [1_250]);
+  assert.deepEqual(heartbeats, ["success"]);
+});
+
+await test("delay outside a Temporal Workflow is not claimed", async () => {
+  assert.equal(await durableCallDelay(new MessageContext(), 10), false);
 });

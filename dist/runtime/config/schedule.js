@@ -78,7 +78,8 @@ export function isTemporalEndpointConfig(value) {
         "workflowExecutionTimeout" in value &&
         isNonNegativeInteger(value.workflowExecutionTimeout) &&
         "activityStartToCloseTimeout" in value &&
-        isPositiveInteger(value.activityStartToCloseTimeout) &&
+        isNonNegativeInteger(value.activityStartToCloseTimeout) &&
+        (value.temporalExecutionType !== "Activity" || value.activityStartToCloseTimeout > 0) &&
         "activityHeartbeatTimeout" in value &&
         isNonNegativeInteger(value.activityHeartbeatTimeout) &&
         "maximumAttempts" in value &&

@@ -103,4 +103,12 @@ await test("Temporal config guards reject incomplete durable transport settings"
       } as EndpointConfig),
     /invalid Temporal endpoint config/
   );
+  assert.equal(
+    requireTemporalEndpointConfig({
+      ...endpoint,
+      temporalExecutionType: "Workflow",
+      activityStartToCloseTimeout: 0
+    } as EndpointConfig).temporalExecutionType,
+    "Workflow"
+  );
 });

@@ -175,7 +175,10 @@ export class TemporalConnector {
             activities[registration.activityType] = async (value) => {
                 const signal = cancellationSignal();
                 const envelope = endpointEnvelopeFromWire(value);
-                const durable = new DurableCallContext(envelope.messageId, heartbeat, this.activityDiagnostics("endpoint", String(registration.endpointId), currentTemporalActivityMessageContext()));
+                const durable = new DurableCallContext(envelope.messageId, "Activity", {
+                    heartbeat,
+                    diagnostics: this.activityDiagnostics("endpoint", String(registration.endpointId), currentTemporalActivityMessageContext())
+                });
                 const context = currentTemporalActivityMessageContext()
                     .withExternalCancellation(signal)
                     .withDurableCallContext(durable);

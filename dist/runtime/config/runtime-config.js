@@ -171,7 +171,8 @@ export class RuntimeConfig {
                 if (endpoint.taskQueue === "") {
                     throw new Error(`Temporal endpoint ${endpoint.name} requires taskQueue`);
                 }
-                if (endpoint.activityStartToCloseTimeout < 1) {
+                if (endpoint.temporalExecutionType === "Activity" &&
+                    endpoint.activityStartToCloseTimeout < 1) {
                     throw new Error(`Temporal endpoint ${endpoint.name} requires activityStartToCloseTimeout`);
                 }
                 if (endpoint.maximumAttempts < 1) {
