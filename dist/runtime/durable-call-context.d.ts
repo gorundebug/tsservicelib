@@ -31,6 +31,7 @@ export interface DurableContinuation {
     readonly priority: number;
     readonly deadlineUnixMillis: number;
     readonly wakeAtUnixMillis: number;
+    readonly traceCarrier: Readonly<Record<string, string>>;
     readonly payload: Uint8Array;
 }
 export interface DurableActivityResult {

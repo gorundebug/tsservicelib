@@ -312,7 +312,11 @@ export class TemporalConnector {
             activities[this.continuationActivityType()] = async (value) => {
                 const continuation = durableContinuationFromWire(value);
                 const signal = cancellationSignal();
-                const activityContext = currentTemporalActivityMessageContext();
+                const incomingActivityContext = currentTemporalActivityMessageContext();
+                const activityContext = incomingActivityContext.withMetadata(new Map([
+                    ...incomingActivityContext.metadata(),
+                    ...Object.entries(continuation.traceCarrier)
+                ]));
                 const durable = new DurableCallContext(continuation.callId, heartbeat, this.durableDiagnostics("continuation", `${continuation.fromName}:${continuation.toName}`, activityContext));
                 let context = activityContext
                     .withStreamId(continuation.streamId)
@@ -501,7 +505,8 @@ function durableContinuationFromWire(value) {
         typeof continuation["streamId"] !== "string" ||
         typeof continuation["priority"] !== "number" ||
         typeof continuation["deadlineUnixMillis"] !== "number" ||
-        typeof continuation["wakeAtUnixMillis"] !== "number") {
+        typeof continuation["wakeAtUnixMillis"] !== "number" ||
+        !isStringRecord(continuation["traceCarrier"])) {
         throw new TypeError("invalid Temporal durable continuation");
     }
     return {
@@ -513,8 +518,15 @@ function durableContinuationFromWire(value) {
         priority: continuation["priority"],
         deadlineUnixMillis: continuation["deadlineUnixMillis"],
         wakeAtUnixMillis: continuation["wakeAtUnixMillis"],
+        traceCarrier: continuation["traceCarrier"],
         payload: bytesFromWire(continuation["payload"])
     };
+}
+function isStringRecord(value) {
+    return (typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value) &&
+        Object.values(value).every((item) => typeof item === "string"));
 }
 function durableEnvelopeToWire(envelope) {
     return { ...envelope, payload: bytesToWire(envelope.payload) };

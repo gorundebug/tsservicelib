@@ -45,6 +45,7 @@ export interface DurableWireContinuation {
   readonly priority: number;
   readonly deadlineUnixMillis: number;
   readonly wakeAtUnixMillis: number;
+  readonly traceCarrier: Readonly<Record<string, string>>;
   readonly payload: readonly number[];
 }
 

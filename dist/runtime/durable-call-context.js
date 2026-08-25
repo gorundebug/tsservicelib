@@ -95,6 +95,7 @@ export class DurableCallContext {
             priority: context.priority() ?? 0,
             deadlineUnixMillis: remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
             wakeAtUnixMillis: this.#delayAtUnixMillis,
+            traceCarrier: Object.fromEntries(context.transportMetadata()),
             payload: Uint8Array.from(payload)
         };
         this.#completed = true;

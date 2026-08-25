@@ -35,6 +35,7 @@ export interface DurableContinuation {
   readonly priority: number;
   readonly deadlineUnixMillis: number;
   readonly wakeAtUnixMillis: number;
+  readonly traceCarrier: Readonly<Record<string, string>>;
   readonly payload: Uint8Array;
 }
 
@@ -146,6 +147,7 @@ export class DurableCallContext {
       deadlineUnixMillis:
         remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
       wakeAtUnixMillis: this.#delayAtUnixMillis,
+      traceCarrier: Object.fromEntries(context.transportMetadata()),
       payload: Uint8Array.from(payload)
     };
     this.#completed = true;

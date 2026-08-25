@@ -41,6 +41,14 @@ await test("durable Delay returns a serializable continuation", async () => {
   const durable = new DurableCallContext("call-1");
   const result = await runDurableCallActivity(new AbortController().signal, durable, () => {
     const context = new MessageContext()
+      .withMetadata(
+        new Map([
+          ["x-trace", "1"],
+          ["traceparent", "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"],
+          ["baggage", "tenant=test"],
+          ["unrelated", "must-not-cross-transport"]
+        ])
+      )
       .withStreamId("stream-1")
       .withPriority(7)
       .withDurableCallContext(durable);
@@ -57,6 +65,12 @@ await test("durable Delay returns a serializable continuation", async () => {
   assert.equal(result.continuation.callId, "call-1/delay");
   assert.equal(result.continuation.streamId, "stream-1");
   assert.equal(result.continuation.priority, 7);
+  assert.deepEqual(result.continuation.traceCarrier, {
+    "x-stream-id": "stream-1",
+    "x-trace": "1",
+    traceparent: "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01",
+    baggage: "tenant=test"
+  });
   assert.deepEqual(result.continuation.payload, new Uint8Array([1, 2, 3]));
 });
 
