@@ -1,14 +1,10 @@
-import {
-  ConsumedStream,
-  durableCallDelay,
-  errorFromUnknown,
-  spanError,
-  stringAttribute,
-  type DelayStreamConfig,
-  type MessageContext,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { DelayStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import { durableCallDelay } from "../runtime/durable-call-context.js";
+import { errorFromUnknown } from "../runtime/errors.js";
+import { spanError, stringAttribute } from "../runtime/environment/tracing/tracing.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { DelayFunction } from "./functions.js";
 
 export class DelayStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {

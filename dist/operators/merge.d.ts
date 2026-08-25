@@ -1,4 +1,7 @@
-import { ConsumedStream, type Completion, type MergeStreamConfig, type MessageContext, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { MergeStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 export declare class MergeStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {
     constructor(config: MergeStreamConfig, sources: readonly [TypedStream<T>, ...TypedStream<T>[]]);
     consume(context: MessageContext, value: T): Completion;

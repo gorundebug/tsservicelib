@@ -1,4 +1,4 @@
-import { ConsumedStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
 import { StreamLink } from "./stream-link.js";
 class MergeLink extends StreamLink {
     #merge;

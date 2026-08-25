@@ -1,4 +1,5 @@
-import { ConsumedStream, ServiceStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { ServiceStream } from "../runtime/stream.js";
 import { ErrorStream } from "./error.js";
 export class SinkStream extends ServiceStream {
     #endpointId;

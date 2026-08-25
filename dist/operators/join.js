@@ -1,4 +1,6 @@
-import { ConsumedStream, JoinType, makeJoinStorage } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { JoinType } from "../runtime/config/types.js";
+import { makeJoinStorage } from "../runtime/store/join-storage.js";
 import { StreamLink } from "./stream-link.js";
 class JoinStorageConfigView {
     #stream;

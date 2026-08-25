@@ -1,8 +1,9 @@
-import { type DataConnectorConfig, type EndpointConfig } from "./config/index.js";
+import { type DataConnectorConfig, type EndpointConfig } from "./config/types.js";
 import type { Collector } from "./collector.js";
 import type { Context, MessageContext } from "./context.js";
 import { RuntimeDataConnector, type DataConnector, type Endpoint } from "./data-connector.js";
-import { type Logger, type RuntimeEnvironment } from "./environment/index.js";
+import { type Logger } from "./environment/log.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { Completion, Consumer, TypedConsumedStream, TypedStream, TypedStreamConsumer } from "./stream.js";
 /** Runtime boundary implemented structurally by the Input operator. */

@@ -1,4 +1,7 @@
-import { ConsumedStream, type DelayStreamConfig, type MessageContext, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { DelayStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { DelayFunction } from "./functions.js";
 export declare class DelayStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {
     #private;

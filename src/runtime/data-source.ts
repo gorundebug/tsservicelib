@@ -1,22 +1,18 @@
-import { performance } from "node:perf_hooks";
-
 import {
   DataConnectorType,
   type DataConnectorConfig,
   type EndpointConfig
-} from "./config/index.js";
+} from "./config/types.js";
 import type { Collector } from "./collector.js";
 import type { Context, MessageContext } from "./context.js";
 import { RuntimeDataConnector, type DataConnector, type Endpoint } from "./data-connector.js";
 import {
-  err,
-  str,
   type Float64Histogram,
   type Int64Counter,
-  type Int64Gauge,
-  type Logger,
-  type RuntimeEnvironment
-} from "./environment/index.js";
+  type Int64Gauge
+} from "./environment/metrics/metrics.js";
+import { err, str, type Logger } from "./environment/log.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type {
   Completion,
@@ -246,7 +242,7 @@ export class DataSourceEndpoint implements InputEndpoint {
       return;
     }
     this.#metrics.pendingRequests.inc();
-    this.#pendingStarted.set(streamId, performance.now());
+    this.#pendingStarted.set(streamId, Date.now());
   }
 
   public onPendingRemove(context: MessageContext, streamId: string): void {
@@ -278,7 +274,7 @@ export class DataSourceEndpoint implements InputEndpoint {
       return undefined;
     }
     this.#metrics.activeRequests.inc();
-    return performance.now();
+    return Date.now();
   }
 
   public onRequestEnd(context: MessageContext, started: number | undefined, error?: Error): void {
@@ -286,7 +282,7 @@ export class DataSourceEndpoint implements InputEndpoint {
       return;
     }
     this.#metrics.activeRequests.dec();
-    this.#metrics.requestDuration.observe(context, (performance.now() - started) / 1_000);
+    this.#metrics.requestDuration.observe(context, (Date.now() - started) / 1_000);
     if (error === undefined) {
       this.#metrics.messagesTotal.inc(context);
     } else {
@@ -299,7 +295,7 @@ export class DataSourceEndpoint implements InputEndpoint {
     for (const started of this.#pendingStarted.values()) {
       oldest = Math.min(oldest, started);
     }
-    return oldest === Infinity ? 0 : (performance.now() - oldest) / 1_000;
+    return oldest === Infinity ? 0 : (Date.now() - oldest) / 1_000;
   }
 }
 

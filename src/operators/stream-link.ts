@@ -1,4 +1,6 @@
-import type { RuntimeEnvironment, Stream, StreamConfig } from "../runtime/index.js";
+import type { StreamConfig } from "../runtime/config/types.js";
+import type { RuntimeEnvironment } from "../runtime/environment/runtime-environment.js";
+import type { Stream } from "../runtime/stream.js";
 
 /**
  * Package-internal equivalent of Go's streamLink. Internal graph edges keep

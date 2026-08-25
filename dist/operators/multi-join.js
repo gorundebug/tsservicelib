@@ -1,4 +1,5 @@
-import { ConsumedStream, makeJoinStorage } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { makeJoinStorage } from "../runtime/store/join-storage.js";
 import { StreamLink } from "./stream-link.js";
 const bindMultiJoinRight = Symbol("bindMultiJoinRight");
 class MultiJoinStorageConfigView {

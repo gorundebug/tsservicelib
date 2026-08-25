@@ -80,6 +80,10 @@
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js"
     },
+    "./runtime/graph": {
+      "types": "./dist/runtime/graph.d.ts",
+      "import": "./dist/runtime/graph.js"
+    },
     "./transformation": {
       "types": "./dist/transformation/index.d.ts",
       "import": "./dist/transformation/index.js"

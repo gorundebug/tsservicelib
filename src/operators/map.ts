@@ -1,12 +1,8 @@
-import {
-  ConsumedStream,
-  type Collector,
-  type Completion,
-  type MessageContext,
-  type MapStreamConfig,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import type { Collector } from "../runtime/collector.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { MapStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { MapFunction } from "./functions.js";
 
 export class MapStream<T, R>

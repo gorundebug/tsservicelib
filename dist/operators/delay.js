@@ -1,4 +1,7 @@
-import { ConsumedStream, durableCallDelay, errorFromUnknown, spanError, stringAttribute } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { durableCallDelay } from "../runtime/durable-call-context.js";
+import { errorFromUnknown } from "../runtime/errors.js";
+import { spanError, stringAttribute } from "../runtime/environment/tracing/tracing.js";
 export class DelayStream extends ConsumedStream {
     #function;
     constructor(config, source, function_) {

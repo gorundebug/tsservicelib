@@ -1,4 +1,9 @@
-import { ConsumedStream, type JoinStorage, type KeyValue, type MessageContext, type MultiJoinStreamConfig, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { MultiJoinStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
+import { type JoinStorage } from "../runtime/store/join-storage.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { MultiJoinFunction } from "./functions.js";
 declare const bindMultiJoinRight: unique symbol;
 export declare class MultiJoinStream<K, T, R> extends ConsumedStream<R> implements TypedStreamConsumer<KeyValue<K, T>> {

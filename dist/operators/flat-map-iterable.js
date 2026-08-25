@@ -1,4 +1,4 @@
-import { ConsumedStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
 const utf8Encoder = new TextEncoder();
 function stringItems(value, valueType) {
     if (valueType === "int32") {

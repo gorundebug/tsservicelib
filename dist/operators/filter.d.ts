@@ -1,4 +1,7 @@
-import { ConsumedStream, type MessageContext, type FilterStreamConfig, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { FilterStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { FilterFunction } from "./functions.js";
 export declare class FilterStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {
     #private;

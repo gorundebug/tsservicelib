@@ -1,4 +1,8 @@
-import { ConsumedStream, type CaseStreamConfig, type Completion, type MessageContext, type RuntimeBuildable, type Stream, type TypedStream, type TypedStreamConsumer, type WhenStreamConfig } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { CaseStreamConfig, WhenStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { RuntimeBuildable } from "../runtime/environment/runtime-environment.js";
+import type { Completion, Stream, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { BuildSwitchFunction, When } from "./functions.js";
 interface WhenBranch<T> extends Stream, When {
     consumeCase(context: MessageContext, value: T): Completion;

@@ -1,4 +1,7 @@
-import type { Collector, Completion, KeyValue, MessageContext, Stream } from "../runtime/index.js";
+import type { Collector } from "../runtime/collector.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
+import type { Completion, Stream } from "../runtime/stream.js";
 export interface When {
     valueType(): string;
     whenConsumer(): Stream;

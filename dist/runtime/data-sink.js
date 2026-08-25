@@ -1,7 +1,7 @@
-import { performance } from "node:perf_hooks";
 import { RuntimeDataConnector } from "./data-connector.js";
-import { DataConnectorType } from "./config/index.js";
-import { err, str } from "./environment/index.js";
+import { DataConnectorType } from "./config/types.js";
+import {} from "./environment/metrics/metrics.js";
+import { err, str } from "./environment/log.js";
 /** Common typed collector context passed to datasink endpoint handlers. */
 // T is intentionally retained in the public signature to match the canonical
 // SinkStreamContext<T, R, E>; the context only emits R and E by design.
@@ -98,14 +98,14 @@ export class DataSinkEndpoint {
             return undefined;
         }
         this.#metrics.activeRequests.inc();
-        return performance.now();
+        return Date.now();
     }
     onRequestEnd(context, started, error) {
         if (this.#metrics === undefined || started === undefined) {
             return;
         }
         this.#metrics.activeRequests.dec();
-        this.#metrics.requestDuration.observe(context, (performance.now() - started) / 1_000);
+        this.#metrics.requestDuration.observe(context, (Date.now() - started) / 1_000);
         if (error === undefined) {
             this.#metrics.messagesTotal.inc(context);
         }

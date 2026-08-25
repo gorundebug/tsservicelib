@@ -1,4 +1,4 @@
-import { ConsumedStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
 export class FlatMapStream extends ConsumedStream {
     #source;
     #function;

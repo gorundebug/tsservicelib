@@ -1,4 +1,4 @@
-import { ConsumedStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
 /** A graph root whose source is connected after the acyclic graph is built. */
 export class LinkStream extends ConsumedStream {
     #source;

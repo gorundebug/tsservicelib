@@ -1,13 +1,9 @@
-import {
-  ConsumedStream,
-  type Completion,
-  type MessageContext,
-  type StreamConfig,
-  type Stream,
-  type RuntimeEnvironment,
-  type StreamSerde,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { StreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { RuntimeEnvironment } from "../runtime/environment/runtime-environment.js";
+import type { StreamSerde } from "../runtime/serde/serde.js";
+import type { Completion, Stream, TypedStreamConsumer } from "../runtime/stream.js";
 
 export class ErrorStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {
   readonly #recordOwnerCall: (context: MessageContext) => void;

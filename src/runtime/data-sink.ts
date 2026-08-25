@@ -1,5 +1,3 @@
-import { performance } from "node:perf_hooks";
-
 import type { Context, MessageContext } from "./context.js";
 import type { Collector } from "./collector.js";
 import { RuntimeDataConnector, type DataConnector, type Endpoint } from "./data-connector.js";
@@ -7,18 +5,16 @@ import {
   DataConnectorType,
   type DataConnectorConfig,
   type EndpointConfig
-} from "./config/index.js";
+} from "./config/types.js";
 import {
-  err,
-  str,
   type Float64Histogram,
   type Int64Counter,
-  type Int64Gauge,
-  type Logger,
-  type RuntimeEnvironment
-} from "./environment/index.js";
+  type Int64Gauge
+} from "./environment/metrics/metrics.js";
+import { err, str, type Logger } from "./environment/log.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
 import type { Lifecycle } from "./lifecycle.js";
-import type { StreamSerde } from "./serde/index.js";
+import type { StreamSerde } from "./serde/serde.js";
 import type {
   Completion,
   Consumer,
@@ -205,7 +201,7 @@ export class DataSinkEndpoint implements SinkEndpoint {
       return undefined;
     }
     this.#metrics.activeRequests.inc();
-    return performance.now();
+    return Date.now();
   }
 
   public onRequestEnd(context: MessageContext, started: number | undefined, error?: Error): void {
@@ -213,7 +209,7 @@ export class DataSinkEndpoint implements SinkEndpoint {
       return;
     }
     this.#metrics.activeRequests.dec();
-    this.#metrics.requestDuration.observe(context, (performance.now() - started) / 1_000);
+    this.#metrics.requestDuration.observe(context, (Date.now() - started) / 1_000);
     if (error === undefined) {
       this.#metrics.messagesTotal.inc(context);
     } else {

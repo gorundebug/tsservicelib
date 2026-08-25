@@ -1,4 +1,4 @@
-import { ConsumedStream } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
 import { ErrorStream } from "./error.js";
 import { StreamLink } from "./stream-link.js";
 /** Internal feedback edge. Its graph identity is the owning input stream. */

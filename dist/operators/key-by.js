@@ -1,4 +1,5 @@
-import { ConsumedStream, makeStreamKeyValueSerde } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { makeStreamKeyValueSerde } from "../runtime/serde/stream.js";
 export class KeyByStream extends ConsumedStream {
     #source;
     #function;

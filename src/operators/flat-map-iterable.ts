@@ -1,11 +1,8 @@
-import {
-  ConsumedStream,
-  type FlatMapIterableStreamConfig,
-  type MessageContext,
-  type RuntimeEnvironment,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { FlatMapIterableStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { RuntimeEnvironment } from "../runtime/environment/runtime-environment.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 
 /** Arrays and typed arrays have the indexed semantics supported by Go. */
 export interface IndexedIterable<T> extends Iterable<T> {

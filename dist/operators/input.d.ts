@@ -1,4 +1,10 @@
-import { ConsumedStream, type Completion, type Consumer, type InputStreamConfig, type KeyValue, type MessageContext, type RuntimeEnvironment, type StreamSerde, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { InputStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
+import type { RuntimeEnvironment } from "../runtime/environment/runtime-environment.js";
+import type { StreamSerde } from "../runtime/serde/serde.js";
+import type { Completion, Consumer, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import { ErrorStream } from "./error.js";
 export declare class InputStream<T, R, E> extends ConsumedStream<T> implements TypedStreamConsumer<T> {
     #private;

@@ -22,6 +22,7 @@ const requiredExports = [
   "./datasink/temporal",
   "./operators",
   "./runtime",
+  "./runtime/graph",
   "./transformation",
   "./runtime/config",
   "./runtime/logging",

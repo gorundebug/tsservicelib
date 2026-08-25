@@ -1,4 +1,8 @@
-import { ConsumedStream, ServiceStream, type Completion, type Consumer, type MessageContext, type SinkStreamConfig, type TypedStream, type TypedStreamConsumer, type StreamSerde } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { SinkStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { StreamSerde } from "../runtime/serde/serde.js";
+import { ServiceStream, type Completion, type Consumer, type TypedStream, type TypedStreamConsumer } from "../runtime/stream.js";
 import { ErrorStream } from "./error.js";
 export declare class SinkStream<T, E> extends ServiceStream implements TypedStreamConsumer<T> {
     #private;

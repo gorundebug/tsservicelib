@@ -1,15 +1,13 @@
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { MultiJoinStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
 import {
-  ConsumedStream,
-  type Completion,
+  makeJoinStorage,
   type JoinStorage,
-  type JoinStorageConfig,
-  type KeyValue,
-  type MessageContext,
-  type MultiJoinStreamConfig,
-  type TypedStream,
-  type TypedStreamConsumer,
-  makeJoinStorage
-} from "../runtime/index.js";
+  type JoinStorageConfig
+} from "../runtime/store/join-storage.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { MultiJoinFunction } from "./functions.js";
 import { StreamLink } from "./stream-link.js";
 

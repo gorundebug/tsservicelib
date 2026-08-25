@@ -1,12 +1,8 @@
-import {
-  ConsumedStream,
-  type Completion,
-  type CycleLinkStreamConfig,
-  type MessageContext,
-  type RuntimeEnvironment,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { CycleLinkStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { RuntimeEnvironment } from "../runtime/environment/runtime-environment.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 
 /** A graph root whose source is connected after the acyclic graph is built. */
 export class LinkStream<T> extends ConsumedStream<T> implements TypedStreamConsumer<T> {

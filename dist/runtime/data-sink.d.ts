@@ -1,10 +1,11 @@
 import type { Context, MessageContext } from "./context.js";
 import type { Collector } from "./collector.js";
 import { RuntimeDataConnector, type DataConnector, type Endpoint } from "./data-connector.js";
-import { type DataConnectorConfig, type EndpointConfig } from "./config/index.js";
-import { type Logger, type RuntimeEnvironment } from "./environment/index.js";
+import { type DataConnectorConfig, type EndpointConfig } from "./config/types.js";
+import { type Logger } from "./environment/log.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
 import type { Lifecycle } from "./lifecycle.js";
-import type { StreamSerde } from "./serde/index.js";
+import type { StreamSerde } from "./serde/serde.js";
 import type { Completion, Consumer, TypedConsumedStream, TypedStream, TypedStreamConsumer } from "./stream.js";
 /** Runtime boundary implemented structurally by the Sink operator. */
 export interface TypedSinkStream<T, E> extends TypedStreamConsumer<T> {

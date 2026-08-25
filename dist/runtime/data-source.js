@@ -1,7 +1,7 @@
-import { performance } from "node:perf_hooks";
-import { DataConnectorType } from "./config/index.js";
+import { DataConnectorType } from "./config/types.js";
 import { RuntimeDataConnector } from "./data-connector.js";
-import { err, str } from "./environment/index.js";
+import {} from "./environment/metrics/metrics.js";
+import { err, str } from "./environment/log.js";
 /** Apply the current reloadable source-endpoint tracing policy to one event. */
 export function applyDataSourceEndpointTracing(context, environment, endpointId) {
     return environment.runtimeConfig().endpointById(endpointId)?.tracingEnabled === true
@@ -116,7 +116,7 @@ export class DataSourceEndpoint {
             return;
         }
         this.#metrics.pendingRequests.inc();
-        this.#pendingStarted.set(streamId, performance.now());
+        this.#pendingStarted.set(streamId, Date.now());
     }
     onPendingRemove(context, streamId) {
         void context;
@@ -144,14 +144,14 @@ export class DataSourceEndpoint {
             return undefined;
         }
         this.#metrics.activeRequests.inc();
-        return performance.now();
+        return Date.now();
     }
     onRequestEnd(context, started, error) {
         if (this.#metrics === undefined || started === undefined) {
             return;
         }
         this.#metrics.activeRequests.dec();
-        this.#metrics.requestDuration.observe(context, (performance.now() - started) / 1_000);
+        this.#metrics.requestDuration.observe(context, (Date.now() - started) / 1_000);
         if (error === undefined) {
             this.#metrics.messagesTotal.inc(context);
         }
@@ -164,7 +164,7 @@ export class DataSourceEndpoint {
         for (const started of this.#pendingStarted.values()) {
             oldest = Math.min(oldest, started);
         }
-        return oldest === Infinity ? 0 : (performance.now() - oldest) / 1_000;
+        return oldest === Infinity ? 0 : (Date.now() - oldest) / 1_000;
     }
 }
 function makeDataSourceEndpointMetrics(dataSource, endpointName, oldestPendingAge) {

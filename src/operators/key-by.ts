@@ -1,14 +1,10 @@
-import {
-  ConsumedStream,
-  makeStreamKeyValueSerde,
-  type Collector,
-  type Completion,
-  type KeyValue,
-  type MessageContext,
-  type KeyByStreamConfig,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import type { Collector } from "../runtime/collector.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { KeyByStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
+import { makeStreamKeyValueSerde } from "../runtime/serde/stream.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { KeyByFunction } from "./functions.js";
 
 export class KeyByStream<T, K, V>

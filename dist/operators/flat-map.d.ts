@@ -1,4 +1,8 @@
-import { ConsumedStream, type Collector, type Completion, type MessageContext, type FlatMapStreamConfig, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import type { Collector } from "../runtime/collector.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { FlatMapStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { Completion, TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { FlatMapFunction } from "./functions.js";
 export declare class FlatMapStream<T, R> extends ConsumedStream<R> implements TypedStreamConsumer<T>, Collector<R> {
     #private;

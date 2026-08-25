@@ -1,17 +1,18 @@
-import {
-  ConsumedStream,
-  type Caller,
-  type Completion,
-  type MessageContext,
-  type RuntimeBuildable,
-  type RuntimeEnvironment,
-  type SplitStreamConfig,
-  type Stream,
-  type StreamConfig,
-  type StreamSerde,
-  type TypedStream,
-  type TypedStreamConsumer
-} from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import type { SplitStreamConfig, StreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type {
+  RuntimeBuildable,
+  RuntimeEnvironment
+} from "../runtime/environment/runtime-environment.js";
+import type { StreamSerde } from "../runtime/serde/serde.js";
+import type {
+  Caller,
+  Completion,
+  Stream,
+  TypedStream,
+  TypedStreamConsumer
+} from "../runtime/stream.js";
 
 class SplitLink<T> implements TypedStream<T> {
   readonly #split: SplitStream<T>;

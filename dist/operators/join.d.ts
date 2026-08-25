@@ -1,4 +1,9 @@
-import { ConsumedStream, type JoinStorage, type JoinStreamConfig, type KeyValue, type MessageContext, type TypedStream, type TypedStreamConsumer } from "../runtime/index.js";
+import { ConsumedStream } from "../runtime/consumed-stream.js";
+import { type JoinStreamConfig } from "../runtime/config/types.js";
+import type { MessageContext } from "../runtime/context.js";
+import type { KeyValue } from "../runtime/datastruct/key-value.js";
+import { type JoinStorage } from "../runtime/store/join-storage.js";
+import type { TypedStream, TypedStreamConsumer } from "../runtime/stream.js";
 import type { JoinFunction } from "./functions.js";
 export declare class JoinStream<K, L, R, O> extends ConsumedStream<O> implements TypedStreamConsumer<KeyValue<K, L>> {
     #private;
