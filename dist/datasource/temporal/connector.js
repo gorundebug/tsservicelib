@@ -68,9 +68,17 @@ export class TemporalConnector {
             throw new Error(`durable link ${key} does not belong to connector ${this.name}`);
         }
         const serviceName = this.#environment.serviceConfig().name;
+        const source = this.#environment.runtimeConfig().streamById(link.from);
+        const target = this.#environment.runtimeConfig().streamById(link.to);
+        if (source === undefined || target === undefined) {
+            throw new Error(`durable link ${key} references missing stream configuration`);
+        }
         this.#links.set(key, {
             link,
-            activityType: `${serviceName}.durable.${String(link.from)}.${String(link.to)}.v1`,
+            serviceName,
+            sourceName: source.name,
+            targetName: target.name,
+            activityType: `${identityName(serviceName)}.durable.${identityName(source.name)}.${identityName(target.name)}.v1`,
             handler
         });
     }
@@ -186,11 +194,10 @@ export class TemporalConnector {
             priority: normalizeTemporalPriority(envelope.priority),
             envelope: durableEnvelopeToWire(envelope)
         };
-        const serviceName = this.#environment.serviceConfig().name;
-        const owner = `${serviceName}/link/${String(link.from)}/${String(link.to)}/v1`;
+        const owner = `${identityName(registration.serviceName)}/link/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/v1`;
         const handle = await this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
             args: [request],
-            workflowId: `${serviceName}/durable/${String(link.from)}/${String(link.to)}/${envelope.callId}`,
+            workflowId: `${identityName(registration.serviceName)}/durable/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/${opaqueIdentityComponent(envelope.callId)}`,
             taskQueue: policy.taskQueue,
             ...(policy.workflowExecutionTimeout > 0
                 ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
@@ -213,10 +220,10 @@ export class TemporalConnector {
         if (!config.enabled)
             throw new Error(`Temporal endpoint ${config.name} is disabled`);
         const request = endpointRequest(registration, config, envelope);
-        const owner = `${this.name}/endpoint/${config.name}/v1`;
+        const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
         const handle = await this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
             args: [request],
-            workflowId: `${this.name}/endpoint/${config.name}/${envelope.executionId}`,
+            workflowId: `${identityName(this.name)}/endpoint/${identityName(config.name)}/${opaqueIdentityComponent(envelope.executionId)}`,
             taskQueue: config.taskQueue,
             ...(config.workflowExecutionTimeout > 0
                 ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
@@ -296,7 +303,7 @@ export class TemporalConnector {
         const registration = this.#endpoints.get(config.id);
         if (registration?.handler === undefined)
             return;
-        const owner = `${this.name}/endpoint/${config.name}/v1`;
+        const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
         const request = endpointRequest(registration, config, {
             version: 1,
             endpointId: config.id,
@@ -356,7 +363,7 @@ export class TemporalConnector {
         }
         return {
             endpointId,
-            activityType: `${this.name}.endpoint.${config.name}.v1`
+            activityType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.v1`
         };
     }
     config() {
@@ -439,6 +446,41 @@ function bytesFromWire(value) {
 }
 function ownershipMemo(owner, callId) {
     return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: callId };
+}
+function opaqueIdentityComponent(value) {
+    return encodeURIComponent(value).replaceAll(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+// Intentionally identical to servicegen.splitWords + ToSnakeCase.
+function identityName(value) {
+    const words = [];
+    let current = [];
+    const characters = Array.from(value);
+    for (const [index, character] of characters.entries()) {
+        if (/\s/u.test(character) || "_-/.".includes(character)) {
+            if (current.length > 0) {
+                words.push(current.join(""));
+                current = [];
+            }
+            continue;
+        }
+        if (!/[\p{L}\p{N}]/u.test(character))
+            continue;
+        const upper = character.toUpperCase() === character && character.toLowerCase() !== character;
+        if (current.length > 0 && upper) {
+            const previous = current.at(-1) ?? "";
+            const previousUpper = previous.toUpperCase() === previous && previous.toLowerCase() !== previous;
+            const next = characters[index + 1];
+            const nextLower = next !== undefined && next.toLowerCase() === next && next.toUpperCase() !== next;
+            if (!previousUpper || nextLower) {
+                words.push(current.join(""));
+                current = [];
+            }
+        }
+        current.push(character);
+    }
+    if (current.length > 0)
+        words.push(current.join(""));
+    return words.map((word) => word.toLowerCase()).join("_");
 }
 async function validateWorkflowOwnership(handle, workflowType, owner, callId) {
     const description = await handle.describe();
