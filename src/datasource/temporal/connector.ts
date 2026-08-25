@@ -79,6 +79,15 @@ export interface TemporalConnectorOptions {
   readonly workflowsPath?: string | undefined;
 }
 
+/**
+ * Workflow interceptor modules shared by live Workers and offline history
+ * replayers. Keeping this list in one place prevents replay from silently
+ * using different native-header propagation semantics.
+ */
+export function temporalWorkflowInterceptorModules(): string[] {
+  return [fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))];
+}
+
 export class TemporalConnector implements ManagedDataConnector {
   readonly #environment: RuntimeEnvironment;
   readonly #endpoints = new Map<number, EndpointRegistration>();
@@ -179,9 +188,7 @@ export class TemporalConnector implements ManagedDataConnector {
           workflowsPath: this.#workflowsPath,
           interceptors: {
             activity: [temporalActivityInterceptors],
-            workflowModules: [
-              fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))
-            ]
+            workflowModules: temporalWorkflowInterceptorModules()
           },
           ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
           ...(config.identity === "" ? {} : { identity: config.identity }),
