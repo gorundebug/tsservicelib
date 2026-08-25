@@ -32,6 +32,10 @@ import { err, str, type Int64CounterVec } from "../../runtime/environment/index.
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
   ENDPOINT_WORKFLOW_TYPE,
+  temporalDirectWorkflowType,
+  temporalEndpointActivityType,
+  temporalEndpointWorkflowId,
+  temporalIdentityName,
   type EndpointEnvelope,
   type EndpointResult,
   type EndpointWireEnvelope,
@@ -234,7 +238,7 @@ export class TemporalConnector implements ManagedDataConnector {
     const handle = await runWithTemporalSubmissionContext(context, () =>
       this.client().workflow.start(workflowType, {
         args: [request],
-        workflowId: endpointWorkflowId(this.name, config.name, envelope.messageId),
+        workflowId: temporalEndpointWorkflowId(this.name, config.name, envelope.messageId),
         taskQueue: config.taskQueue,
         ...(config.workflowExecutionTimeout > 0
           ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
@@ -343,7 +347,7 @@ export class TemporalConnector implements ManagedDataConnector {
         action: {
           type: "startWorkflow",
           workflowType,
-          workflowId: `${identityName(this.name)}/schedule/${identityName(config.name)}`,
+          workflowId: `${temporalIdentityName(this.name)}/schedule/${temporalIdentityName(config.name)}`,
           taskQueue: config.taskQueue,
           args: [request],
           memo: ownershipMemo(owner, config.scheduleId),
@@ -382,8 +386,8 @@ export class TemporalConnector implements ManagedDataConnector {
     }
     return {
       endpointId,
-      activityType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.v1`,
-      workflowType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.workflow.v1`
+      activityType: temporalEndpointActivityType(this.name, config.name),
+      workflowType: temporalDirectWorkflowType(this.name, config.name)
     };
   }
 
@@ -440,11 +444,11 @@ export function endpointWorkflowId(
   endpointName: string,
   messageId: string
 ): string {
-  return `${identityName(connectorName)}/endpoint/${identityName(endpointName)}/${opaqueIdentityComponent(messageId)}`;
+  return temporalEndpointWorkflowId(connectorName, endpointName, messageId);
 }
 
 function endpointOwner(connectorName: string, endpointName: string): string {
-  return `${identityName(connectorName)}/endpoint/${identityName(endpointName)}/v1`;
+  return `${temporalIdentityName(connectorName)}/endpoint/${temporalIdentityName(endpointName)}/v1`;
 }
 
 function endpointRequest(
@@ -489,44 +493,6 @@ function bytesFromWire(value: readonly number[]): Uint8Array {
 
 function ownershipMemo(owner: string, messageId: string): Record<string, unknown> {
   return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [MESSAGE_ID]: messageId };
-}
-
-function opaqueIdentityComponent(value: string): string {
-  return encodeURIComponent(value).replaceAll(
-    /[!'()*]/g,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  );
-}
-
-function identityName(value: string): string {
-  const words: string[] = [];
-  let current: string[] = [];
-  const characters = Array.from(value);
-  for (const [index, character] of characters.entries()) {
-    if (/\s/u.test(character) || "_-/.".includes(character)) {
-      if (current.length > 0) {
-        words.push(current.join(""));
-        current = [];
-      }
-      continue;
-    }
-    if (!/[\p{L}\p{N}]/u.test(character)) continue;
-    const upper = character.toUpperCase() === character && character.toLowerCase() !== character;
-    if (current.length > 0 && upper) {
-      const previous = current.at(-1) ?? "";
-      const previousUpper =
-        previous.toUpperCase() === previous && previous.toLowerCase() !== previous;
-      const next = characters[index + 1];
-      const nextLower = next?.toLowerCase() === next && next?.toUpperCase() !== next;
-      if (!previousUpper || nextLower) {
-        words.push(current.join(""));
-        current = [];
-      }
-    }
-    current.push(character);
-  }
-  if (current.length > 0) words.push(current.join(""));
-  return words.map((word) => word.toLowerCase()).join("_");
 }
 
 async function validateWorkflowOwnership(

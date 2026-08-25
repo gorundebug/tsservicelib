@@ -2,6 +2,7 @@
 export * from "./headers.js";
 export * from "./contracts.js";
 export * from "./workflow-environment.js";
+export * from "./workflow-sink.js";
 export * from "./workflows.js";
 export { makeScheduleTrigger, ScheduleBackend, type ScheduleTrigger } from "../../runtime/schedule.js";
 //# sourceMappingURL=workflow.d.ts.map

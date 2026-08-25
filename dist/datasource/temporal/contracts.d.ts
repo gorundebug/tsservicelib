@@ -1,4 +1,8 @@
 export declare const ENDPOINT_WORKFLOW_TYPE = "servicelib.temporal-endpoint.v1";
+export declare function temporalIdentityName(value: string): string;
+export declare function temporalEndpointActivityType(connectorName: string, endpointName: string): string;
+export declare function temporalDirectWorkflowType(connectorName: string, endpointName: string): string;
+export declare function temporalEndpointWorkflowId(connectorName: string, endpointName: string, messageId: string): string;
 export interface EndpointEnvelope {
     readonly version: number;
     readonly endpointId: number;
