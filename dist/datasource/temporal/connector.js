@@ -205,7 +205,7 @@ export class TemporalConnector {
     }
     activityDiagnostics(boundary, target, context) {
         return (event, failure) => {
-            this.#activityEvents.with({ boundary, target, event }).inc(context);
+            this.#activityEvents.with({ connector: this.name, boundary, target, event }).inc(context);
             if (failure === undefined)
                 return;
             const fields = [

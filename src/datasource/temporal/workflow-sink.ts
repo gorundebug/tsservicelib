@@ -1,10 +1,12 @@
 import { executeChild, scheduleActivity, workflowInfo } from "@temporalio/workflow";
 
 import {
-  isTemporalEndpointConfig,
-  type CanonicalConfig,
-  type TemporalEndpointConfig
-} from "../../runtime/config/index.js";
+  isTemporalEndpointConfig
+} from "../../runtime/config/schedule.js";
+import type {
+  CanonicalConfig,
+  TemporalEndpointConfig
+} from "../../runtime/config/types.js";
 import type { Consumer } from "../../runtime/stream.js";
 import type { TypedSinkStream, TypedSinkStreamWithResult } from "../../runtime/data-sink.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";

@@ -1,5 +1,5 @@
 import { executeChild, scheduleActivity, workflowInfo } from "@temporalio/workflow";
-import { isTemporalEndpointConfig } from "../../runtime/config/index.js";
+import { isTemporalEndpointConfig } from "../../runtime/config/schedule.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import { temporalDirectWorkflowType, temporalEndpointActivityType, temporalEndpointWorkflowId, temporalIdentityName } from "./contracts.js";
 /** Attach a plain Temporal sink to a graph executing inside a Workflow isolate. */

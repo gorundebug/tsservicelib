@@ -4,6 +4,7 @@ export * from "./caller-factory.js";
 export * from "./collector.js";
 export * from "./consumed-stream.js";
 export * from "./config/runtime-config.js";
+export * from "./config/streams.js";
 export * from "./config/types.js";
 export * from "./context.js";
 export * from "./data-sink.js";

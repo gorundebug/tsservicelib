@@ -86,7 +86,7 @@ export class DurableCallContext {
         }
     }
     report(event, error) {
-        const attributes = [stringAttribute("event", event)];
+        const attributes = [];
         if (error !== undefined)
             attributes.push(stringAttribute("error", error.message));
         this.#span?.addEvent(`temporal.activity.${event}`, attributes);

@@ -35,5 +35,5 @@ export interface EndpointWorkflowRequest {
     readonly priority: number;
     readonly envelope: EndpointWireEnvelope;
 }
-import type { CanonicalConfig, TemporalExecutionType } from "../../runtime/config/index.js";
+import type { CanonicalConfig, TemporalExecutionType } from "../../runtime/config/types.js";
 //# sourceMappingURL=contracts.d.ts.map
