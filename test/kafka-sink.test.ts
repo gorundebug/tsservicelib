@@ -317,12 +317,13 @@ await test("Kafka sink records the canonical Go transport events", async () => {
     "payload"
   );
   const headers = harness.factory.producerInstance.sent[0]?.headers;
-  assert.equal(headers?.get("x-trace"), "1");
+  assert.ok(headers);
+  assert.equal(headers.get("x-trace"), "1");
   assert.equal(
-    headers?.get("traceparent"),
+    headers.get("traceparent"),
     "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
   );
-  assert.equal(headers?.has("unrelated"), false);
+  assert.equal(headers.has("unrelated"), false);
   const span = tracing.spans().find(({ name }) => name === "kafka.output");
   assert.ok(span);
   assert.deepEqual(

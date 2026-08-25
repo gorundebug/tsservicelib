@@ -12,6 +12,7 @@ const requiredExports = [
   "./datasource/grpc",
   "./datasource/cron",
   "./datasource/temporal",
+  "./datasource/temporal/workflow",
   "./datasource/localsource",
   "./datasink",
   "./datasink/http",

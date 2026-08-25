@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { bundleWorkflowCode } from "@temporalio/worker";
+
 import type { servicelibTemporalEndpointV1 } from "../src/datasource/temporal/workflows.js";
 import type { scheduledTimeFromWorkflowId as scheduledTime } from "../src/datasource/temporal/scheduled-time.js";
 
@@ -33,4 +35,15 @@ await test("scheduled time uses the Temporal Schedule workflow ID suffix", async
     Date.parse("2026-08-24T12:30:00.123Z")
   );
   assert.equal(scheduledTimeFromWorkflowId("manual-workflow", fallback), fallback.getTime());
+});
+
+await test("workflow-safe graph runtime bundles without Node built-ins", async () => {
+  const workflowPath = resolve("dist-test/test/fixtures/temporal-workflow-bundle.js");
+  const interceptorPath = resolve("dist/datasource/temporal/workflow-context-interceptor.js");
+  const bundle = await bundleWorkflowCode({
+    workflowsPath: workflowPath,
+    workflowInterceptorModules: [interceptorPath]
+  });
+  assert.match(bundle.code, /workflowSafeRuntimeProbe/u);
+  assert.ok(bundle.code.length > 0);
 });

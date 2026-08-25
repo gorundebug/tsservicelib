@@ -1,9 +1,8 @@
 import type { MessageContext } from "./context.js";
-import type { StreamConfig } from "./config/index.js";
-import { transformationName } from "./config/index.js";
-import type { RuntimeEnvironment } from "./environment/index.js";
-import { stringAttribute, type StartedSpan, type Tracer } from "./environment/index.js";
-import type { StreamSerde } from "./serde/index.js";
+import { transformationName, type StreamConfig } from "./config/types.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
+import { stringAttribute, type StartedSpan, type Tracer } from "./environment/tracing/tracing.js";
+import type { StreamSerde } from "./serde/serde.js";
 
 export type Completion = void | Promise<void>;
 

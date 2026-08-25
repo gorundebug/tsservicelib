@@ -110,10 +110,7 @@ class CronEndpoint extends DataSourceEndpoint {
     await Promise.allSettled(this.#active);
   }
 
-  #startDispatch(
-    binding: CronEndpointBinding,
-    scheduledAt: Date
-  ): Promise<void> {
+  #startDispatch(binding: CronEndpointBinding, scheduledAt: Date): Promise<void> {
     const execution = this.#dispatch(binding, scheduledAt);
     this.#active.add(execution);
     return execution.finally(() => {
@@ -121,10 +118,7 @@ class CronEndpoint extends DataSourceEndpoint {
     });
   }
 
-  async #dispatch(
-    binding: CronEndpointBinding,
-    scheduledAt: Date
-  ): Promise<void> {
+  async #dispatch(binding: CronEndpointBinding, scheduledAt: Date): Promise<void> {
     const config = this.cronConfig();
     if (this.#running && config.overlapPolicy === "Skip") return;
     this.#running = true;

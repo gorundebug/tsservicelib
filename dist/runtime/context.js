@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { performance } from "node:perf_hooks";
 export const STREAM_ID_HEADER = "x-stream-id";
 export const TRACE_SAMPLING_HEADER = "x-trace";
 export function newStreamId() {
-    return randomUUID();
+    return globalThis.crypto.randomUUID();
 }
 const EMPTY_METADATA = new Map();
 function deadlineSignal(deadline) {

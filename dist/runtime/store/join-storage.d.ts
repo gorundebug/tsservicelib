@@ -1,5 +1,5 @@
 import type { MessageContext } from "../context.js";
-import { JoinStorageType } from "../config/index.js";
+import { JoinStorageType } from "../config/types.js";
 import type { RuntimeEnvironment } from "../environment/runtime-environment.js";
 import type { Storage } from "./storage.js";
 export type JoinValues = unknown[][];

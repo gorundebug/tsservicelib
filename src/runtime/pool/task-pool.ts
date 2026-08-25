@@ -1,7 +1,5 @@
-import { performance } from "node:perf_hooks";
-
 import type { Context } from "../context.js";
-import { err, int, str, type Logger } from "../environment/index.js";
+import { err, int, str, type Logger } from "../environment/log.js";
 import type { Lifecycle } from "../lifecycle.js";
 import { PoolStoppedError, type PoolTask, type TaskPoolOptions } from "./pool.js";
 import { awaitPoolDrain, makeTaskPoolMetrics, type TaskPoolMetrics } from "./task-pool-metrics.js";

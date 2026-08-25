@@ -13,6 +13,7 @@ import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
 
 import {
   DataConnectorType,
+  type CanonicalConfig,
   type DataConnectorConfig,
   type EndpointConfig,
   type TemporalDataConnectorConfig,
@@ -63,7 +64,13 @@ export type TemporalEndpointHandler = (
 interface EndpointRegistration {
   readonly endpointId: number;
   readonly activityType: string;
+  readonly workflowType: string;
   readonly handler?: TemporalEndpointHandler;
+}
+
+export interface TemporalConnectorOptions {
+  /** Compiled service-owned module exporting every direct Workflow endpoint. */
+  readonly workflowsPath?: string | undefined;
 }
 
 export class TemporalConnector implements ManagedDataConnector {
@@ -75,10 +82,15 @@ export class TemporalConnector implements ManagedDataConnector {
   #workers: Worker[] = [];
   #workerRuns: Promise<void>[] = [];
   #started = false;
+  readonly #workflowsPath: string;
   public readonly id: number;
   public readonly name: string;
 
-  public constructor(connectorId: number, environment: RuntimeEnvironment) {
+  public constructor(
+    connectorId: number,
+    environment: RuntimeEnvironment,
+    options: TemporalConnectorOptions = {}
+  ) {
     const config = environment.runtimeConfig().dataConnectorById(connectorId);
     if (config?.type !== DataConnectorType.Temporal) {
       throw new Error(`data connector ${String(connectorId)} is not Temporal`);
@@ -86,6 +98,8 @@ export class TemporalConnector implements ManagedDataConnector {
     this.id = connectorId;
     this.name = config.name;
     this.#environment = environment;
+    this.#workflowsPath =
+      options.workflowsPath ?? fileURLToPath(new URL("./workflows.js", import.meta.url));
     this.#activityEvents = environment
       .metrics()
       .scope("temporal_activity", { connector: this.name })
@@ -99,6 +113,14 @@ export class TemporalConnector implements ManagedDataConnector {
       throw new Error(`Temporal endpoint ${String(endpointId)} is already registered`);
     }
     this.#endpoints.set(endpointId, { ...registration, handler });
+  }
+
+  public assertOptions(options: TemporalConnectorOptions): void {
+    if (options.workflowsPath !== undefined && options.workflowsPath !== this.#workflowsPath) {
+      throw new Error(
+        `Temporal connector ${this.name} was initialized with another Workflow bundle`
+      );
+    }
   }
 
   public registerEndpointSubmission(endpointId: number): void {
@@ -136,7 +158,7 @@ export class TemporalConnector implements ManagedDataConnector {
           namespace: config.namespace,
           taskQueue,
           activities,
-          workflowsPath: fileURLToPath(new URL("./workflows.js", import.meta.url)),
+          workflowsPath: this.#workflowsPath,
           interceptors: {
             activity: [temporalActivityInterceptors],
             workflowModules: [
@@ -198,10 +220,19 @@ export class TemporalConnector implements ManagedDataConnector {
     const config = this.endpointConfig(endpointId);
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
     if (envelope.messageId === "") throw new Error("Temporal endpoint message ID is empty");
-    const request = endpointRequest(registration, config, envelope);
+    const request = endpointRequest(
+      registration,
+      config,
+      envelope,
+      this.#environment.runtimeConfig().config()
+    );
+    const workflowType =
+      config.temporalExecutionType === "Workflow"
+        ? registration.workflowType
+        : ENDPOINT_WORKFLOW_TYPE;
     const owner = endpointOwner(this.name, config.name);
     const handle = await runWithTemporalSubmissionContext(context, () =>
-      this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
+      this.client().workflow.start(workflowType, {
         args: [request],
         workflowId: endpointWorkflowId(this.name, config.name, envelope.messageId),
         taskQueue: config.taskQueue,
@@ -214,7 +245,7 @@ export class TemporalConnector implements ManagedDataConnector {
         priority: { priorityKey: request.priority }
       })
     );
-    await validateWorkflowOwnership(handle, ENDPOINT_WORKFLOW_TYPE, owner, envelope.messageId);
+    await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId);
     if (!waitForResult) return { payload: new Uint8Array() };
     const result = (await handle.result()) as EndpointWireResult;
     return { payload: bytesFromWire(result.payload) };
@@ -225,6 +256,8 @@ export class TemporalConnector implements ManagedDataConnector {
     for (const registration of this.#endpoints.values()) {
       const config = this.endpointConfig(registration.endpointId);
       if (!config.enabled || registration.handler === undefined) continue;
+      if (!queues.has(config.taskQueue)) queues.set(config.taskQueue, {});
+      if (config.temporalExecutionType !== "Activity") continue;
       const handler = registration.handler;
       const activities = queues.get(config.taskQueue) ?? {};
       queues.set(config.taskQueue, activities);
@@ -278,19 +311,28 @@ export class TemporalConnector implements ManagedDataConnector {
     const registration = this.#endpoints.get(config.id);
     if (registration?.handler === undefined) return;
     const owner = endpointOwner(this.name, config.name);
-    const request = endpointRequest(registration, config, {
-      version: 1,
-      endpointId: config.id,
-      messageId: "",
-      streamId: "",
-      priority: 0,
-      deadlineUnixMillis: 0,
-      scheduled: true,
-      scheduleId: config.scheduleId,
-      scheduledAtUnixMillis: 0,
-      firedAtUnixMillis: 0,
-      payload: new Uint8Array()
-    });
+    const request = endpointRequest(
+      registration,
+      config,
+      {
+        version: 1,
+        endpointId: config.id,
+        messageId: "",
+        streamId: "",
+        priority: 0,
+        deadlineUnixMillis: 0,
+        scheduled: true,
+        scheduleId: config.scheduleId,
+        scheduledAtUnixMillis: 0,
+        firedAtUnixMillis: 0,
+        payload: new Uint8Array()
+      },
+      this.#environment.runtimeConfig().config()
+    );
+    const workflowType =
+      config.temporalExecutionType === "Workflow"
+        ? registration.workflowType
+        : ENDPOINT_WORKFLOW_TYPE;
     try {
       await this.client().schedule.create({
         scheduleId: config.scheduleId,
@@ -300,7 +342,7 @@ export class TemporalConnector implements ManagedDataConnector {
         },
         action: {
           type: "startWorkflow",
-          workflowType: ENDPOINT_WORKFLOW_TYPE,
+          workflowType,
           workflowId: `${identityName(this.name)}/schedule/${identityName(config.name)}`,
           taskQueue: config.taskQueue,
           args: [request],
@@ -323,7 +365,7 @@ export class TemporalConnector implements ManagedDataConnector {
       const description = await this.client().schedule.getHandle(config.scheduleId).describe();
       validateMemo(description.memo, owner, config.scheduleId);
       if (
-        description.action.workflowType !== ENDPOINT_WORKFLOW_TYPE ||
+        description.action.workflowType !== workflowType ||
         description.action.taskQueue !== config.taskQueue
       ) {
         throw new Error(`Temporal schedule ${config.scheduleId} ownership collision`, {
@@ -340,7 +382,8 @@ export class TemporalConnector implements ManagedDataConnector {
     }
     return {
       endpointId,
-      activityType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.v1`
+      activityType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.v1`,
+      workflowType: `${identityName(this.name)}.endpoint.${identityName(config.name)}.workflow.v1`
     };
   }
 
@@ -376,16 +419,18 @@ export class TemporalConnector implements ManagedDataConnector {
 
 export function makeTemporalConnector(
   connectorId: number,
-  environment: RuntimeEnvironment
+  environment: RuntimeEnvironment,
+  options: TemporalConnectorOptions = {}
 ): TemporalConnector {
   const existing = environment.managedDataConnectorById(connectorId);
   if (existing !== undefined) {
     if (!(existing instanceof TemporalConnector)) {
       throw new Error(`managed connector ${String(connectorId)} is not Temporal`);
     }
+    existing.assertOptions(options);
     return existing;
   }
-  const connector = new TemporalConnector(connectorId, environment);
+  const connector = new TemporalConnector(connectorId, environment, options);
   environment.addManagedDataConnector(connector);
   return connector;
 }
@@ -405,9 +450,12 @@ function endpointOwner(connectorName: string, endpointName: string): string {
 function endpointRequest(
   registration: EndpointRegistration,
   config: TemporalEndpointConfig,
-  envelope: EndpointEnvelope
+  envelope: EndpointEnvelope,
+  runtimeConfig: CanonicalConfig
 ): EndpointWorkflowRequest {
   return {
+    executionType: config.temporalExecutionType,
+    runtimeConfig,
     activityType: registration.activityType,
     activityStartToCloseTimeout: config.activityStartToCloseTimeout,
     activityHeartbeatTimeout: config.activityHeartbeatTimeout,

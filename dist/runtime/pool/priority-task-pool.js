@@ -1,5 +1,4 @@
-import { performance } from "node:perf_hooks";
-import { err, int, str } from "../environment/index.js";
+import { err, int, str } from "../environment/log.js";
 import { PoolStoppedError } from "./pool.js";
 import { awaitPoolDrain, makeTaskPoolMetrics } from "./task-pool-metrics.js";
 /** Minimum-priority-first task pool with FIFO ordering for equal priorities. */

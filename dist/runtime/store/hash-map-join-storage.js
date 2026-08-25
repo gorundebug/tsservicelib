@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { Context } from "../context.js";
 import { StoreAlreadyStartedError, StoreNotStartedError, StoreStoppedError } from "./storage.js";
 const SHRINK_FACTOR = 4;
@@ -80,7 +79,7 @@ export class HashMapJoinStorage {
                 else if (this.#config.renewTTL() && ttl > 0) {
                     if (currentLocation === "previous")
                         this.#previous.delete(key);
-                    item.deadline = performance.now() + ttl;
+                    item.deadline = Date.now() + ttl;
                     this.#current.set(key, item);
                     item.cancelDeadline();
                     this.armDeadline(context, key, item, ttl);
@@ -96,7 +95,7 @@ export class HashMapJoinStorage {
         return context.remainingMs() ?? this.#config.ttlMs();
     }
     expired(item) {
-        return item.deadline !== undefined && item.deadline <= performance.now();
+        return item.deadline !== undefined && item.deadline <= Date.now();
     }
     findLive(key) {
         const current = this.#current.get(key);
@@ -111,7 +110,7 @@ export class HashMapJoinStorage {
         const item = {
             values: Array.from({ length: index + 1 }, () => []),
             deadlineCallback: callback,
-            deadline: ttl > 0 ? performance.now() + ttl : undefined,
+            deadline: ttl > 0 ? Date.now() + ttl : undefined,
             processed: false,
             cancelDeadline: () => undefined,
             tail: Promise.resolve()
@@ -163,7 +162,8 @@ export class HashMapJoinStorage {
         };
         signal.addEventListener("abort", aborted, { once: true });
         const timer = setTimeout(expire, Math.max(0, Math.ceil(ttl)));
-        timer.unref();
+        if (typeof timer === "object" && "unref" in timer)
+            timer.unref();
         item.cancelDeadline = () => {
             if (retired)
                 return;

@@ -1,8 +1,8 @@
 import type { MessageContext } from "./context.js";
-import type { StreamConfig } from "./config/index.js";
-import type { RuntimeEnvironment } from "./environment/index.js";
-import { type StartedSpan } from "./environment/index.js";
-import type { StreamSerde } from "./serde/index.js";
+import { type StreamConfig } from "./config/types.js";
+import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
+import { type StartedSpan } from "./environment/tracing/tracing.js";
+import type { StreamSerde } from "./serde/serde.js";
 export type Completion = void | Promise<void>;
 export interface Stream {
     readonly id: number;

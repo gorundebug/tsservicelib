@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 export const ScheduleBackend = {
     Local: "local",
     Temporal: "temporal"
@@ -34,7 +35,7 @@ export function makeScheduleTrigger(endpointId, scheduleId, scheduledAt, firedAt
     requireUtcTimestamp(firedAt, "firedAt");
     const identity = `servicegen:schedule-trigger:v1\n${String(endpointId)}\n${scheduleId}\n${scheduledAt}`;
     return Object.freeze({
-        triggerId: createHash("sha256").update(identity).digest("hex"),
+        triggerId: bytesToHex(sha256(utf8ToBytes(identity))),
         scheduleId,
         scheduledAt,
         firedAt,

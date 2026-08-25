@@ -10,9 +10,9 @@ import { defaultPayloadConverter, type Headers, type Next } from "@temporalio/co
 import type { ActivityInboundCallsInterceptor, ActivityInterceptors } from "@temporalio/worker";
 
 import { MessageContext } from "../../runtime/context.js";
+import { TEMPORAL_HEADER_DEADLINE_UNIX_NANO, TEMPORAL_HEADER_PRIORITY } from "./headers.js";
 
-export const TEMPORAL_HEADER_DEADLINE_UNIX_NANO = "servicelib-deadline-unix-nano";
-export const TEMPORAL_HEADER_PRIORITY = "servicelib-priority";
+export { TEMPORAL_HEADER_DEADLINE_UNIX_NANO, TEMPORAL_HEADER_PRIORITY } from "./headers.js";
 
 const CARRIER_NAMES = ["traceparent", "tracestate", "baggage", "x-trace", "x-stream-id"] as const;
 

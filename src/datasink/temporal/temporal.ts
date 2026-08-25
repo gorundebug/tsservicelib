@@ -54,9 +54,10 @@ export interface TemporalEndpointHandler<State, T> {
   ): Promise<void>;
 }
 
-class DirectTemporalEndpointHandler<T>
-  implements TemporalEndpointHandler<Readonly<Record<string, never>>, T>
-{
+class DirectTemporalEndpointHandler<T> implements TemporalEndpointHandler<
+  Readonly<Record<string, never>>,
+  T
+> {
   public beginRequest(
     context: MessageContext,
     stream: Stream

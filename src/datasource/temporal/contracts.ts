@@ -27,6 +27,8 @@ export interface EndpointWireResult {
 }
 
 export interface EndpointWorkflowRequest {
+  readonly executionType: TemporalExecutionType;
+  readonly runtimeConfig: CanonicalConfig;
   readonly activityType: string;
   readonly activityStartToCloseTimeout: number;
   readonly activityHeartbeatTimeout: number;
@@ -34,3 +36,4 @@ export interface EndpointWorkflowRequest {
   readonly priority: number;
   readonly envelope: EndpointWireEnvelope;
 }
+import type { CanonicalConfig, TemporalExecutionType } from "../../runtime/config/index.js";

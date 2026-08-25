@@ -1,13 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { performance } from "node:perf_hooks";
-
 import type { Context as OpenTelemetryContext } from "@opentelemetry/api";
 
 export const STREAM_ID_HEADER = "x-stream-id";
 export const TRACE_SAMPLING_HEADER = "x-trace";
 
 export function newStreamId(): string {
-  return randomUUID();
+  return globalThis.crypto.randomUUID();
 }
 
 interface ContextState {

@@ -1,4 +1,4 @@
-import { JoinStorageType } from "../config/index.js";
+import { JoinStorageType } from "../config/types.js";
 import { HashMapJoinStorage } from "./hash-map-join-storage.js";
 export function makeJoinStorage(storageType, environment, config) {
     switch (storageType) {

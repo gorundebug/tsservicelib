@@ -1,5 +1,5 @@
-import { transformationName } from "./config/index.js";
-import { stringAttribute } from "./environment/index.js";
+import { transformationName } from "./config/types.js";
+import { stringAttribute } from "./environment/tracing/tracing.js";
 /**
  * Direct delivery preserves FunctionCall semantics. The async bit is graph
  * metadata and never turns this call into detached work.
