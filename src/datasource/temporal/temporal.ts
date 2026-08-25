@@ -2,6 +2,7 @@ import {
   applyDataSourceEndpointTracing,
   DataConnectorType,
   DataSourceEndpoint,
+  DataSourceEndpointConsumer,
   FunctionCollector,
   InputDataSource,
   ScheduleBackend,
@@ -14,8 +15,6 @@ import {
   type Completion,
   type Context,
   type Consumer,
-  type InputEndpoint,
-  type InputEndpointConsumer,
   type MessageContext,
   type RuntimeEnvironment,
   type ScheduleEndpointFunction,
@@ -52,7 +51,7 @@ interface PendingResult<R> {
   settled: boolean;
 }
 
-class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer, Consumer<Input> {
+class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsumer<T, R, E> {
   readonly #endpoint: DataSourceEndpoint;
   readonly #stream: TypedInputStream<T, R, E>;
   readonly #decode: (envelope: EndpointEnvelope) => Input;
@@ -67,6 +66,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
     decode: (envelope: EndpointEnvelope) => Input,
     activateInput: (context: MessageContext, value: Input) => Completion
   ) {
+    super(endpoint, stream);
     this.#endpoint = endpoint;
     this.#stream = stream;
     this.#decode = decode;
@@ -85,14 +85,6 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
     connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal) =>
       this.activate(envelope, context, cancellationSignal)
     );
-  }
-
-  public endpoint(): InputEndpoint {
-    return this.#endpoint;
-  }
-
-  public consume(context: MessageContext, value: Input): Completion {
-    return this.#activateInput(context, value);
   }
 
   public async activate(
@@ -143,7 +135,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
         this.#pending.set(streamId, pending);
         this.#endpoint.onPendingAdd(context, streamId);
       }
-      await this.consume(context, this.#decode(envelope));
+      await this.#activateInput(context, this.#decode(envelope));
       if (pending === undefined) return { payload: new Uint8Array() };
       const value = await pending.promise;
       const resultStream = this.#stream.resultStream();
@@ -197,28 +189,39 @@ export function makeTemporalEndpointConsumer<T, R, E>(
 export function makeTemporalScheduleEndpointConsumer<T, R, E>(
   stream: TypedInputStream<T, R, E>,
   function_: ScheduleEndpointFunction<T>
-): Consumer<ScheduleTrigger> {
+): Consumer<T> {
+  type Activation =
+    | { readonly scheduled: true; readonly trigger: ScheduleTrigger }
+    | { readonly scheduled: false; readonly value: T };
   const collector = new FunctionCollector<T>((context, value) => stream.consume(context, value));
   return makeEndpointConsumer(
     stream,
-    (envelope) => {
+    (envelope): Activation => {
+      if (!envelope.scheduled) {
+        return { scheduled: false, value: stream.serde().deserialize(envelope.payload) };
+      }
       if (
-        !envelope.scheduled ||
         envelope.scheduleId === "" ||
         envelope.scheduledAtUnixMillis <= 0 ||
         envelope.firedAtUnixMillis <= 0
       ) {
         throw new Error(`invalid Temporal schedule envelope for ${String(envelope.endpointId)}`);
       }
-      return makeScheduleTrigger(
-        envelope.endpointId,
-        envelope.scheduleId,
-        new Date(envelope.scheduledAtUnixMillis).toISOString(),
-        new Date(envelope.firedAtUnixMillis).toISOString(),
-        ScheduleBackend.Temporal
-      );
+      return {
+        scheduled: true,
+        trigger: makeScheduleTrigger(
+          envelope.endpointId,
+          envelope.scheduleId,
+          new Date(envelope.scheduledAtUnixMillis).toISOString(),
+          new Date(envelope.firedAtUnixMillis).toISOString(),
+          ScheduleBackend.Temporal
+        )
+      };
     },
-    (context, trigger) => function_.onTrigger(context, trigger, collector)
+    (context, activation) =>
+      activation.scheduled
+        ? function_.onTrigger(context, activation.trigger, collector)
+        : stream.consume(context, activation.value)
   );
 }
 
@@ -226,7 +229,7 @@ function makeEndpointConsumer<Input, T, R, E>(
   stream: TypedInputStream<T, R, E>,
   decode: (envelope: EndpointEnvelope) => Input,
   activateInput: (context: MessageContext, value: Input) => Completion
-): Consumer<Input> {
+): Consumer<T> {
   const environment = stream.runtimeEnvironment();
   const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
   if (endpointConfig === undefined) {
