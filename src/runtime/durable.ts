@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { MessageContext, type Context } from "./context.js";
+import type { Context, MessageContext } from "./context.js";
 import { bindDurableCallSpan, type DurableCallContext } from "./durable-call-context.js";
 import { stringAttribute, type Span } from "./environment/index.js";
 import type { Lifecycle } from "./lifecycle.js";
@@ -21,13 +21,12 @@ export interface DurableEnvelope {
   readonly streamId: string;
   readonly priority: number;
   readonly deadlineUnixMillis: number;
-  readonly samplingEnabled: boolean;
-  readonly traceCarrier: Readonly<Record<string, string>>;
   readonly payload: Uint8Array;
 }
 
 export type DurableLinkHandler = (
   envelope: DurableEnvelope,
+  context: MessageContext,
   cancellationSignal?: AbortSignal,
   durableCallContext?: DurableCallContext
 ) => Promise<void>;
@@ -38,7 +37,11 @@ export interface DurableTransport extends Lifecycle {
   readonly name: string;
   stopAdmission(context: Context): Promise<void>;
   registerLink(link: DurableLinkId, handler: DurableLinkHandler): void;
-  submitLink(link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
+  submitLink(
+    context: MessageContext,
+    link: DurableLinkId,
+    envelope: DurableEnvelope
+  ): Promise<void>;
 }
 
 export class DurableCaller<T> implements Caller<T> {
@@ -56,7 +59,7 @@ export class DurableCaller<T> implements Caller<T> {
     const payload = this.serde.serialize(value);
     const streamId = context.streamId() ?? randomUUID();
     const remainingMs = context.remainingMs();
-    return this.transport.submitLink(this.link, {
+    return this.transport.submitLink(context, this.link, {
       version: 1,
       from: this.link.from,
       to: this.link.to,
@@ -65,8 +68,6 @@ export class DurableCaller<T> implements Caller<T> {
       priority: context.priority() ?? 0,
       deadlineUnixMillis:
         remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
-      samplingEnabled: context.samplingEnabled(),
-      traceCarrier: Object.fromEntries(context.transportMetadata()),
       payload
     });
   }
@@ -76,15 +77,13 @@ export function makeDurableLinkHandler<T>(
   consumer: TypedStreamConsumer<T>,
   serde: StreamSerde<T>
 ): DurableLinkHandler {
-  return async (envelope, cancellationSignal, durableCallContext): Promise<void> => {
+  return async (envelope, parent, cancellationSignal, durableCallContext): Promise<void> => {
     if (envelope.version !== 1 || envelope.from <= 0 || envelope.to <= 0 || !envelope.callId) {
       throw new Error("invalid DurableCall envelope");
     }
-    let context = new MessageContext()
-      .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
+    let context = parent
       .withStreamId(envelope.streamId || randomUUID())
-      .withPriority(envelope.priority)
-      .withSampling(envelope.samplingEnabled);
+      .withPriority(envelope.priority);
     if (durableCallContext !== undefined) {
       context = context.withDurableCallContext(durableCallContext);
     }

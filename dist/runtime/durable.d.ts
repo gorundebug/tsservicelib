@@ -1,4 +1,4 @@
-import { MessageContext, type Context } from "./context.js";
+import type { Context, MessageContext } from "./context.js";
 import { type DurableCallContext } from "./durable-call-context.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { StreamSerde } from "./serde/index.js";
@@ -16,18 +16,16 @@ export interface DurableEnvelope {
     readonly streamId: string;
     readonly priority: number;
     readonly deadlineUnixMillis: number;
-    readonly samplingEnabled: boolean;
-    readonly traceCarrier: Readonly<Record<string, string>>;
     readonly payload: Uint8Array;
 }
-export type DurableLinkHandler = (envelope: DurableEnvelope, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<void>;
+export type DurableLinkHandler = (envelope: DurableEnvelope, context: MessageContext, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<void>;
 /** Infrastructure transport used by DurableCall; it never replaces the target node. */
 export interface DurableTransport extends Lifecycle {
     readonly id: number;
     readonly name: string;
     stopAdmission(context: Context): Promise<void>;
     registerLink(link: DurableLinkId, handler: DurableLinkHandler): void;
-    submitLink(link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
+    submitLink(context: MessageContext, link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
 }
 export declare class DurableCaller<T> implements Caller<T> {
     private readonly link;

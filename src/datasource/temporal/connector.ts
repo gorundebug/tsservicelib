@@ -19,7 +19,7 @@ import {
   type TemporalDataConnectorConfig,
   type TemporalEndpointConfig
 } from "../../runtime/config/index.js";
-import { Context } from "../../runtime/context.js";
+import type { Context, MessageContext } from "../../runtime/context.js";
 import {
   DurableCallContext,
   DurableCallEvent,
@@ -45,6 +45,12 @@ import {
   type EndpointWireResult,
   type EndpointWorkflowRequest
 } from "./contracts.js";
+import {
+  currentTemporalActivityMessageContext,
+  runWithTemporalSubmissionContext,
+  temporalActivityInterceptors,
+  temporalWorkflowClientInterceptor
+} from "./context-propagation.js";
 
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
@@ -73,6 +79,7 @@ function installSdkMetricsRuntime(): void {
 
 export type TemporalEndpointHandler = (
   envelope: EndpointEnvelope,
+  context: MessageContext,
   cancellationSignal?: AbortSignal,
   durableCallContext?: DurableCallContext
 ) => Promise<EndpointResult>;
@@ -194,6 +201,7 @@ export class TemporalConnector implements DurableTransport {
     this.#client = new Client({
       connection,
       namespace: config.namespace,
+      interceptors: { workflow: [temporalWorkflowClientInterceptor] },
       ...(config.identity === "" ? {} : { identity: config.identity })
     });
     try {
@@ -204,6 +212,12 @@ export class TemporalConnector implements DurableTransport {
           taskQueue,
           activities,
           workflowsPath: fileURLToPath(new URL("./workflows.js", import.meta.url)),
+          interceptors: {
+            activity: [temporalActivityInterceptors],
+            workflowModules: [
+              fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))
+            ]
+          },
           ...(config.identity === "" ? {} : { identity: config.identity }),
           ...(config.maxConcurrentActivities > 0
             ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
@@ -245,7 +259,11 @@ export class TemporalConnector implements DurableTransport {
     if (connection !== undefined) await connection.close();
   }
 
-  public async submitLink(link: DurableLinkId, envelope: DurableEnvelope): Promise<void> {
+  public async submitLink(
+    context: MessageContext,
+    link: DurableLinkId,
+    envelope: DurableEnvelope
+  ): Promise<void> {
     if (!this.#started) throw new Error(`Temporal connector ${this.name} is not started`);
     const registration = this.#links.get(linkKey(link));
     if (registration === undefined)
@@ -260,22 +278,25 @@ export class TemporalConnector implements DurableTransport {
       envelope: durableEnvelopeToWire(envelope)
     };
     const owner = `${identityName(registration.serviceName)}/link/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/v1`;
-    const handle = await this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
-      args: [request],
-      workflowId: `${identityName(registration.serviceName)}/durable/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/${opaqueIdentityComponent(envelope.callId)}`,
-      taskQueue: policy.taskQueue,
-      ...(policy.workflowExecutionTimeout > 0
-        ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
-        : {}),
-      workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-      workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
-      memo: ownershipMemo(owner, envelope.callId),
-      priority: { priorityKey: request.priority }
-    });
+    const handle = await runWithTemporalSubmissionContext(context, () =>
+      this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
+        args: [request],
+        workflowId: `${identityName(registration.serviceName)}/durable/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/${opaqueIdentityComponent(envelope.callId)}`,
+        taskQueue: policy.taskQueue,
+        ...(policy.workflowExecutionTimeout > 0
+          ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
+          : {}),
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+        workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
+        memo: ownershipMemo(owner, envelope.callId),
+        priority: { priorityKey: request.priority }
+      })
+    );
     await validateWorkflowOwnership(handle, DURABLE_WORKFLOW_TYPE, owner, envelope.callId);
   }
 
   public async submitEndpoint(
+    context: MessageContext,
     endpointId: number,
     envelope: EndpointEnvelope,
     waitForResult: boolean
@@ -289,18 +310,20 @@ export class TemporalConnector implements DurableTransport {
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
     const request = endpointRequest(registration, config, envelope);
     const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
-    const handle = await this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
-      args: [request],
-      workflowId: `${identityName(this.name)}/endpoint/${identityName(config.name)}/${opaqueIdentityComponent(envelope.executionId)}`,
-      taskQueue: config.taskQueue,
-      ...(config.workflowExecutionTimeout > 0
-        ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
-        : {}),
-      workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-      workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
-      memo: ownershipMemo(owner, envelope.executionId),
-      priority: { priorityKey: request.priority }
-    });
+    const handle = await runWithTemporalSubmissionContext(context, () =>
+      this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
+        args: [request],
+        workflowId: `${identityName(this.name)}/endpoint/${identityName(config.name)}/${opaqueIdentityComponent(envelope.executionId)}`,
+        taskQueue: config.taskQueue,
+        ...(config.workflowExecutionTimeout > 0
+          ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
+          : {}),
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+        workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
+        memo: ownershipMemo(owner, envelope.executionId),
+        priority: { priorityKey: request.priority }
+      })
+    );
     await validateWorkflowOwnership(handle, ENDPOINT_WORKFLOW_TYPE, owner, envelope.executionId);
     if (!waitForResult) return { payload: new Uint8Array() };
     const result = (await handle.result()) as EndpointWireResult;
@@ -336,7 +359,7 @@ export class TemporalConnector implements DurableTransport {
         value
       ) => {
         const signal = cancellationSignal();
-        const activityContext = new Context(signal);
+        const activityContext = currentTemporalActivityMessageContext();
         const envelope = durableEnvelopeFromWire(value as DurableWorkflowRequest["envelope"]);
         const durable = new DurableCallContext(
           envelope.callId,
@@ -348,7 +371,7 @@ export class TemporalConnector implements DurableTransport {
           )
         );
         await runDurableCallActivity(signal, durable, () =>
-          registration.handler(envelope, signal, durable)
+          registration.handler(envelope, activityContext, signal, durable)
         );
       };
     }
@@ -358,12 +381,12 @@ export class TemporalConnector implements DurableTransport {
       const handler = registration.handler;
       queue(config.taskQueue)[registration.activityType] = async (value) => {
         const signal = cancellationSignal();
+        const activityContext = currentTemporalActivityMessageContext();
         const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
         if (!envelope.scheduled) {
-          const result = await handler(envelope, signal);
+          const result = await handler(envelope, activityContext, signal);
           return { payload: bytesToWire(result.payload) } satisfies EndpointWireResult;
         }
-        const activityContext = new Context(signal);
         const durable = new DurableCallContext(
           envelope.executionId,
           heartbeat,
@@ -371,7 +394,7 @@ export class TemporalConnector implements DurableTransport {
         );
         let result: EndpointResult = { payload: new Uint8Array() };
         await runDurableCallActivity(signal, durable, async () => {
-          result = await handler(envelope, signal, durable);
+          result = await handler(envelope, activityContext, signal, durable);
         });
         return { payload: bytesToWire(result.payload) } satisfies EndpointWireResult;
       };
@@ -397,8 +420,6 @@ export class TemporalConnector implements DurableTransport {
       streamId: "",
       priority: 0,
       deadlineUnixMillis: 0,
-      samplingEnabled: false,
-      traceCarrier: {},
       scheduled: true,
       scheduleId: config.scheduleId,
       scheduledAtUnixMillis: 0,
@@ -593,8 +614,7 @@ function identityName(value: string): string {
       const previousUpper =
         previous.toUpperCase() === previous && previous.toLowerCase() !== previous;
       const next = characters[index + 1];
-      const nextLower =
-        next !== undefined && next.toLowerCase() === next && next.toUpperCase() !== next;
+      const nextLower = next?.toLowerCase() === next && next?.toUpperCase() !== next;
       if (!previousUpper || nextLower) {
         words.push(current.join(""));
         current = [];

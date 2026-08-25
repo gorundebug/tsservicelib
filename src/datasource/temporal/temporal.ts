@@ -4,7 +4,6 @@ import {
   DataSourceEndpoint,
   FunctionCollector,
   InputDataSource,
-  MessageContext,
   ScheduleBackend,
   bindDurableCallSpan,
   errorFromUnknown,
@@ -18,6 +17,7 @@ import {
   type DurableCallContext,
   type InputEndpoint,
   type InputEndpointConsumer,
+  type MessageContext,
   type RuntimeEnvironment,
   type ScheduleEndpointFunction,
   type ScheduleTrigger,
@@ -83,8 +83,10 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
         }
       });
     }
-    connector.registerEndpoint(endpoint.id, (envelope, cancellationSignal, durableCallContext) =>
-      this.activate(envelope, cancellationSignal, durableCallContext)
+    connector.registerEndpoint(
+      endpoint.id,
+      (envelope, context, cancellationSignal, durableCallContext) =>
+        this.activate(envelope, context, cancellationSignal, durableCallContext)
     );
   }
 
@@ -98,17 +100,16 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
 
   public async activate(
     envelope: EndpointEnvelope,
+    parent: MessageContext,
     cancellationSignal?: AbortSignal,
     durableCallContext?: DurableCallContext
   ): Promise<EndpointResult> {
     if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
       throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
     }
-    let context = new MessageContext()
-      .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
+    let context = parent
       .withStreamId(envelope.streamId || newStreamId())
-      .withPriority(envelope.priority)
-      .withSampling(envelope.samplingEnabled);
+      .withPriority(envelope.priority);
     context = applyDataSourceEndpointTracing(
       context,
       this.#stream.runtimeEnvironment(),

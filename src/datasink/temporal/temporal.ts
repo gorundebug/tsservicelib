@@ -84,8 +84,6 @@ class TemporalSinkConsumer<T, R, E> implements Consumer<T>, OutputEndpointConsum
         priority: context.priority() ?? 0,
         deadlineUnixMillis:
           remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
-        samplingEnabled: context.samplingEnabled(),
-        traceCarrier: Object.fromEntries(context.transportMetadata()),
         scheduled: false,
         scheduleId: "",
         scheduledAtUnixMillis: 0,
@@ -93,6 +91,7 @@ class TemporalSinkConsumer<T, R, E> implements Consumer<T>, OutputEndpointConsum
         payload: this.stream.inputSerde().serialize(value)
       };
       const result = await this.connector.submitEndpoint(
+        context,
         this.sinkEndpoint.id,
         envelope,
         this.withResult

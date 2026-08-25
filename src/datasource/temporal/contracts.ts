@@ -10,8 +10,6 @@ export interface EndpointEnvelope {
   readonly streamId: string;
   readonly priority: number;
   readonly deadlineUnixMillis: number;
-  readonly samplingEnabled: boolean;
-  readonly traceCarrier: Readonly<Record<string, string>>;
   readonly scheduled: boolean;
   readonly scheduleId: string;
   readonly scheduledAtUnixMillis: number;

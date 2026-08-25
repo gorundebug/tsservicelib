@@ -1,9 +1,9 @@
-import { Context } from "../../runtime/context.js";
+import type { Context, MessageContext } from "../../runtime/context.js";
 import { DurableCallContext } from "../../runtime/durable-call-context.js";
 import type { DurableEnvelope, DurableLinkHandler, DurableLinkId, DurableTransport } from "../../runtime/durable.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
 import { type EndpointEnvelope, type EndpointResult } from "./contracts.js";
-export type TemporalEndpointHandler = (envelope: EndpointEnvelope, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<EndpointResult>;
+export type TemporalEndpointHandler = (envelope: EndpointEnvelope, context: MessageContext, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<EndpointResult>;
 export declare class TemporalConnector implements DurableTransport {
     #private;
     readonly id: number;
@@ -16,8 +16,8 @@ export declare class TemporalConnector implements DurableTransport {
     start(context: Context): Promise<void>;
     stopAdmission(_context: Context): Promise<void>;
     stop(_context: Context): Promise<void>;
-    submitLink(link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
-    submitEndpoint(endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean): Promise<EndpointResult>;
+    submitLink(context: MessageContext, link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
+    submitEndpoint(context: MessageContext, endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean): Promise<EndpointResult>;
     private connect;
     private queueActivities;
     private shutdownWorkers;

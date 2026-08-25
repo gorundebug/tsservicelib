@@ -23,6 +23,7 @@ class RecordingTransport implements DurableTransport {
   public readonly id = 7;
   public readonly name = "temporal";
   public readonly submitted: DurableEnvelope[] = [];
+  public readonly submittedContexts: MessageContext[] = [];
   public readonly handlers = new Map<string, DurableLinkHandler>();
 
   public start(_context: Context): Promise<void> {
@@ -44,7 +45,12 @@ class RecordingTransport implements DurableTransport {
     this.handlers.set(`${String(link.from)}:${String(link.to)}`, handler);
   }
 
-  public submitLink(_link: DurableLinkId, envelope: DurableEnvelope): Promise<void> {
+  public submitLink(
+    context: MessageContext,
+    _link: DurableLinkId,
+    envelope: DurableEnvelope
+  ): Promise<void> {
+    this.submittedContexts.push(context);
     this.submitted.push(envelope);
     return Promise.resolve();
   }
@@ -88,16 +94,12 @@ await test("DurableCall serializes transport context and leaves the target consu
   assert.ok(envelope);
   assert.equal(envelope.streamId, "request-1");
   assert.equal(envelope.priority, -1);
-  assert.equal(envelope.samplingEnabled, true);
-  assert.equal(
-    envelope.traceCarrier["traceparent"],
-    "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
-  );
+  assert.equal(transport.submittedContexts[0], context);
   assert.equal(serde.deserialize(envelope.payload), "payload");
 
   const consumer = new RecordingConsumer();
   const cancellation = new AbortController();
-  await makeDurableLinkHandler(consumer, serde)(envelope, cancellation.signal);
+  await makeDurableLinkHandler(consumer, serde)(envelope, context, cancellation.signal);
   assert.ok(consumer.received);
   assert.equal(consumer.received.value, "payload");
   assert.equal(consumer.received.context.streamId(), "request-1");
@@ -105,7 +107,7 @@ await test("DurableCall serializes transport context and leaves the target consu
   assert.equal(consumer.received.context.samplingEnabled(), true);
   assert.equal(
     consumer.received.context.metadata().get("traceparent"),
-    envelope.traceCarrier["traceparent"]
+    "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
   );
   cancellation.abort();
   assert.equal(consumer.received.context.signal().aborted, true);

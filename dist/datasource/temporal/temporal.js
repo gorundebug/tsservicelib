@@ -1,4 +1,4 @@
-import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 import { makeTemporalConnector } from "./connector.js";
 class TemporalDataSource extends InputDataSource {
     constructor(connectorId, environment) {
@@ -39,7 +39,7 @@ class TemporalEndpointConsumer {
                 }
             });
         }
-        connector.registerEndpoint(endpoint.id, (envelope, cancellationSignal, durableCallContext) => this.activate(envelope, cancellationSignal, durableCallContext));
+        connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal, durableCallContext) => this.activate(envelope, context, cancellationSignal, durableCallContext));
     }
     endpoint() {
         return this.#endpoint;
@@ -47,15 +47,13 @@ class TemporalEndpointConsumer {
     consume(context, value) {
         return this.#activateInput(context, value);
     }
-    async activate(envelope, cancellationSignal, durableCallContext) {
+    async activate(envelope, parent, cancellationSignal, durableCallContext) {
         if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
             throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
         }
-        let context = new MessageContext()
-            .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
+        let context = parent
             .withStreamId(envelope.streamId || newStreamId())
-            .withPriority(envelope.priority)
-            .withSampling(envelope.samplingEnabled);
+            .withPriority(envelope.priority);
         context = applyDataSourceEndpointTracing(context, this.#stream.runtimeEnvironment(), this.#endpoint.id);
         if (durableCallContext !== undefined) {
             context = context.withDurableCallContext(durableCallContext);

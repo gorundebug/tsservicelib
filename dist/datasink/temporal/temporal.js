@@ -57,15 +57,13 @@ class TemporalSinkConsumer {
                 streamId: context.streamId() ?? executionId,
                 priority: context.priority() ?? 0,
                 deadlineUnixMillis: remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
-                samplingEnabled: context.samplingEnabled(),
-                traceCarrier: Object.fromEntries(context.transportMetadata()),
                 scheduled: false,
                 scheduleId: "",
                 scheduledAtUnixMillis: 0,
                 firedAtUnixMillis: 0,
                 payload: this.stream.inputSerde().serialize(value)
             };
-            const result = await this.connector.submitEndpoint(this.sinkEndpoint.id, envelope, this.withResult);
+            const result = await this.connector.submitEndpoint(context, this.sinkEndpoint.id, envelope, this.withResult);
             if (this.withResult) {
                 const resultStream = this.stream;
                 await resultStream.consumeResult(context, resultStream.serde().deserialize(result.payload));
