@@ -15,43 +15,24 @@ import {
   DataConnectorType,
   type DataConnectorConfig,
   type EndpointConfig,
-  type DurableCallSemanticsConfig,
   type TemporalDataConnectorConfig,
   type TemporalEndpointConfig
 } from "../../runtime/config/index.js";
 import type { Context, MessageContext } from "../../runtime/context.js";
+import type { ManagedDataConnector } from "../../runtime/data-connector.js";
 import {
   DurableCallContext,
   DurableCallEvent,
-  bindDurableCallSpan,
   runDurableCallActivity,
-  type DurableActivityResult,
-  type DurableCallDiagnostics,
-  type DurableContinuation
+  type DurableCallDiagnostics
 } from "../../runtime/durable-call-context.js";
-import type {
-  DurableEnvelope,
-  DurableLinkHandler,
-  DurableLinkId,
-  DurableTransport
-} from "../../runtime/durable.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
-import {
-  err,
-  str,
-  stringAttribute,
-  type Int64CounterVec
-} from "../../runtime/environment/index.js";
+import { err, str, type Int64CounterVec } from "../../runtime/environment/index.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
-  DURABLE_WORKFLOW_TYPE,
   ENDPOINT_WORKFLOW_TYPE,
-  type DurableWorkflowRequest,
-  type DurableWireActivityResult,
-  type DurableWireContinuation,
   type EndpointEnvelope,
   type EndpointResult,
-  type EndpointWireActivityResult,
   type EndpointWireEnvelope,
   type EndpointWireResult,
   type EndpointWorkflowRequest
@@ -65,7 +46,7 @@ import {
 
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
-const CALL_ID = "servicelib.callId";
+const MESSAGE_ID = "servicelib.messageId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress: string | undefined;
 
@@ -73,40 +54,11 @@ export function temporalCronExpression(expression: string): string {
   return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
 }
 
-function installSdkMetricsRuntime(): void {
-  const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
-  if (address === undefined || address === "") return;
-  if (sdkMetricsBindAddress !== undefined) {
-    if (sdkMetricsBindAddress !== address) {
-      throw new Error(
-        `Temporal SDK metrics already listen on ${sdkMetricsBindAddress}, cannot also use ${address}`
-      );
-    }
-    return;
-  }
-  Runtime.install({
-    telemetryOptions: {
-      metrics: { prometheus: { bindAddress: address, useSecondsForDurations: true } }
-    }
-  });
-  sdkMetricsBindAddress = address;
-}
-
 export type TemporalEndpointHandler = (
   envelope: EndpointEnvelope,
   context: MessageContext,
-  cancellationSignal?: AbortSignal,
-  durableCallContext?: DurableCallContext
+  cancellationSignal?: AbortSignal
 ) => Promise<EndpointResult>;
-
-interface LinkRegistration {
-  readonly link: DurableLinkId;
-  readonly serviceName: string;
-  readonly sourceName: string;
-  readonly targetName: string;
-  readonly activityType: string;
-  readonly handler: DurableLinkHandler;
-}
 
 interface EndpointRegistration {
   readonly endpointId: number;
@@ -114,15 +66,14 @@ interface EndpointRegistration {
   readonly handler?: TemporalEndpointHandler;
 }
 
-export class TemporalConnector implements DurableTransport {
+export class TemporalConnector implements ManagedDataConnector {
   readonly #environment: RuntimeEnvironment;
-  readonly #links = new Map<string, LinkRegistration>();
   readonly #endpoints = new Map<number, EndpointRegistration>();
+  readonly #activityEvents: Int64CounterVec;
   #connection: NativeConnection | undefined;
   #client: Client | undefined;
   #workers: Worker[] = [];
   #workerRuns: Promise<void>[] = [];
-  readonly #durableEvents: Int64CounterVec;
   #started = false;
   public readonly id: number;
   public readonly name: string;
@@ -135,65 +86,10 @@ export class TemporalConnector implements DurableTransport {
     this.id = connectorId;
     this.name = config.name;
     this.#environment = environment;
-    this.#durableEvents = environment
+    this.#activityEvents = environment
       .metrics()
-      .scope("durable_call", { connector: this.name })
-      .counterVec("events_total", "Total number of DurableCall Activity lifecycle events");
-  }
-
-  private continuationActivityType(): string {
-    return `${identityName(this.#environment.serviceConfig().name)}.durable_continuation.${identityName(this.name)}.v1`;
-  }
-
-  public registerLink(link: DurableLinkId, handler: DurableLinkHandler): void {
-    if (this.#started) throw new Error("cannot register DurableCall after Temporal start");
-    const key = linkKey(link);
-    if (this.#links.has(key)) throw new Error(`durable link ${key} is already registered`);
-    const config = this.linkConfig(link);
-    if (config.idDataConnector !== this.id) {
-      throw new Error(`durable link ${key} does not belong to connector ${this.name}`);
-    }
-    const serviceName = this.#environment.serviceConfig().name;
-    const source = this.#environment.runtimeConfig().streamById(link.from);
-    const target = this.#environment.runtimeConfig().streamById(link.to);
-    if (source === undefined || target === undefined) {
-      throw new Error(`durable link ${key} references missing stream configuration`);
-    }
-    this.#links.set(key, {
-      link,
-      serviceName,
-      sourceName: source.name,
-      targetName: target.name,
-      activityType: `${identityName(serviceName)}.durable.${identityName(source.name)}.${identityName(target.name)}.v1`,
-      handler
-    });
-  }
-
-  private durableDiagnostics(
-    boundary: string,
-    target: string,
-    context: Context
-  ): DurableCallDiagnostics {
-    return (event, failure): void => {
-      this.#durableEvents.with({ boundary, target, event }).inc(context);
-      if (failure === undefined) return;
-      const fields = [
-        str("connector", this.name),
-        str("boundary", boundary),
-        str("target", target),
-        str("event", event),
-        err(failure)
-      ] as const;
-      if (
-        event === DurableCallEvent.MissingOutcome ||
-        event === DurableCallEvent.DuplicateTerminal ||
-        event === DurableCallEvent.LateHeartbeat
-      ) {
-        this.#environment.log().warn(context, "DurableCall Activity lifecycle misuse", ...fields);
-      } else {
-        this.#environment.log().error(context, "DurableCall Activity failed", ...fields);
-      }
-    };
+      .scope("temporal_activity", { connector: this.name })
+      .counterVec("events_total", "Total number of Temporal Activity lifecycle events");
   }
 
   public registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void {
@@ -215,7 +111,17 @@ export class TemporalConnector implements DurableTransport {
     if (this.#started) return;
     context.signal().throwIfAborted();
     const config = this.config();
-    const connection = await this.connect(config, context);
+    installSdkMetricsRuntime();
+    const tls = await tlsOptions(config);
+    const connection = await abortable(
+      NativeConnection.connect({
+        address: config.address,
+        ...(tls === undefined ? {} : { tls }),
+        ...(config.apiKey === "" ? {} : { apiKey: config.apiKey }),
+        ...(context.remainingMs() === undefined ? {} : { connectTimeout: context.remainingMs() })
+      }),
+      context.signal()
+    );
     this.#connection = connection;
     this.#client = new Client({
       connection,
@@ -249,11 +155,11 @@ export class TemporalConnector implements DurableTransport {
         this.#workerRuns.push(worker.run());
       }
       await ensureWorkersRunning(this.#workerRuns);
+      this.#started = true;
       for (const endpointId of this.#endpoints.keys()) {
         const endpoint = this.endpointConfig(endpointId);
         if (endpoint.enabled && endpoint.schedule !== "") await this.ensureSchedule(endpoint);
       }
-      this.#started = true;
     } catch (error: unknown) {
       await this.shutdownWorkers();
       await connection.close();
@@ -263,56 +169,19 @@ export class TemporalConnector implements DurableTransport {
     }
   }
 
-  public async stopAdmission(_context: Context): Promise<void> {
-    void _context;
+  public async stopAdmission(context: Context): Promise<void> {
+    void context;
     await this.shutdownWorkers();
   }
 
-  public async stop(_context: Context): Promise<void> {
-    void _context;
+  public async stop(context: Context): Promise<void> {
+    void context;
     await this.shutdownWorkers();
     this.#started = false;
     const connection = this.#connection;
     this.#client = undefined;
     this.#connection = undefined;
     if (connection !== undefined) await connection.close();
-  }
-
-  public async submitLink(
-    context: MessageContext,
-    link: DurableLinkId,
-    envelope: DurableEnvelope
-  ): Promise<void> {
-    if (!this.#started) throw new Error(`Temporal connector ${this.name} is not started`);
-    const registration = this.#links.get(linkKey(link));
-    if (registration === undefined)
-      throw new Error(`durable link ${linkKey(link)} is not registered`);
-    const policy = this.linkConfig(link);
-    const request: DurableWorkflowRequest = {
-      activityType: registration.activityType,
-      continuationActivityType: this.continuationActivityType(),
-      activityStartToCloseTimeout: policy.activityStartToCloseTimeout,
-      activityHeartbeatTimeout: policy.activityHeartbeatTimeout,
-      maximumAttempts: policy.maximumAttempts,
-      priority: normalizeTemporalPriority(envelope.priority),
-      envelope: durableEnvelopeToWire(envelope)
-    };
-    const owner = `${identityName(registration.serviceName)}/link/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/v1`;
-    const handle = await runWithTemporalSubmissionContext(context, () =>
-      this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
-        args: [request],
-        workflowId: `${identityName(registration.serviceName)}/durable/${identityName(registration.sourceName)}/${identityName(registration.targetName)}/${opaqueIdentityComponent(envelope.callId)}`,
-        taskQueue: policy.taskQueue,
-        ...(policy.workflowExecutionTimeout > 0
-          ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
-          : {}),
-        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-        workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
-        memo: ownershipMemo(owner, envelope.callId),
-        priority: { priorityKey: request.priority }
-      })
-    );
-    await validateWorkflowOwnership(handle, DURABLE_WORKFLOW_TYPE, owner, envelope.callId);
   }
 
   public async submitEndpoint(
@@ -328,185 +197,101 @@ export class TemporalConnector implements DurableTransport {
     }
     const config = this.endpointConfig(endpointId);
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
-    const request = endpointRequest(
-      registration,
-      config,
-      envelope,
-      this.continuationActivityType()
-    );
-    const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
+    if (envelope.messageId === "") throw new Error("Temporal endpoint message ID is empty");
+    const request = endpointRequest(registration, config, envelope);
+    const owner = endpointOwner(this.name, config.name);
     const handle = await runWithTemporalSubmissionContext(context, () =>
       this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
         args: [request],
-        workflowId: `${identityName(this.name)}/endpoint/${identityName(config.name)}/${opaqueIdentityComponent(envelope.executionId)}`,
+        workflowId: endpointWorkflowId(this.name, config.name, envelope.messageId),
         taskQueue: config.taskQueue,
         ...(config.workflowExecutionTimeout > 0
           ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
           : {}),
         workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
         workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
-        memo: ownershipMemo(owner, envelope.executionId),
+        memo: ownershipMemo(owner, envelope.messageId),
         priority: { priorityKey: request.priority }
       })
     );
-    await validateWorkflowOwnership(handle, ENDPOINT_WORKFLOW_TYPE, owner, envelope.executionId);
+    await validateWorkflowOwnership(handle, ENDPOINT_WORKFLOW_TYPE, owner, envelope.messageId);
     if (!waitForResult) return { payload: new Uint8Array() };
     const result = (await handle.result()) as EndpointWireResult;
     return { payload: bytesFromWire(result.payload) };
   }
 
-  private async connect(
-    config: TemporalDataConnectorConfig,
-    context: Context
-  ): Promise<NativeConnection> {
-    installSdkMetricsRuntime();
-    const tls = await tlsOptions(config);
-    const connect = NativeConnection.connect({
-      address: config.address,
-      ...(tls === undefined ? {} : { tls }),
-      ...(config.apiKey === "" ? {} : { apiKey: config.apiKey }),
-      ...(context.remainingMs() === undefined ? {} : { connectTimeout: context.remainingMs() })
-    });
-    return abortable(connect, context.signal());
-  }
-
   private queueActivities(): Map<string, Record<string, (value: unknown) => Promise<unknown>>> {
     const queues = new Map<string, Record<string, (value: unknown) => Promise<unknown>>>();
-    const queue = (name: string): Record<string, (value: unknown) => Promise<unknown>> => {
-      const existing = queues.get(name);
-      if (existing !== undefined) return existing;
-      const created: Record<string, (value: unknown) => Promise<unknown>> = {};
-      queues.set(name, created);
-      return created;
-    };
-    for (const registration of this.#links.values()) {
-      queue(this.linkConfig(registration.link).taskQueue)[registration.activityType] = async (
-        value
-      ) => {
-        const signal = cancellationSignal();
-        const activityContext = currentTemporalActivityMessageContext();
-        const envelope = durableEnvelopeFromWire(value as DurableWorkflowRequest["envelope"]);
-        const durable = new DurableCallContext(
-          envelope.callId,
-          heartbeat,
-          this.durableDiagnostics(
-            "link",
-            `${String(registration.link.from)}:${String(registration.link.to)}`,
-            activityContext
-          )
-        );
-        const result = await runDurableCallActivity(signal, durable, () =>
-          registration.handler(envelope, activityContext, signal, durable)
-        );
-        return durableActivityResultToWire(result);
-      };
-    }
     for (const registration of this.#endpoints.values()) {
       const config = this.endpointConfig(registration.endpointId);
       if (!config.enabled || registration.handler === undefined) continue;
       const handler = registration.handler;
-      queue(config.taskQueue)[registration.activityType] = async (value) => {
+      const activities = queues.get(config.taskQueue) ?? {};
+      queues.set(config.taskQueue, activities);
+      activities[registration.activityType] = async (value) => {
         const signal = cancellationSignal();
-        const activityContext = currentTemporalActivityMessageContext();
         const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
         const durable = new DurableCallContext(
-          envelope.executionId,
+          envelope.messageId,
           heartbeat,
-          this.durableDiagnostics("endpoint", String(registration.endpointId), activityContext)
-        );
-        let result: EndpointResult = { payload: new Uint8Array() };
-        const durableResult = await runDurableCallActivity(signal, durable, async () => {
-          result = await handler(envelope, activityContext, signal, durable);
-        });
-        return {
-          durable: durableActivityResultToWire(durableResult),
-          result: { payload: bytesToWire(result.payload) }
-        } satisfies EndpointWireActivityResult;
-      };
-    }
-    for (const activities of queues.values()) {
-      activities[this.continuationActivityType()] = async (value) => {
-        const continuation = durableContinuationFromWire(value);
-        const signal = cancellationSignal();
-        const incomingActivityContext = currentTemporalActivityMessageContext();
-        const activityContext = incomingActivityContext.withMetadata(
-          new Map<string, string>([
-            ...incomingActivityContext.metadata(),
-            ...Object.entries(continuation.traceCarrier)
-          ])
-        );
-        const durable = new DurableCallContext(
-          continuation.callId,
-          heartbeat,
-          this.durableDiagnostics(
-            "continuation",
-            `${continuation.fromName}:${continuation.toName}`,
-            activityContext
+          this.activityDiagnostics(
+            "endpoint",
+            String(registration.endpointId),
+            currentTemporalActivityMessageContext()
           )
         );
-        let context = activityContext
-          .withStreamId(continuation.streamId)
-          .withPriority(continuation.priority)
+        const context = currentTemporalActivityMessageContext()
           .withExternalCancellation(signal)
           .withDurableCallContext(durable);
-        if (continuation.deadlineUnixMillis > 0) {
-          context = context.bounded(Math.max(0, continuation.deadlineUnixMillis - Date.now()));
-        }
-        const result = await runDurableCallActivity(signal, durable, async () => {
-          const tracer = context.samplingEnabled()
-            ? this.#environment.tracing()?.tracer(this.#environment.serviceConfig().name)
-            : undefined;
-          if (tracer === undefined) {
-            await this.#environment.resumeDurableContinuation(context, continuation);
-            return;
-          }
-          const started = tracer.start(context, "temporal.activity", [
-            stringAttribute("boundary", "durable_delay"),
-            stringAttribute("from", continuation.fromName),
-            stringAttribute("to", continuation.toName)
-          ]);
-          const durableSpan = bindDurableCallSpan(started.context, started.span);
-          try {
-            await this.#environment.resumeDurableContinuation(started.context, continuation);
-          } finally {
-            if (!durableSpan) started.span.end();
-          }
-        });
-        return durableActivityResultToWire(result);
+        const result = await runDurableCallActivity(durable, () =>
+          handler(envelope, context, signal)
+        );
+        return { payload: bytesToWire(result.payload) } satisfies EndpointWireResult;
       };
     }
     return queues;
   }
 
-  private async shutdownWorkers(): Promise<void> {
-    for (const worker of this.#workers) worker.shutdown();
-    await Promise.allSettled(this.#workerRuns);
-    this.#workers = [];
-    this.#workerRuns = [];
+  private activityDiagnostics(
+    boundary: string,
+    target: string,
+    context: Context
+  ): DurableCallDiagnostics {
+    return (event, failure): void => {
+      this.#activityEvents.with({ boundary, target, event }).inc(context);
+      if (failure === undefined) return;
+      const fields = [
+        str("connector", this.name),
+        str("boundary", boundary),
+        str("target", target),
+        str("event", event),
+        err(failure)
+      ] as const;
+      if (event === DurableCallEvent.LateHeartbeat) {
+        this.#environment.log().warn(context, "Temporal Activity lifecycle misuse", ...fields);
+      } else {
+        this.#environment.log().error(context, "Temporal Activity failed", ...fields);
+      }
+    };
   }
 
   private async ensureSchedule(config: TemporalEndpointConfig): Promise<void> {
     const registration = this.#endpoints.get(config.id);
     if (registration?.handler === undefined) return;
-    const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
-    const request = endpointRequest(
-      registration,
-      config,
-      {
-        version: 1,
-        endpointId: config.id,
-        executionId: "",
-        streamId: "",
-        priority: 0,
-        deadlineUnixMillis: 0,
-        scheduled: true,
-        scheduleId: config.scheduleId,
-        scheduledAtUnixMillis: 0,
-        firedAtUnixMillis: 0,
-        payload: new Uint8Array()
-      },
-      this.continuationActivityType()
-    );
+    const owner = endpointOwner(this.name, config.name);
+    const request = endpointRequest(registration, config, {
+      version: 1,
+      endpointId: config.id,
+      messageId: "",
+      streamId: "",
+      priority: 0,
+      deadlineUnixMillis: 0,
+      scheduled: true,
+      scheduleId: config.scheduleId,
+      scheduledAtUnixMillis: 0,
+      firedAtUnixMillis: 0,
+      payload: new Uint8Array()
+    });
     try {
       await this.client().schedule.create({
         scheduleId: config.scheduleId,
@@ -517,7 +302,7 @@ export class TemporalConnector implements DurableTransport {
         action: {
           type: "startWorkflow",
           workflowType: ENDPOINT_WORKFLOW_TYPE,
-          workflowId: `${this.name}/schedule/${config.name}`,
+          workflowId: `${identityName(this.name)}/schedule/${identityName(config.name)}`,
           taskQueue: config.taskQueue,
           args: [request],
           memo: ownershipMemo(owner, config.scheduleId),
@@ -568,14 +353,6 @@ export class TemporalConnector implements DurableTransport {
     return config;
   }
 
-  private linkConfig(link: DurableLinkId): DurableCallSemanticsConfig {
-    const semantics = this.#environment.runtimeConfig().link(link.from, link.to)?.callSemantics;
-    if (semantics === undefined || !("durableCall" in semantics)) {
-      throw new Error(`DurableCall configuration ${linkKey(link)} not found`);
-    }
-    return semantics.durableCall;
-  }
-
   private endpointConfig(endpointId: number): TemporalEndpointConfig {
     const config = this.#environment.runtimeConfig().endpointById(endpointId);
     if (!isTemporalEndpointConfig(config)) {
@@ -585,120 +362,60 @@ export class TemporalConnector implements DurableTransport {
   }
 
   private client(): Client {
-    if (this.#client === undefined) {
+    if (this.#client === undefined)
       throw new Error(`Temporal connector ${this.name} is not started`);
-    }
     return this.#client;
   }
-}
 
-function isTemporalConnectorConfig(
-  config: DataConnectorConfig | undefined
-): config is TemporalDataConnectorConfig {
-  return (
-    config?.type === DataConnectorType.Temporal && "address" in config && "namespace" in config
-  );
-}
-
-function isTemporalEndpointConfig(
-  config: EndpointConfig | undefined
-): config is TemporalEndpointConfig {
-  return config !== undefined && "taskQueue" in config && typeof config.taskQueue === "string";
+  private async shutdownWorkers(): Promise<void> {
+    for (const worker of this.#workers) worker.shutdown();
+    await Promise.allSettled(this.#workerRuns);
+    this.#workers = [];
+    this.#workerRuns = [];
+  }
 }
 
 export function makeTemporalConnector(
   connectorId: number,
   environment: RuntimeEnvironment
 ): TemporalConnector {
-  const existing = environment.durableTransportById(connectorId);
+  const existing = environment.managedDataConnectorById(connectorId);
   if (existing !== undefined) {
     if (!(existing instanceof TemporalConnector)) {
-      throw new Error(`durable transport ${String(connectorId)} is not Temporal`);
+      throw new Error(`managed connector ${String(connectorId)} is not Temporal`);
     }
     return existing;
   }
   const connector = new TemporalConnector(connectorId, environment);
-  environment.addDurableTransport(connector);
+  environment.addManagedDataConnector(connector);
   return connector;
+}
+
+export function endpointWorkflowId(
+  connectorName: string,
+  endpointName: string,
+  messageId: string
+): string {
+  return `${identityName(connectorName)}/endpoint/${identityName(endpointName)}/${opaqueIdentityComponent(messageId)}`;
+}
+
+function endpointOwner(connectorName: string, endpointName: string): string {
+  return `${identityName(connectorName)}/endpoint/${identityName(endpointName)}/v1`;
 }
 
 function endpointRequest(
   registration: EndpointRegistration,
   config: TemporalEndpointConfig,
-  envelope: EndpointEnvelope,
-  continuationActivityType: string
+  envelope: EndpointEnvelope
 ): EndpointWorkflowRequest {
   return {
     activityType: registration.activityType,
-    continuationActivityType,
     activityStartToCloseTimeout: config.activityStartToCloseTimeout,
     activityHeartbeatTimeout: config.activityHeartbeatTimeout,
     maximumAttempts: config.maximumAttempts,
     priority: normalizeTemporalPriority(envelope.priority),
     envelope: endpointEnvelopeToWire(envelope)
   };
-}
-
-function durableActivityResultToWire(result: DurableActivityResult): DurableWireActivityResult {
-  return result.continuation === undefined
-    ? {}
-    : { continuation: durableContinuationToWire(result.continuation) };
-}
-
-function durableContinuationToWire(continuation: DurableContinuation): DurableWireContinuation {
-  return { ...continuation, payload: bytesToWire(continuation.payload) };
-}
-
-function durableContinuationFromWire(value: unknown): DurableContinuation {
-  if (typeof value !== "object" || value === null) {
-    throw new TypeError("invalid Temporal durable continuation");
-  }
-  const continuation = value as Record<string, unknown>;
-  if (
-    continuation["version"] !== 1 ||
-    typeof continuation["fromName"] !== "string" ||
-    continuation["fromName"] === "" ||
-    typeof continuation["toName"] !== "string" ||
-    continuation["toName"] === "" ||
-    typeof continuation["callId"] !== "string" ||
-    continuation["callId"] === "" ||
-    typeof continuation["streamId"] !== "string" ||
-    typeof continuation["priority"] !== "number" ||
-    typeof continuation["deadlineUnixMillis"] !== "number" ||
-    typeof continuation["wakeAtUnixMillis"] !== "number" ||
-    !isStringRecord(continuation["traceCarrier"])
-  ) {
-    throw new TypeError("invalid Temporal durable continuation");
-  }
-  return {
-    version: 1,
-    fromName: continuation["fromName"],
-    toName: continuation["toName"],
-    callId: continuation["callId"],
-    streamId: continuation["streamId"],
-    priority: continuation["priority"],
-    deadlineUnixMillis: continuation["deadlineUnixMillis"],
-    wakeAtUnixMillis: continuation["wakeAtUnixMillis"],
-    traceCarrier: continuation["traceCarrier"],
-    payload: bytesFromWire(continuation["payload"] as readonly number[])
-  };
-}
-
-function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value).every((item) => typeof item === "string")
-  );
-}
-
-function durableEnvelopeToWire(envelope: DurableEnvelope): DurableWorkflowRequest["envelope"] {
-  return { ...envelope, payload: bytesToWire(envelope.payload) };
-}
-
-function durableEnvelopeFromWire(envelope: DurableWorkflowRequest["envelope"]): DurableEnvelope {
-  return { ...envelope, payload: bytesFromWire(envelope.payload) };
 }
 
 function endpointEnvelopeToWire(envelope: EndpointEnvelope): EndpointWireEnvelope {
@@ -723,8 +440,8 @@ function bytesFromWire(value: readonly number[]): Uint8Array {
   return Uint8Array.from(value);
 }
 
-function ownershipMemo(owner: string, callId: string): Record<string, unknown> {
-  return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: callId };
+function ownershipMemo(owner: string, messageId: string): Record<string, unknown> {
+  return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [MESSAGE_ID]: messageId };
 }
 
 function opaqueIdentityComponent(value: string): string {
@@ -734,7 +451,6 @@ function opaqueIdentityComponent(value: string): string {
   );
 }
 
-// Intentionally identical to servicegen.splitWords + ToSnakeCase.
 function identityName(value: string): string {
   const words: string[] = [];
   let current: string[] = [];
@@ -770,21 +486,58 @@ async function validateWorkflowOwnership(
   handle: WorkflowHandle,
   workflowType: string,
   owner: string,
-  callId: string
+  messageId: string
 ): Promise<void> {
   const description = await handle.describe();
-  if (description.type !== workflowType) throw new Error(`Temporal workflow ownership collision`);
-  validateMemo(description.memo, owner, callId);
+  if (description.type !== workflowType) throw new Error("Temporal workflow ownership collision");
+  validateMemo(description.memo, owner, messageId);
 }
 
 function validateMemo(
   memo: Record<string, unknown> | undefined,
   owner: string,
-  callId: string
+  messageId: string
 ): void {
-  if (memo?.[MANAGED_BY] !== "servicelib" || memo[OWNER] !== owner || memo[CALL_ID] !== callId) {
+  if (
+    memo?.[MANAGED_BY] !== "servicelib" ||
+    memo[OWNER] !== owner ||
+    memo[MESSAGE_ID] !== messageId
+  ) {
     throw new Error(`Temporal ownership collision for ${owner}`);
   }
+}
+
+function isTemporalConnectorConfig(
+  config: DataConnectorConfig | undefined
+): config is TemporalDataConnectorConfig {
+  return (
+    config?.type === DataConnectorType.Temporal && "address" in config && "namespace" in config
+  );
+}
+
+function isTemporalEndpointConfig(
+  config: EndpointConfig | undefined
+): config is TemporalEndpointConfig {
+  return config !== undefined && "taskQueue" in config && typeof config.taskQueue === "string";
+}
+
+function installSdkMetricsRuntime(): void {
+  const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
+  if (address === undefined || address === "") return;
+  if (sdkMetricsBindAddress !== undefined) {
+    if (sdkMetricsBindAddress !== address) {
+      throw new Error(
+        `Temporal SDK metrics already listen on ${sdkMetricsBindAddress}, cannot also use ${address}`
+      );
+    }
+    return;
+  }
+  Runtime.install({
+    telemetryOptions: {
+      metrics: { prometheus: { bindAddress: address, useSecondsForDurations: true } }
+    }
+  });
+  sdkMetricsBindAddress = address;
 }
 
 async function tlsOptions(config: TemporalDataConnectorConfig): Promise<
@@ -816,10 +569,6 @@ async function tlsOptions(config: TemporalDataConnectorConfig): Promise<
   };
 }
 
-function linkKey(link: DurableLinkId): string {
-  return `${String(link.from)}:${String(link.to)}`;
-}
-
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw abortReason(signal);
   return new Promise<T>((resolve, reject) => {
@@ -843,19 +592,12 @@ async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
 async function ensureWorkersRunning(workerRuns: readonly Promise<void>[]): Promise<void> {
   if (workerRuns.length === 0) return;
   const state = await Promise.race([
-    Promise.all(workerRuns).then(
-      () => "stopped" as const,
-      (error: unknown) => {
-        throw error;
-      }
-    ),
+    Promise.all(workerRuns).then(() => "stopped" as const),
     new Promise<"running">((resolve) => {
       setImmediate(resolve, "running");
     })
   ]);
-  if (state === "stopped") {
-    throw new Error("Temporal workers stopped during startup");
-  }
+  if (state === "stopped") throw new Error("Temporal workers stopped during startup");
 }
 
 function abortReason(signal: AbortSignal): Error {

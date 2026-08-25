@@ -4,12 +4,7 @@ import type { MessageContext } from "../context.js";
 import { callerMetadata } from "../caller-metadata.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
-import {
-  DurableDelayCaller,
-  type DurableContinuationHandler,
-  type DurableTransport
-} from "../durable.js";
-import type { DurableContinuation } from "../durable-call-context.js";
+import type { ManagedDataConnector } from "../data-connector.js";
 import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
@@ -60,9 +55,9 @@ export interface RuntimeEnvironment {
   addDataSink(dataSink: DataSink): void;
   dataSinkById(id: number): DataSink | undefined;
   dataSinks(): readonly DataSink[];
-  addDurableTransport(transport: DurableTransport): void;
-  durableTransportById(id: number): DurableTransport | undefined;
-  durableTransports(): readonly DurableTransport[];
+  addManagedDataConnector(connector: ManagedDataConnector): void;
+  managedDataConnectorById(id: number): ManagedDataConnector | undefined;
+  managedDataConnectors(): readonly ManagedDataConnector[];
   log(): Logger;
   metrics(): Metrics;
   tracing(): Tracing | undefined;
@@ -86,15 +81,6 @@ export interface RuntimeEnvironment {
   taskPool(name: string): TaskPool | undefined;
   priorityTaskPool(name: string): PriorityTaskPool | undefined;
   makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
-  registerDurableContinuation(
-    fromName: string,
-    toName: string,
-    handler: DurableContinuationHandler
-  ): void;
-  resumeDurableContinuation(
-    context: MessageContext,
-    continuation: DurableContinuation
-  ): Promise<void>;
   makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
   delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
 }
@@ -118,8 +104,7 @@ export class ServiceEnvironment<
   readonly #streams = new Map<number, Stream>();
   readonly #dataSources = new Map<number, DataSource>();
   readonly #dataSinks = new Map<number, DataSink>();
-  readonly #durableTransports = new Map<number, DurableTransport>();
-  readonly #durableContinuations = new Map<string, DurableContinuationHandler>();
+  readonly #managedDataConnectors = new Map<number, ManagedDataConnector>();
   readonly #storages = new Set<Storage>();
   readonly #buildables = new Set<RuntimeBuildable>();
   readonly #logger: Logger;
@@ -297,20 +282,20 @@ export class ServiceEnvironment<
     return [...this.#dataSinks.values()];
   }
 
-  public addDurableTransport(transport: DurableTransport): void {
-    const existing = this.#durableTransports.get(transport.id);
-    if (existing !== undefined && existing !== transport) {
-      throw new Error(`durable transport ${String(transport.id)} is already registered`);
+  public addManagedDataConnector(connector: ManagedDataConnector): void {
+    const existing = this.#managedDataConnectors.get(connector.id);
+    if (existing !== undefined && existing !== connector) {
+      throw new Error(`managed data connector ${String(connector.id)} is already registered`);
     }
-    this.#durableTransports.set(transport.id, transport);
+    this.#managedDataConnectors.set(connector.id, connector);
   }
 
-  public durableTransportById(id: number): DurableTransport | undefined {
-    return this.#durableTransports.get(id);
+  public managedDataConnectorById(id: number): ManagedDataConnector | undefined {
+    return this.#managedDataConnectors.get(id);
   }
 
-  public durableTransports(): readonly DurableTransport[] {
-    return [...this.#durableTransports.values()];
+  public managedDataConnectors(): readonly ManagedDataConnector[] {
+    return [...this.#managedDataConnectors.values()];
   }
 
   public log(): Logger {
@@ -368,46 +353,7 @@ export class ServiceEnvironment<
       this.#tracing?.tracer(this.serviceConfig().name),
       traceAttributes
     );
-    if (
-      this.runtimeConfig().streamById(source.id)?.type !== "Delay" ||
-      !isTypedStream<T>(source)
-    ) {
-      return instrumented;
-    }
-    this.registerDurableContinuation(source.name, consumer.name, async (context, continuation) => {
-      await instrumented.consume(context, source.serde().deserialize(continuation.payload));
-    });
-    return new DurableDelayCaller(instrumented, source.name, consumer.name, source.serde());
-  }
-
-  public registerDurableContinuation(
-    fromName: string,
-    toName: string,
-    handler: DurableContinuationHandler
-  ): void {
-    const key = durableContinuationKey(fromName, toName);
-    if (this.#durableContinuations.has(key)) {
-      throw new Error(`durable continuation ${fromName}->${toName} is already registered`);
-    }
-    this.#durableContinuations.set(key, handler);
-  }
-
-  public async resumeDurableContinuation(
-    context: MessageContext,
-    continuation: DurableContinuation
-  ): Promise<void> {
-    if (continuation.fromName === "" || continuation.toName === "" || continuation.callId === "") {
-      throw new Error("invalid durable continuation envelope");
-    }
-    const handler = this.#durableContinuations.get(
-      durableContinuationKey(continuation.fromName, continuation.toName)
-    );
-    if (handler === undefined) {
-      throw new Error(
-        `durable continuation ${continuation.fromName}->${continuation.toName} is not registered`
-      );
-    }
-    await handler(context, continuation);
+    return instrumented;
   }
 
   public makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void {
@@ -506,10 +452,6 @@ class InstrumentedCaller<T> implements Caller<T> {
 
 function isTypedStream<T>(stream: Stream): stream is TypedStream<T> {
   return "consumers" in stream && typeof stream.consumers === "function";
-}
-
-function durableContinuationKey(fromName: string, toName: string): string {
-  return `${fromName}\0${toName}`;
 }
 
 function graphLinkKey(from: number, to: number): string {

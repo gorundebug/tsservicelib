@@ -100,8 +100,7 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
         serviceId,
         taskPools: pools.task,
         priorityTaskPools: pools.priority,
-        tasks,
-        durableTransport: (id) => this.#environment.durableTransportById(id)
+        tasks
       });
     this.#environment = new ServiceEnvironment(
       config,
@@ -183,11 +182,11 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     for (const dataSink of this.#environment.dataSinks()) {
       this.#runtime.register({ category: "dataSink", name: dataSink.name, lifecycle: dataSink });
     }
-    for (const transport of this.#environment.durableTransports()) {
+    for (const connector of this.#environment.managedDataConnectors()) {
       this.#runtime.register({
-        category: "durableTransport",
-        name: transport.name,
-        lifecycle: transport
+        category: "managedDataConnector",
+        name: connector.name,
+        lifecycle: connector
       });
     }
     for (const [index, storage] of this.#environment.storages().entries()) {
@@ -252,12 +251,7 @@ function makeRuntimePools(
   const task = new Map<string, TaskPool>();
   const priority = new Map<string, PriorityTaskPool>();
   const use = (semantics: CallSemanticsGroup | undefined): void => {
-    if (
-      semantics === undefined ||
-      "functionCall" in semantics ||
-      "parallelCall" in semantics ||
-      "durableCall" in semantics
-    ) {
+    if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
       return;
     }
     const poolName =

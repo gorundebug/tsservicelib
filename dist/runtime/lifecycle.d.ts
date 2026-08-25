@@ -6,7 +6,7 @@ export interface Lifecycle {
 export interface AdmissionLifecycle extends Lifecycle {
     stopAdmission(context: Context): Promise<void>;
 }
-export type ComponentCategory = "dataSource" | "dataSink" | "durableTransport" | "storage" | "delayPool" | "taskPool" | "priorityTaskPool" | "component" | "httpServer" | "telemetry";
+export type ComponentCategory = "dataSource" | "dataSink" | "managedDataConnector" | "storage" | "delayPool" | "taskPool" | "priorityTaskPool" | "component" | "httpServer" | "telemetry";
 export interface RuntimeComponent {
     readonly category: ComponentCategory;
     readonly name: string;

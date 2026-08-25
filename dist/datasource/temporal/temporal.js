@@ -39,7 +39,7 @@ class TemporalEndpointConsumer {
                 }
             });
         }
-        connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal, durableCallContext) => this.activate(envelope, context, cancellationSignal, durableCallContext));
+        connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal) => this.activate(envelope, context, cancellationSignal));
     }
     endpoint() {
         return this.#endpoint;
@@ -47,7 +47,7 @@ class TemporalEndpointConsumer {
     consume(context, value) {
         return this.#activateInput(context, value);
     }
-    async activate(envelope, parent, cancellationSignal, durableCallContext) {
+    async activate(envelope, parent, cancellationSignal) {
         if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
             throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
         }
@@ -55,9 +55,6 @@ class TemporalEndpointConsumer {
             .withStreamId(envelope.streamId || newStreamId())
             .withPriority(envelope.priority);
         context = applyDataSourceEndpointTracing(context, this.#stream.runtimeEnvironment(), this.#endpoint.id);
-        if (durableCallContext !== undefined) {
-            context = context.withDurableCallContext(durableCallContext);
-        }
         if (cancellationSignal !== undefined) {
             context = context.withExternalCancellation(cancellationSignal);
         }

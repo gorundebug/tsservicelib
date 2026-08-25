@@ -3,16 +3,11 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import type {
-  servicelibDurableLinkV1,
-  servicelibTemporalEndpointV1
-} from "../src/datasource/temporal/workflows.js";
+import type { servicelibTemporalEndpointV1 } from "../src/datasource/temporal/workflows.js";
 import type { scheduledTimeFromWorkflowId as scheduledTime } from "../src/datasource/temporal/scheduled-time.js";
 
 interface WorkflowModule {
-  readonly servicelibDurableLinkV1: typeof servicelibDurableLinkV1;
   readonly servicelibTemporalEndpointV1: typeof servicelibTemporalEndpointV1;
-  readonly "servicelib.durable-link.v1": typeof servicelibDurableLinkV1;
   readonly "servicelib.temporal-endpoint.v1": typeof servicelibTemporalEndpointV1;
 }
 
@@ -20,7 +15,6 @@ await test("Temporal workflow bundle exports the stable cross-language contract 
   const moduleUrl = pathToFileURL(resolve("dist/datasource/temporal/workflows.js")).href;
   const loaded: unknown = await import(moduleUrl);
   const workflows = loaded as WorkflowModule;
-  assert.equal(workflows["servicelib.durable-link.v1"], workflows.servicelibDurableLinkV1);
   assert.equal(
     workflows["servicelib.temporal-endpoint.v1"],
     workflows.servicelibTemporalEndpointV1

@@ -1,7 +1,6 @@
 import { setCallerMetadata } from "./caller-metadata.js";
 import { ParallelCaller, PriorityTaskPoolCaller, TaskPoolCaller } from "./caller.js";
 import { FunctionCaller } from "./stream.js";
-import { DurableCaller, makeDurableLinkHandler } from "./durable.js";
 /** Resolves the immutable graph link semantics once when a caller is built. */
 export class RuntimeCallerFactory {
     #options;
@@ -37,27 +36,10 @@ export class RuntimeCallerFactory {
             }
             return setCallerMetadata(new PriorityTaskPoolCaller(pool, consumer, semantics.priorityTaskPool.priority, this.#options.onRejected), { type: "prioritytaskpool", taskPoolName: pool.name() });
         }
-        if ("durableCall" in semantics) {
-            const transport = this.#options.durableTransport?.(semantics.durableCall.idDataConnector);
-            if (transport === undefined) {
-                throw new Error(`durable caller for Temporal connector ${String(semantics.durableCall.idDataConnector)} is not registered`);
-            }
-            if (!isTypedStream(source)) {
-                throw new Error(`durable source stream ${source.name} has no serde`);
-            }
-            const link = { from: source.id, to: consumer.id };
-            transport.registerLink(link, makeDurableLinkHandler(consumer, source.serde()));
-            return setCallerMetadata(new DurableCaller(link, transport, source.serde()), {
-                type: "durable"
-            });
-        }
         return setCallerMetadata(new ParallelCaller(this.#options.tasks, consumer), {
             type: "parallel"
         });
     }
-}
-function isTypedStream(stream) {
-    return "serde" in stream && typeof stream.serde === "function";
 }
 const DEFAULT_CALL_SEMANTICS = { functionCall: { async: false } };
 //# sourceMappingURL=caller-factory.js.map

@@ -41,7 +41,6 @@ interface RecordValue extends Record<string, unknown> {
   readonly taskPool?: unknown;
   readonly priorityTaskPool?: unknown;
   readonly parallelCall?: unknown;
-  readonly durableCall?: unknown;
   readonly async?: unknown;
   readonly poolName?: unknown;
   readonly priority?: unknown;
@@ -260,17 +259,6 @@ function callSemantics(value: unknown, path: string): CallSemanticsGroup | undef
         return { priorityTaskPool: { poolName: "", priority: 0 } };
       case 5:
         return { parallelCall: {} };
-      case 6:
-        return {
-          durableCall: {
-            idDataConnector: 0,
-            taskQueue: "",
-            workflowExecutionTimeout: 0,
-            activityStartToCloseTimeout: 0,
-            activityHeartbeatTimeout: 0,
-            maximumAttempts: 0
-          }
-        };
       default:
         throw new Error(`${path} has an unknown call semantics value`);
     }
@@ -298,32 +286,6 @@ function callSemantics(value: unknown, path: string): CallSemanticsGroup | undef
   if ("parallelCall" in source) {
     record(source.parallelCall, `${path}.parallelCall`);
     return { parallelCall: {} };
-  }
-  if ("durableCall" in source) {
-    const config = record(source.durableCall, `${path}.durableCall`);
-    return {
-      durableCall: {
-        idDataConnector: integer(config.idDataConnector, `${path}.durableCall.idDataConnector`),
-        taskQueue: optionalString(config.taskQueue, `${path}.durableCall.taskQueue`) ?? "",
-        workflowExecutionTimeout:
-          optionalInteger(
-            config.workflowExecutionTimeout,
-            `${path}.durableCall.workflowExecutionTimeout`
-          ) ?? 0,
-        activityStartToCloseTimeout:
-          optionalInteger(
-            config.activityStartToCloseTimeout,
-            `${path}.durableCall.activityStartToCloseTimeout`
-          ) ?? 0,
-        activityHeartbeatTimeout:
-          optionalInteger(
-            config.activityHeartbeatTimeout,
-            `${path}.durableCall.activityHeartbeatTimeout`
-          ) ?? 0,
-        maximumAttempts:
-          optionalInteger(config.maximumAttempts, `${path}.durableCall.maximumAttempts`) ?? 0
-      }
-    };
   }
   throw new Error(`${path} must select exactly one call semantics`);
 }
@@ -803,20 +765,7 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
   return { ...common, ...functions };
 }
 
-const linkKeys = new Set([
-  "from",
-  "to",
-  "callSemantics",
-  "poolName",
-  "priority",
-  "async",
-  "idDataConnector",
-  "taskQueue",
-  "workflowExecutionTimeout",
-  "activityStartToCloseTimeout",
-  "activityHeartbeatTimeout",
-  "maximumAttempts"
-]);
+const linkKeys = new Set(["from", "to", "callSemantics", "poolName", "priority", "async"]);
 
 function parseLink(source: RecordValue, path: string): LinkConfig {
   const semantics = callSemantics(source.callSemantics, `${path}.callSemantics`);
@@ -830,35 +779,6 @@ function parseLink(source: RecordValue, path: string): LinkConfig {
       priorityTaskPool: {
         poolName: stringValue(source.poolName, `${path}.poolName`),
         priority: integer(source.priority, `${path}.priority`)
-      }
-    };
-  if (semantics !== undefined && "durableCall" in semantics)
-    effective = {
-      durableCall: {
-        idDataConnector:
-          source.idDataConnector === undefined
-            ? semantics.durableCall.idDataConnector
-            : integer(source.idDataConnector, `${path}.idDataConnector`),
-        taskQueue:
-          source.taskQueue === undefined
-            ? semantics.durableCall.taskQueue
-            : stringValue(source.taskQueue, `${path}.taskQueue`),
-        workflowExecutionTimeout:
-          source.workflowExecutionTimeout === undefined
-            ? semantics.durableCall.workflowExecutionTimeout
-            : integer(source.workflowExecutionTimeout, `${path}.workflowExecutionTimeout`),
-        activityStartToCloseTimeout:
-          source.activityStartToCloseTimeout === undefined
-            ? semantics.durableCall.activityStartToCloseTimeout
-            : integer(source.activityStartToCloseTimeout, `${path}.activityStartToCloseTimeout`),
-        activityHeartbeatTimeout:
-          source.activityHeartbeatTimeout === undefined
-            ? semantics.durableCall.activityHeartbeatTimeout
-            : integer(source.activityHeartbeatTimeout, `${path}.activityHeartbeatTimeout`),
-        maximumAttempts:
-          source.maximumAttempts === undefined
-            ? semantics.durableCall.maximumAttempts
-            : integer(source.maximumAttempts, `${path}.maximumAttempts`)
       }
     };
   return {

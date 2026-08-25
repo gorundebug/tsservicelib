@@ -9,8 +9,7 @@ interface ContextState {
 }
 /** Minimal structural contract kept by MessageContext without a module cycle. */
 export interface DurableCallExecutionContext {
-    readonly parentCallId: string;
-    occurrence(key: string): number;
+    readonly messageId: string;
 }
 export declare class Context {
     #private;

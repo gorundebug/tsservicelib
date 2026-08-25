@@ -16,16 +16,38 @@ class TemporalDataSink extends OutputDataSink {
         return Promise.resolve();
     }
 }
+class DirectTemporalEndpointHandler {
+    beginRequest(context, stream) {
+        void context;
+        void stream;
+        return Promise.resolve({});
+    }
+    getMessageId(context, stream, state, value) {
+        void stream;
+        void state;
+        void value;
+        return context.streamId() ?? "";
+    }
+    endRequest(context, stream, error, state) {
+        void context;
+        void stream;
+        void error;
+        void state;
+        return Promise.resolve();
+    }
+}
 class TemporalSinkConsumer {
     sinkEndpoint;
     connector;
     stream;
+    handler;
     withResult;
     #tracer;
-    constructor(sinkEndpoint, connector, stream, withResult) {
+    constructor(sinkEndpoint, connector, stream, handler, withResult) {
         this.sinkEndpoint = sinkEndpoint;
         this.connector = connector;
         this.stream = stream;
+        this.handler = handler;
         this.withResult = withResult;
         this.#tracer = stream
             .runtimeEnvironment()
@@ -47,14 +69,18 @@ class TemporalSinkConsumer {
         }
         const started = this.sinkEndpoint.onRequestStart(context);
         let failure;
+        let state;
+        let began = false;
         try {
-            const executionId = context.streamId() ?? newStreamId();
+            state = await this.handler.beginRequest(context, this.stream);
+            began = true;
+            const messageId = this.handler.getMessageId(context, this.stream, state, value) || newStreamId();
             const remainingMs = context.remainingMs();
             const envelope = {
                 version: 1,
                 endpointId: this.sinkEndpoint.id,
-                executionId,
-                streamId: context.streamId() ?? executionId,
+                messageId,
+                streamId: context.streamId() ?? messageId,
                 priority: context.priority() ?? 0,
                 deadlineUnixMillis: remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
                 scheduled: false,
@@ -75,18 +101,26 @@ class TemporalSinkConsumer {
             throw failure;
         }
         finally {
+            if (began)
+                await this.handler.endRequest(context, this.stream, failure, state);
             this.sinkEndpoint.onRequestEnd(context, started, failure);
             span?.end();
         }
     }
 }
 export function makeTemporalSinkEndpointConsumer(stream) {
-    return makeSinkConsumer(stream, false);
+    return makeTemporalSinkEndpointConsumerWithHandler(stream, new DirectTemporalEndpointHandler());
+}
+export function makeTemporalSinkEndpointConsumerWithHandler(stream, handler) {
+    return makeSinkConsumer(stream, handler, false);
 }
 export function makeTemporalSinkEndpointConsumerWithResult(stream) {
-    return makeSinkConsumer(stream, true);
+    return makeTemporalSinkEndpointConsumerWithResultHandler(stream, new DirectTemporalEndpointHandler());
 }
-function makeSinkConsumer(stream, withResult) {
+export function makeTemporalSinkEndpointConsumerWithResultHandler(stream, handler) {
+    return makeSinkConsumer(stream, handler, true);
+}
+function makeSinkConsumer(stream, handler, withResult) {
     const environment = stream.runtimeEnvironment();
     const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
     if (endpointConfig === undefined) {
@@ -98,7 +132,7 @@ function makeSinkConsumer(stream, withResult) {
         throw new Error(`Temporal endpoint ${endpointConfig.name} already exists`);
     }
     const endpoint = new DataSinkEndpoint(dataSink, endpointConfig.id);
-    const consumer = new TemporalSinkConsumer(endpoint, connector, stream, withResult);
+    const consumer = new TemporalSinkConsumer(endpoint, connector, stream, handler, withResult);
     connector.registerEndpointSubmission(endpointConfig.id);
     endpoint.addEndpointConsumer(consumer);
     dataSink.addEndpoint(endpoint);

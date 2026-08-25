@@ -1,4 +1,4 @@
-import { ConsumedStream, beginDurableDelay, errorFromUnknown, spanError, stringAttribute } from "../runtime/index.js";
+import { ConsumedStream, errorFromUnknown, spanError, stringAttribute } from "../runtime/index.js";
 export class DelayStream extends ConsumedStream {
     #function;
     constructor(config, source, function_) {
@@ -23,15 +23,6 @@ export class DelayStream extends ConsumedStream {
             throw error;
         }
         if (duration <= 0) {
-            try {
-                await this.emit(spanContext, value);
-            }
-            finally {
-                started?.span.end();
-            }
-            return;
-        }
-        if (beginDurableDelay(spanContext, duration)) {
             try {
                 await this.emit(spanContext, value);
             }

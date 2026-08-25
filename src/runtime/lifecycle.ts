@@ -12,7 +12,7 @@ export interface AdmissionLifecycle extends Lifecycle {
 export type ComponentCategory =
   | "dataSource"
   | "dataSink"
-  | "durableTransport"
+  | "managedDataConnector"
   | "storage"
   | "delayPool"
   | "taskPool"

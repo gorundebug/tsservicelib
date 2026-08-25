@@ -14,7 +14,6 @@ import {
   type Completion,
   type Context,
   type Consumer,
-  type DurableCallContext,
   type InputEndpoint,
   type InputEndpointConsumer,
   type MessageContext,
@@ -83,10 +82,8 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
         }
       });
     }
-    connector.registerEndpoint(
-      endpoint.id,
-      (envelope, context, cancellationSignal, durableCallContext) =>
-        this.activate(envelope, context, cancellationSignal, durableCallContext)
+    connector.registerEndpoint(endpoint.id, (envelope, context, cancellationSignal) =>
+      this.activate(envelope, context, cancellationSignal)
     );
   }
 
@@ -101,8 +98,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
   public async activate(
     envelope: EndpointEnvelope,
     parent: MessageContext,
-    cancellationSignal?: AbortSignal,
-    durableCallContext?: DurableCallContext
+    cancellationSignal?: AbortSignal
   ): Promise<EndpointResult> {
     if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
       throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
@@ -115,9 +111,6 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
       this.#stream.runtimeEnvironment(),
       this.#endpoint.id
     );
-    if (durableCallContext !== undefined) {
-      context = context.withDurableCallContext(durableCallContext);
-    }
     if (cancellationSignal !== undefined) {
       context = context.withExternalCancellation(cancellationSignal);
     }

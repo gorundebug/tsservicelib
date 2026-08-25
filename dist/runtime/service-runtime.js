@@ -5,7 +5,7 @@ import { RuntimeTaskRegistry } from "./task-registry.js";
 const START_ORDER = [
     "dataSource",
     "dataSink",
-    "durableTransport",
+    "managedDataConnector",
     "storage",
     "delayPool",
     "taskPool",
@@ -16,7 +16,7 @@ const START_ORDER = [
 ];
 const ADMISSION_CATEGORIES = new Set([
     "dataSource",
-    "durableTransport",
+    "managedDataConnector",
     "delayPool",
     "taskPool",
     "priorityTaskPool",
@@ -118,7 +118,7 @@ export class ServiceRuntime {
         }
         finally {
             await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink" ||
-                item.category === "durableTransport" ||
+                item.category === "managedDataConnector" ||
                 item.category === "storage"), context);
             await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), context);
             this.#started.length = 0;
@@ -149,7 +149,7 @@ export class ServiceRuntime {
     }
     async stopAdmission(components, context) {
         const results = await Promise.allSettled(components.toReversed().map(async (item) => {
-            if (item.category === "durableTransport" && "stopAdmission" in item.lifecycle) {
+            if (item.category === "managedDataConnector" && "stopAdmission" in item.lifecycle) {
                 await item.lifecycle.stopAdmission(context);
                 return;
             }

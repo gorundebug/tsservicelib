@@ -258,11 +258,7 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           );
         }
       }
-      if (
-        "schedule" in endpoint &&
-        "timezone" in endpoint &&
-        endpoint.timezone !== "UTC"
-      ) {
+      if ("schedule" in endpoint && "timezone" in endpoint && endpoint.timezone !== "UTC") {
         throw new Error(`scheduled endpoint ${endpoint.name} requires timezone UTC`);
       }
     }
@@ -281,27 +277,6 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
 
   private validateCallSemantics(semantics: CallSemanticsGroup | undefined, owner: string): void {
     if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
-      return;
-    }
-    if ("durableCall" in semantics) {
-      const connector = this.#connectors.byId.get(semantics.durableCall.idDataConnector);
-      if (connector === undefined) {
-        throw new Error(
-          `${owner} references missing Temporal data connector ${String(semantics.durableCall.idDataConnector)}`
-        );
-      }
-      if (connector.type !== 6) {
-        throw new Error(`${owner} requires a Temporal data connector`);
-      }
-      if (semantics.durableCall.taskQueue === "") {
-        throw new Error(`${owner} DurableCall requires taskQueue`);
-      }
-      if (semantics.durableCall.activityStartToCloseTimeout < 1) {
-        throw new Error(`${owner} DurableCall requires activityStartToCloseTimeout`);
-      }
-      if (semantics.durableCall.maximumAttempts < 1) {
-        throw new Error(`${owner} DurableCall requires maximumAttempts`);
-      }
       return;
     }
     const poolName =

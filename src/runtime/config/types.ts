@@ -398,21 +398,11 @@ export interface PriorityTaskPoolCallSemanticsConfig {
 
 export type ParallelCallSemanticsConfig = Readonly<Record<string, never>>;
 
-export interface DurableCallSemanticsConfig {
-  readonly idDataConnector: number;
-  readonly taskQueue: string;
-  readonly workflowExecutionTimeout: number;
-  readonly activityStartToCloseTimeout: number;
-  readonly activityHeartbeatTimeout: number;
-  readonly maximumAttempts: number;
-}
-
 export type CallSemanticsGroup =
   | { readonly functionCall: FunctionCallSemanticsConfig }
   | { readonly taskPool: TaskPoolCallSemanticsConfig }
   | { readonly priorityTaskPool: PriorityTaskPoolCallSemanticsConfig }
-  | { readonly parallelCall: ParallelCallSemanticsConfig }
-  | { readonly durableCall: DurableCallSemanticsConfig };
+  | { readonly parallelCall: ParallelCallSemanticsConfig };
 
 export interface LinkConfig {
   readonly from: number;

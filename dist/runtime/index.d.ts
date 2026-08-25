@@ -7,7 +7,6 @@ export * from "./context.js";
 export * from "./data-connector.js";
 export * from "./data-sink.js";
 export * from "./data-source.js";
-export * from "./durable.js";
 export * from "./durable-call-context.js";
 export * from "./datastruct/index.js";
 export * from "./errors.js";

@@ -257,14 +257,6 @@ export interface PriorityTaskPoolCallSemanticsConfig {
     readonly priority: number;
 }
 export type ParallelCallSemanticsConfig = Readonly<Record<string, never>>;
-export interface DurableCallSemanticsConfig {
-    readonly idDataConnector: number;
-    readonly taskQueue: string;
-    readonly workflowExecutionTimeout: number;
-    readonly activityStartToCloseTimeout: number;
-    readonly activityHeartbeatTimeout: number;
-    readonly maximumAttempts: number;
-}
 export type CallSemanticsGroup = {
     readonly functionCall: FunctionCallSemanticsConfig;
 } | {
@@ -273,8 +265,6 @@ export type CallSemanticsGroup = {
     readonly priorityTaskPool: PriorityTaskPoolCallSemanticsConfig;
 } | {
     readonly parallelCall: ParallelCallSemanticsConfig;
-} | {
-    readonly durableCall: DurableCallSemanticsConfig;
 };
 export interface LinkConfig {
     readonly from: number;
