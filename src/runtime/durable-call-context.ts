@@ -28,6 +28,11 @@ export interface DurableCallContextOptions {
 
 export class DurableCallContextError extends Error {}
 export class DurableCallHeartbeatAfterCompletionError extends DurableCallContextError {}
+export class TemporalContinueAsNewRequest extends Error {
+  public constructor(public readonly nextInput: unknown) {
+    super("Temporal Continue-As-New");
+  }
+}
 
 /** Processing-side state for one Temporal endpoint Activity. */
 export class DurableCallContext {
@@ -81,6 +86,16 @@ export class DurableCallContext {
     return true;
   }
 
+  public continueAsNew(nextInput: unknown): never {
+    if (this.executionType !== "Workflow") {
+      throw new DurableCallContextError("Temporal Continue-As-New requires a Workflow endpoint");
+    }
+    if (this.#closed) {
+      throw new DurableCallContextError("Temporal Continue-As-New after Workflow completion");
+    }
+    throw new TemporalContinueAsNewRequest(nextInput);
+  }
+
   public close(error?: Error): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -106,6 +121,15 @@ export class DurableCallContext {
 export function durableCallHeartbeat(context: MessageContext, message: unknown): void {
   const durable = context.durableCallContext();
   if (durable instanceof DurableCallContext) durable.heartbeat(message);
+}
+
+/** Terminate the current Workflow run with a new typed endpoint input. */
+export function temporalContinueAsNew(context: MessageContext, nextInput: unknown): never {
+  const durable = context.durableCallContext();
+  if (!(durable instanceof DurableCallContext)) {
+    throw new DurableCallContextError("Temporal Continue-As-New requires a Workflow endpoint");
+  }
+  return durable.continueAsNew(nextInput);
 }
 
 /** Returns true when a Temporal Workflow timer handled the delay. */
@@ -148,6 +172,10 @@ export async function runDurableCallWorkflow<T>(
     durable.close();
     return result;
   } catch (error: unknown) {
+    if (error instanceof TemporalContinueAsNewRequest) {
+      durable.close();
+      throw error;
+    }
     const failure = errorFromUnknown(error);
     durable.close(failure);
     throw failure;

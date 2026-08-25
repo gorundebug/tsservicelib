@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   DurableCallContext,
+  DurableCallContextError,
   DurableCallHeartbeatAfterCompletionError,
   MessageContext,
   SpanStatusCode,
@@ -10,12 +11,34 @@ import {
   durableCallDelay,
   durableCallHeartbeat,
   runDurableCallActivity,
-  runDurableCallWorkflow
+  runDurableCallWorkflow,
+  TemporalContinueAsNewRequest,
+  temporalContinueAsNew
 } from "@gorundebug/tsservicelib/runtime";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
 
 await test("heartbeat outside Temporal is a silent no-op", () => {
   durableCallHeartbeat(new MessageContext(), "ignored");
+});
+
+await test("Continue-As-New outside a Workflow is rejected", () => {
+  assert.throws(() => temporalContinueAsNew(new MessageContext(), "next"), DurableCallContextError);
+});
+
+await test("Continue-As-New is a successful terminal Workflow outcome", async () => {
+  const events: string[] = [];
+  const durable = new DurableCallContext("message-2", "Workflow", {
+    diagnostics: (event) => events.push(event)
+  });
+  const context = new MessageContext().withDurableCallContext(durable);
+  await assert.rejects(
+    runDurableCallWorkflow(durable, () => {
+      temporalContinueAsNew(context, "next-run");
+    }),
+    (error: unknown) =>
+      error instanceof TemporalContinueAsNewRequest && error.nextInput === "next-run"
+  );
+  assert.deepEqual(events, ["success"]);
 });
 
 await test("Activity returns the handler result and closes successfully", async () => {

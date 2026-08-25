@@ -1,6 +1,10 @@
-import { scheduleActivity, sleep, workflowInfo } from "@temporalio/workflow";
+import { continueAsNew, scheduleActivity, sleep, workflowInfo } from "@temporalio/workflow";
 
-import { DurableCallContext, runDurableCallWorkflow } from "../../runtime/durable-call-context.js";
+import {
+  DurableCallContext,
+  TemporalContinueAsNewRequest,
+  runDurableCallWorkflow
+} from "../../runtime/durable-call-context.js";
 import type { Completion, Consumer } from "../../runtime/stream.js";
 import type { TypedInputStream } from "../../runtime/data-source.js";
 import type { MessageContext } from "../../runtime/context.js";
@@ -100,6 +104,17 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
         "Temporal Workflow execution and graph cleanup both failed",
         { cause: cleanupError }
       );
+    }
+    if (error instanceof TemporalContinueAsNewRequest) {
+      const nextEnvelope: EndpointWireEnvelope = {
+        ...envelope,
+        scheduled: false,
+        scheduleId: "",
+        scheduledAtUnixMillis: 0,
+        firedAtUnixMillis: 0,
+        payload: Array.from(endpoint.stream.serde().serialize(error.nextInput as T))
+      };
+      return continueAsNew({ ...endpoint.request, envelope: nextEnvelope });
     }
     throw error;
   }
