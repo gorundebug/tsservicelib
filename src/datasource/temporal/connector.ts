@@ -79,6 +79,9 @@ export type TemporalEndpointHandler = (
 
 interface LinkRegistration {
   readonly link: DurableLinkId;
+  readonly serviceName: string;
+  readonly sourceName: string;
+  readonly targetName: string;
   readonly activityType: string;
   readonly handler: DurableLinkHandler;
 }
@@ -125,9 +128,17 @@ export class TemporalConnector implements DurableTransport {
       throw new Error(`durable link ${key} does not belong to connector ${this.name}`);
     }
     const serviceName = this.#environment.serviceConfig().name;
+    const source = this.#environment.runtimeConfig().streamById(link.from);
+    const target = this.#environment.runtimeConfig().streamById(link.to);
+    if (source === undefined || target === undefined) {
+      throw new Error(`durable link ${key} references missing stream configuration`);
+    }
     this.#links.set(key, {
       link,
-      activityType: `${serviceName}.durable.${String(link.from)}.${String(link.to)}.v1`,
+      serviceName,
+      sourceName: source.name,
+      targetName: target.name,
+      activityType: `${identityComponent(serviceName)}.durable.${identityComponent(source.name)}.${identityComponent(target.name)}.v1`,
       handler
     });
   }
@@ -248,11 +259,10 @@ export class TemporalConnector implements DurableTransport {
       priority: normalizeTemporalPriority(envelope.priority),
       envelope: durableEnvelopeToWire(envelope)
     };
-    const serviceName = this.#environment.serviceConfig().name;
-    const owner = `${serviceName}/link/${String(link.from)}/${String(link.to)}/v1`;
+    const owner = `${identityComponent(registration.serviceName)}/link/${identityComponent(registration.sourceName)}/${identityComponent(registration.targetName)}/v1`;
     const handle = await this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
       args: [request],
-      workflowId: `${serviceName}/durable/${String(link.from)}/${String(link.to)}/${envelope.callId}`,
+      workflowId: `${identityComponent(registration.serviceName)}/durable/${identityComponent(registration.sourceName)}/${identityComponent(registration.targetName)}/${identityComponent(envelope.callId)}`,
       taskQueue: policy.taskQueue,
       ...(policy.workflowExecutionTimeout > 0
         ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
@@ -278,10 +288,10 @@ export class TemporalConnector implements DurableTransport {
     const config = this.endpointConfig(endpointId);
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
     const request = endpointRequest(registration, config, envelope);
-    const owner = `${this.name}/endpoint/${config.name}/v1`;
+    const owner = `${identityComponent(this.name)}/endpoint/${identityComponent(config.name)}/v1`;
     const handle = await this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
       args: [request],
-      workflowId: `${this.name}/endpoint/${config.name}/${envelope.executionId}`,
+      workflowId: `${identityComponent(this.name)}/endpoint/${identityComponent(config.name)}/${identityComponent(envelope.executionId)}`,
       taskQueue: config.taskQueue,
       ...(config.workflowExecutionTimeout > 0
         ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
@@ -379,7 +389,7 @@ export class TemporalConnector implements DurableTransport {
   private async ensureSchedule(config: TemporalEndpointConfig): Promise<void> {
     const registration = this.#endpoints.get(config.id);
     if (registration?.handler === undefined) return;
-    const owner = `${this.name}/endpoint/${config.name}/v1`;
+    const owner = `${identityComponent(this.name)}/endpoint/${identityComponent(config.name)}/v1`;
     const request = endpointRequest(registration, config, {
       version: 1,
       endpointId: config.id,
@@ -441,7 +451,7 @@ export class TemporalConnector implements DurableTransport {
     }
     return {
       endpointId,
-      activityType: `${this.name}.endpoint.${config.name}.v1`
+      activityType: `${identityComponent(this.name)}.endpoint.${identityComponent(config.name)}.v1`
     };
   }
 
@@ -554,6 +564,13 @@ function bytesFromWire(value: readonly number[]): Uint8Array {
 
 function ownershipMemo(owner: string, callId: string): Record<string, unknown> {
   return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: callId };
+}
+
+function identityComponent(value: string): string {
+  return encodeURIComponent(value).replaceAll(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
 }
 
 async function validateWorkflowOwnership(
