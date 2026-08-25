@@ -294,7 +294,7 @@ export class TemporalConnector implements ManagedDataConnector {
     context: Context
   ): DurableCallDiagnostics {
     return (event, failure): void => {
-      this.#activityEvents.with({ boundary, target, event }).inc(context);
+      this.#activityEvents.with({ connector: this.name, boundary, target, event }).inc(context);
       if (failure === undefined) return;
       const fields = [
         str("connector", this.name),
