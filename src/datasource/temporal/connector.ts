@@ -69,6 +69,10 @@ const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress: string | undefined;
 
+export function temporalCronExpression(expression: string): string {
+  return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
+}
+
 function installSdkMetricsRuntime(): void {
   const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
   if (address === undefined || address === "") return;
@@ -506,7 +510,10 @@ export class TemporalConnector implements DurableTransport {
     try {
       await this.client().schedule.create({
         scheduleId: config.scheduleId,
-        spec: { cronExpressions: [config.schedule], timezone: config.timezone },
+        spec: {
+          cronExpressions: [temporalCronExpression(config.schedule)],
+          timezone: config.timezone
+        },
         action: {
           type: "startWorkflow",
           workflowType: ENDPOINT_WORKFLOW_TYPE,

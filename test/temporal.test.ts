@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { temporalCronExpression } from "@gorundebug/tsservicelib/datasource/temporal";
+
 import {
   DurableCaller,
   DurableCallContext,
@@ -18,6 +20,10 @@ import {
   type StreamConfig,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+
+await test("Temporal cron preserves portable minute semantics", () => {
+  assert.equal(temporalCronExpression("  */5   * * * * "), "0 */5 * * * *");
+});
 
 class RecordingTransport implements DurableTransport {
   public readonly id = 7;

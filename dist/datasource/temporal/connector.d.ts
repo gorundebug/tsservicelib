@@ -3,6 +3,7 @@ import { DurableCallContext } from "../../runtime/durable-call-context.js";
 import type { DurableEnvelope, DurableLinkHandler, DurableLinkId, DurableTransport } from "../../runtime/durable.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
 import { type EndpointEnvelope, type EndpointResult } from "./contracts.js";
+export declare function temporalCronExpression(expression: string): string;
 export type TemporalEndpointHandler = (envelope: EndpointEnvelope, context: MessageContext, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<EndpointResult>;
 export declare class TemporalConnector implements DurableTransport {
     #private;

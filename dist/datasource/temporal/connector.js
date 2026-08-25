@@ -15,6 +15,9 @@ const OWNER = "servicelib.owner";
 const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress;
+export function temporalCronExpression(expression) {
+    return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
+}
 function installSdkMetricsRuntime() {
     const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
     if (address === undefined || address === "")
@@ -374,7 +377,10 @@ export class TemporalConnector {
         try {
             await this.client().schedule.create({
                 scheduleId: config.scheduleId,
-                spec: { cronExpressions: [config.schedule], timezone: config.timezone },
+                spec: {
+                    cronExpressions: [temporalCronExpression(config.schedule)],
+                    timezone: config.timezone
+                },
                 action: {
                     type: "startWorkflow",
                     workflowType: ENDPOINT_WORKFLOW_TYPE,
