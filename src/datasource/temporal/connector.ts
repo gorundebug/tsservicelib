@@ -405,17 +405,10 @@ export class TemporalConnector implements DurableTransport {
         const signal = cancellationSignal();
         const activityContext = currentTemporalActivityMessageContext();
         const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
-        if (!envelope.scheduled) {
-          const result = await handler(envelope, activityContext, signal);
-          return {
-            durable: {},
-            result: { payload: bytesToWire(result.payload) }
-          } satisfies EndpointWireActivityResult;
-        }
         const durable = new DurableCallContext(
           envelope.executionId,
           heartbeat,
-          this.durableDiagnostics("schedule", String(registration.endpointId), activityContext)
+          this.durableDiagnostics("endpoint", String(registration.endpointId), activityContext)
         );
         let result: EndpointResult = { payload: new Uint8Array() };
         const durableResult = await runDurableCallActivity(signal, durable, async () => {

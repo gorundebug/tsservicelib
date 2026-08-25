@@ -290,14 +290,7 @@ export class TemporalConnector {
                 const signal = cancellationSignal();
                 const activityContext = currentTemporalActivityMessageContext();
                 const envelope = endpointEnvelopeFromWire(value);
-                if (!envelope.scheduled) {
-                    const result = await handler(envelope, activityContext, signal);
-                    return {
-                        durable: {},
-                        result: { payload: bytesToWire(result.payload) }
-                    };
-                }
-                const durable = new DurableCallContext(envelope.executionId, heartbeat, this.durableDiagnostics("schedule", String(registration.endpointId), activityContext));
+                const durable = new DurableCallContext(envelope.executionId, heartbeat, this.durableDiagnostics("endpoint", String(registration.endpointId), activityContext));
                 let result = { payload: new Uint8Array() };
                 const durableResult = await runDurableCallActivity(signal, durable, async () => {
                     result = await handler(envelope, activityContext, signal, durable);
