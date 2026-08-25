@@ -57,6 +57,9 @@ export class TemporalConnector {
             .scope("durable_call", { connector: this.name })
             .counterVec("events_total", "Total number of DurableCall Activity lifecycle events");
     }
+    continuationActivityType() {
+        return `${identityName(this.#environment.serviceConfig().name)}.durable_continuation.${identityName(this.name)}.v1`;
+    }
     registerLink(link, handler) {
         if (this.#started)
             throw new Error("cannot register DurableCall after Temporal start");
@@ -195,6 +198,7 @@ export class TemporalConnector {
         const policy = this.linkConfig(link);
         const request = {
             activityType: registration.activityType,
+            continuationActivityType: this.continuationActivityType(),
             activityStartToCloseTimeout: policy.activityStartToCloseTimeout,
             activityHeartbeatTimeout: policy.activityHeartbeatTimeout,
             maximumAttempts: policy.maximumAttempts,
@@ -226,7 +230,7 @@ export class TemporalConnector {
         const config = this.endpointConfig(endpointId);
         if (!config.enabled)
             throw new Error(`Temporal endpoint ${config.name} is disabled`);
-        const request = endpointRequest(registration, config, envelope);
+        const request = endpointRequest(registration, config, envelope, this.continuationActivityType());
         const owner = `${identityName(this.name)}/endpoint/${identityName(config.name)}/v1`;
         const handle = await runWithTemporalSubmissionContext(context, () => this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
             args: [request],
@@ -273,7 +277,8 @@ export class TemporalConnector {
                 const activityContext = currentTemporalActivityMessageContext();
                 const envelope = durableEnvelopeFromWire(value);
                 const durable = new DurableCallContext(envelope.callId, heartbeat, this.durableDiagnostics("link", `${String(registration.link.from)}:${String(registration.link.to)}`, activityContext));
-                await runDurableCallActivity(signal, durable, () => registration.handler(envelope, activityContext, signal, durable));
+                const result = await runDurableCallActivity(signal, durable, () => registration.handler(envelope, activityContext, signal, durable));
+                return durableActivityResultToWire(result);
             };
         }
         for (const registration of this.#endpoints.values()) {
@@ -287,14 +292,37 @@ export class TemporalConnector {
                 const envelope = endpointEnvelopeFromWire(value);
                 if (!envelope.scheduled) {
                     const result = await handler(envelope, activityContext, signal);
-                    return { payload: bytesToWire(result.payload) };
+                    return {
+                        durable: {},
+                        result: { payload: bytesToWire(result.payload) }
+                    };
                 }
                 const durable = new DurableCallContext(envelope.executionId, heartbeat, this.durableDiagnostics("schedule", String(registration.endpointId), activityContext));
                 let result = { payload: new Uint8Array() };
-                await runDurableCallActivity(signal, durable, async () => {
+                const durableResult = await runDurableCallActivity(signal, durable, async () => {
                     result = await handler(envelope, activityContext, signal, durable);
                 });
-                return { payload: bytesToWire(result.payload) };
+                return {
+                    durable: durableActivityResultToWire(durableResult),
+                    result: { payload: bytesToWire(result.payload) }
+                };
+            };
+        }
+        for (const activities of queues.values()) {
+            activities[this.continuationActivityType()] = async (value) => {
+                const continuation = durableContinuationFromWire(value);
+                const signal = cancellationSignal();
+                const durable = new DurableCallContext(continuation.callId, heartbeat, this.durableDiagnostics("continuation", `${continuation.fromName}:${continuation.toName}`, currentTemporalActivityMessageContext()));
+                let context = currentTemporalActivityMessageContext()
+                    .withStreamId(continuation.streamId)
+                    .withPriority(continuation.priority)
+                    .withExternalCancellation(signal)
+                    .withDurableCallContext(durable);
+                if (continuation.deadlineUnixMillis > 0) {
+                    context = context.bounded(Math.max(0, continuation.deadlineUnixMillis - Date.now()));
+                }
+                const result = await runDurableCallActivity(signal, durable, () => this.#environment.resumeDurableContinuation(context, continuation));
+                return durableActivityResultToWire(result);
             };
         }
         return queues;
@@ -323,7 +351,7 @@ export class TemporalConnector {
             scheduledAtUnixMillis: 0,
             firedAtUnixMillis: 0,
             payload: new Uint8Array()
-        });
+        }, this.continuationActivityType());
         try {
             await this.client().schedule.create({
                 scheduleId: config.scheduleId,
@@ -417,14 +445,53 @@ export function makeTemporalConnector(connectorId, environment) {
     environment.addDurableTransport(connector);
     return connector;
 }
-function endpointRequest(registration, config, envelope) {
+function endpointRequest(registration, config, envelope, continuationActivityType) {
     return {
         activityType: registration.activityType,
+        continuationActivityType,
         activityStartToCloseTimeout: config.activityStartToCloseTimeout,
         activityHeartbeatTimeout: config.activityHeartbeatTimeout,
         maximumAttempts: config.maximumAttempts,
         priority: normalizeTemporalPriority(envelope.priority),
         envelope: endpointEnvelopeToWire(envelope)
+    };
+}
+function durableActivityResultToWire(result) {
+    return result.continuation === undefined
+        ? {}
+        : { continuation: durableContinuationToWire(result.continuation) };
+}
+function durableContinuationToWire(continuation) {
+    return { ...continuation, payload: bytesToWire(continuation.payload) };
+}
+function durableContinuationFromWire(value) {
+    if (typeof value !== "object" || value === null) {
+        throw new TypeError("invalid Temporal durable continuation");
+    }
+    const continuation = value;
+    if (continuation["version"] !== 1 ||
+        typeof continuation["fromName"] !== "string" ||
+        continuation["fromName"] === "" ||
+        typeof continuation["toName"] !== "string" ||
+        continuation["toName"] === "" ||
+        typeof continuation["callId"] !== "string" ||
+        continuation["callId"] === "" ||
+        typeof continuation["streamId"] !== "string" ||
+        typeof continuation["priority"] !== "number" ||
+        typeof continuation["deadlineUnixMillis"] !== "number" ||
+        typeof continuation["wakeAtUnixMillis"] !== "number") {
+        throw new TypeError("invalid Temporal durable continuation");
+    }
+    return {
+        version: 1,
+        fromName: continuation["fromName"],
+        toName: continuation["toName"],
+        callId: continuation["callId"],
+        streamId: continuation["streamId"],
+        priority: continuation["priority"],
+        deadlineUnixMillis: continuation["deadlineUnixMillis"],
+        wakeAtUnixMillis: continuation["wakeAtUnixMillis"],
+        payload: bytesFromWire(continuation["payload"])
     };
 }
 function durableEnvelopeToWire(envelope) {

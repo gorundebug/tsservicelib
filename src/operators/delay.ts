@@ -1,5 +1,6 @@
 import {
   ConsumedStream,
+  beginDurableDelay,
   errorFromUnknown,
   spanError,
   stringAttribute,
@@ -40,6 +41,14 @@ export class DelayStream<T> extends ConsumedStream<T> implements TypedStreamCons
       throw error;
     }
     if (duration <= 0) {
+      try {
+        await this.emit(spanContext, value);
+      } finally {
+        started?.span.end();
+      }
+      return;
+    }
+    if (beginDurableDelay(spanContext, duration)) {
       try {
         await this.emit(spanContext, value);
       } finally {

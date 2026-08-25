@@ -1,4 +1,5 @@
 import { callerMetadata } from "../caller-metadata.js";
+import { DurableDelayCaller } from "../durable.js";
 import { DelayPool } from "../pool/index.js";
 import { ServiceHTTPServer } from "../service-http-server.js";
 import { makeDefaultSerdeRegistry } from "../serde/index.js";
@@ -19,6 +20,7 @@ export class ServiceEnvironment {
     #dataSources = new Map();
     #dataSinks = new Map();
     #durableTransports = new Map();
+    #durableContinuations = new Map();
     #storages = new Set();
     #buildables = new Set();
     #logger;
@@ -207,7 +209,32 @@ export class ServiceEnvironment {
                     ? []
                     : [stringAttribute("taskpoolname", metadata.taskPoolName)])
             ];
-        return new InstrumentedCaller(caller, this.makeLinkRecorder(source, consumer), this.#tracing?.tracer(this.serviceConfig().name), traceAttributes);
+        const instrumented = new InstrumentedCaller(caller, this.makeLinkRecorder(source, consumer), this.#tracing?.tracer(this.serviceConfig().name), traceAttributes);
+        if (this.runtimeConfig().streamById(source.id)?.type !== "Delay" ||
+            !isTypedStream(source)) {
+            return instrumented;
+        }
+        this.registerDurableContinuation(source.name, consumer.name, async (context, continuation) => {
+            await instrumented.consume(context, source.serde().deserialize(continuation.payload));
+        });
+        return new DurableDelayCaller(instrumented, source.name, consumer.name, source.serde());
+    }
+    registerDurableContinuation(fromName, toName, handler) {
+        const key = durableContinuationKey(fromName, toName);
+        if (this.#durableContinuations.has(key)) {
+            throw new Error(`durable continuation ${fromName}->${toName} is already registered`);
+        }
+        this.#durableContinuations.set(key, handler);
+    }
+    async resumeDurableContinuation(context, continuation) {
+        if (continuation.fromName === "" || continuation.toName === "" || continuation.callId === "") {
+            throw new Error("invalid durable continuation envelope");
+        }
+        const handler = this.#durableContinuations.get(durableContinuationKey(continuation.fromName, continuation.toName));
+        if (handler === undefined) {
+            throw new Error(`durable continuation ${continuation.fromName}->${continuation.toName} is not registered`);
+        }
+        await handler(context, continuation);
     }
     makeLinkRecorder(source, consumer) {
         const key = graphLinkKey(source.id, consumer.id);
@@ -293,6 +320,9 @@ class InstrumentedCaller {
 }
 function isTypedStream(stream) {
     return "consumers" in stream && typeof stream.consumers === "function";
+}
+function durableContinuationKey(fromName, toName) {
+    return `${fromName}\0${toName}`;
 }
 function graphLinkKey(from, to) {
     return `${String(from)}:${String(to)}`;

@@ -36,8 +36,30 @@ export interface EndpointWireResult {
   readonly payload: readonly number[];
 }
 
+export interface DurableWireContinuation {
+  readonly version: 1;
+  readonly fromName: string;
+  readonly toName: string;
+  readonly callId: string;
+  readonly streamId: string;
+  readonly priority: number;
+  readonly deadlineUnixMillis: number;
+  readonly wakeAtUnixMillis: number;
+  readonly payload: readonly number[];
+}
+
+export interface DurableWireActivityResult {
+  readonly continuation?: DurableWireContinuation;
+}
+
+export interface EndpointWireActivityResult {
+  readonly durable: DurableWireActivityResult;
+  readonly result: EndpointWireResult;
+}
+
 export interface TemporalActivityPolicy {
   readonly activityType: string;
+  readonly continuationActivityType: string;
   readonly activityStartToCloseTimeout: number;
   readonly activityHeartbeatTimeout: number;
   readonly maximumAttempts: number;

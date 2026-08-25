@@ -12,7 +12,8 @@ export const DurableCallEvent = {
   Error: "error",
   MissingOutcome: "missing_outcome",
   DuplicateTerminal: "duplicate_terminal",
-  LateHeartbeat: "late_heartbeat"
+  LateHeartbeat: "late_heartbeat",
+  Suspended: "suspended"
 } as const;
 
 export type DurableCallEvent = (typeof DurableCallEvent)[keyof typeof DurableCallEvent];
@@ -25,15 +26,33 @@ export class DurableCallAlreadyCompletedError extends DurableCallContextError {}
 export class DurableCallHeartbeatAfterCompletionError extends DurableCallContextError {}
 export class DurableCallOutcomeMissingError extends DurableCallContextError {}
 
+export interface DurableContinuation {
+  readonly version: 1;
+  readonly fromName: string;
+  readonly toName: string;
+  readonly callId: string;
+  readonly streamId: string;
+  readonly priority: number;
+  readonly deadlineUnixMillis: number;
+  readonly wakeAtUnixMillis: number;
+  readonly payload: Uint8Array;
+}
+
+export interface DurableActivityResult {
+  readonly continuation?: DurableContinuation;
+}
+
 export class DurableCallContext {
   readonly #occurrences = new Map<string, number>();
-  readonly #terminal = Promise.withResolvers<undefined>();
+  readonly #terminal = Promise.withResolvers<DurableActivityResult>();
   readonly #heartbeat: DurableCallHeartbeatRecorder | undefined;
   readonly #diagnostics: DurableCallDiagnostics | undefined;
   #completed = false;
   #outcome: Error | undefined;
   #span: Span | undefined;
   #spanEnded = false;
+  #delayAtUnixMillis: number | undefined;
+  #continuation: DurableContinuation | undefined;
 
   public constructor(
     public readonly parentCallId: string,
@@ -86,9 +105,53 @@ export class DurableCallContext {
     );
   }
 
-  public async wait(): Promise<void> {
-    await this.#terminal.promise;
+  public async wait(): Promise<DurableActivityResult> {
+    const result = await this.#terminal.promise;
     if (this.#outcome !== undefined) throw this.#outcome;
+    return result;
+  }
+
+  public beginDelay(delayMs: number): void {
+    if (this.#completed) {
+      throw new DurableCallAlreadyCompletedError(
+        "durable call is already completed; attempted delay"
+      );
+    }
+    if (this.#delayAtUnixMillis !== undefined) {
+      throw new DurableCallContextError("durable delay is already pending");
+    }
+    this.#delayAtUnixMillis = Date.now() + delayMs;
+  }
+
+  public captureContinuation(
+    context: MessageContext,
+    fromName: string,
+    toName: string,
+    payload: Uint8Array
+  ): boolean {
+    if (this.#delayAtUnixMillis === undefined) return false;
+    if (this.#completed) {
+      throw new DurableCallAlreadyCompletedError(
+        "durable call is already completed; attempted suspension"
+      );
+    }
+    const remainingMs = context.remainingMs();
+    this.#continuation = {
+      version: 1,
+      fromName,
+      toName,
+      callId: `${this.parentCallId}/delay`,
+      streamId: context.streamId() ?? "",
+      priority: context.priority() ?? 0,
+      deadlineUnixMillis:
+        remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
+      wakeAtUnixMillis: this.#delayAtUnixMillis,
+      payload: Uint8Array.from(payload)
+    };
+    this.#completed = true;
+    this.report(DurableCallEvent.Suspended);
+    this.#terminal.resolve({ continuation: this.#continuation });
+    return true;
   }
 
   public finishSpan(): void {
@@ -109,7 +172,7 @@ export class DurableCallContext {
     this.#completed = true;
     this.#outcome = outcome;
     this.report(event, outcome);
-    this.#terminal.resolve(undefined);
+    this.#terminal.resolve({});
   }
 
   private report(event: DurableCallEvent, error?: Error): void {
@@ -148,6 +211,24 @@ export function durableCallError(context: MessageContext, error: Error): void {
   requireDurableCallContext(context, DurableCallEvent.Error).fail(error);
 }
 
+export function beginDurableDelay(context: MessageContext, delayMs: number): boolean {
+  const durable = context.durableCallContext();
+  if (!(durable instanceof DurableCallContext)) return false;
+  durable.beginDelay(delayMs);
+  return true;
+}
+
+export function captureDurableContinuation(
+  context: MessageContext,
+  fromName: string,
+  toName: string,
+  payload: Uint8Array
+): boolean {
+  const durable = context.durableCallContext();
+  if (!(durable instanceof DurableCallContext)) return false;
+  return durable.captureContinuation(context, fromName, toName, payload);
+}
+
 export function bindDurableCallSpan(context: MessageContext, span: Span): boolean {
   const durable = context.durableCallContext();
   if (!(durable instanceof DurableCallContext)) return false;
@@ -159,7 +240,7 @@ export async function runDurableCallActivity(
   signal: AbortSignal,
   durable: DurableCallContext,
   invoke: () => Promise<void>
-): Promise<void> {
+): Promise<DurableActivityResult> {
   const cancelled = (): void => {
     durable.cancelWithoutOutcome(signal.reason);
   };
@@ -178,7 +259,7 @@ export async function runDurableCallActivity(
         }
       }
     }
-    await durable.wait();
+    return await durable.wait();
   } finally {
     signal.removeEventListener("abort", cancelled);
     durable.finishSpan();

@@ -9,6 +9,7 @@ export declare class TemporalConnector implements DurableTransport {
     readonly id: number;
     readonly name: string;
     constructor(connectorId: number, environment: RuntimeEnvironment);
+    private continuationActivityType;
     registerLink(link: DurableLinkId, handler: DurableLinkHandler): void;
     private durableDiagnostics;
     registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void;

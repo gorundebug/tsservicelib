@@ -4,7 +4,12 @@ import type { MessageContext } from "../context.js";
 import { callerMetadata } from "../caller-metadata.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
-import type { DurableTransport } from "../durable.js";
+import {
+  DurableDelayCaller,
+  type DurableContinuationHandler,
+  type DurableTransport
+} from "../durable.js";
+import type { DurableContinuation } from "../durable-call-context.js";
 import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
@@ -81,6 +86,15 @@ export interface RuntimeEnvironment {
   taskPool(name: string): TaskPool | undefined;
   priorityTaskPool(name: string): PriorityTaskPool | undefined;
   makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
+  registerDurableContinuation(
+    fromName: string,
+    toName: string,
+    handler: DurableContinuationHandler
+  ): void;
+  resumeDurableContinuation(
+    context: MessageContext,
+    continuation: DurableContinuation
+  ): Promise<void>;
   makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
   delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
 }
@@ -105,6 +119,7 @@ export class ServiceEnvironment<
   readonly #dataSources = new Map<number, DataSource>();
   readonly #dataSinks = new Map<number, DataSink>();
   readonly #durableTransports = new Map<number, DurableTransport>();
+  readonly #durableContinuations = new Map<string, DurableContinuationHandler>();
   readonly #storages = new Set<Storage>();
   readonly #buildables = new Set<RuntimeBuildable>();
   readonly #logger: Logger;
@@ -347,12 +362,52 @@ export class ServiceEnvironment<
               ? []
               : [stringAttribute("taskpoolname", metadata.taskPoolName)])
           ];
-    return new InstrumentedCaller(
+    const instrumented = new InstrumentedCaller(
       caller,
       this.makeLinkRecorder(source, consumer),
       this.#tracing?.tracer(this.serviceConfig().name),
       traceAttributes
     );
+    if (
+      this.runtimeConfig().streamById(source.id)?.type !== "Delay" ||
+      !isTypedStream<T>(source)
+    ) {
+      return instrumented;
+    }
+    this.registerDurableContinuation(source.name, consumer.name, async (context, continuation) => {
+      await instrumented.consume(context, source.serde().deserialize(continuation.payload));
+    });
+    return new DurableDelayCaller(instrumented, source.name, consumer.name, source.serde());
+  }
+
+  public registerDurableContinuation(
+    fromName: string,
+    toName: string,
+    handler: DurableContinuationHandler
+  ): void {
+    const key = durableContinuationKey(fromName, toName);
+    if (this.#durableContinuations.has(key)) {
+      throw new Error(`durable continuation ${fromName}->${toName} is already registered`);
+    }
+    this.#durableContinuations.set(key, handler);
+  }
+
+  public async resumeDurableContinuation(
+    context: MessageContext,
+    continuation: DurableContinuation
+  ): Promise<void> {
+    if (continuation.fromName === "" || continuation.toName === "" || continuation.callId === "") {
+      throw new Error("invalid durable continuation envelope");
+    }
+    const handler = this.#durableContinuations.get(
+      durableContinuationKey(continuation.fromName, continuation.toName)
+    );
+    if (handler === undefined) {
+      throw new Error(
+        `durable continuation ${continuation.fromName}->${continuation.toName} is not registered`
+      );
+    }
+    await handler(context, continuation);
   }
 
   public makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void {
@@ -449,8 +504,12 @@ class InstrumentedCaller<T> implements Caller<T> {
   }
 }
 
-function isTypedStream(stream: Stream): stream is TypedStream<unknown> {
+function isTypedStream<T>(stream: Stream): stream is TypedStream<T> {
   return "consumers" in stream && typeof stream.consumers === "function";
+}
+
+function durableContinuationKey(fromName: string, toName: string): string {
+  return `${fromName}\0${toName}`;
 }
 
 function graphLinkKey(from: number, to: number): string {

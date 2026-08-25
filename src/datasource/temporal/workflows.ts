@@ -1,14 +1,21 @@
-import { scheduleActivity, workflowInfo } from "@temporalio/workflow";
+import { scheduleActivity, sleep, workflowInfo } from "@temporalio/workflow";
 
 import type {
   DurableWorkflowRequest,
+  DurableWireActivityResult,
+  EndpointWireActivityResult,
   EndpointWireResult,
   EndpointWorkflowRequest
 } from "./contracts.js";
 import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 
 export async function servicelibDurableLinkV1(request: DurableWorkflowRequest): Promise<void> {
-  await scheduleActivity(request.activityType, [request.envelope], activityOptions(request));
+  const result = await scheduleActivity<DurableWireActivityResult>(
+    request.activityType,
+    [request.envelope],
+    activityOptions(request)
+  );
+  await runDurableContinuations(request, result);
 }
 
 export async function servicelibTemporalEndpointV1(
@@ -25,11 +32,30 @@ export async function servicelibTemporalEndpointV1(
       firedAtUnixMillis: Date.now()
     };
   }
-  return scheduleActivity<EndpointWireResult>(
+  const result = await scheduleActivity<EndpointWireActivityResult>(
     request.activityType,
     [envelope],
     activityOptions(request)
   );
+  await runDurableContinuations(request, result.durable);
+  return result.result;
+}
+
+async function runDurableContinuations(
+  request: DurableWorkflowRequest | EndpointWorkflowRequest,
+  initial: DurableWireActivityResult
+): Promise<void> {
+  let result = initial;
+  while (result.continuation !== undefined) {
+    const continuation = result.continuation;
+    const delayMs = continuation.wakeAtUnixMillis - Date.now();
+    if (delayMs > 0) await sleep(delayMs);
+    result = await scheduleActivity<DurableWireActivityResult>(
+      request.continuationActivityType,
+      [continuation],
+      activityOptions(request)
+    );
+  }
 }
 
 // Temporal dispatches a Workflow by the exported bundle key. Keep the

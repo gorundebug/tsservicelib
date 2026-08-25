@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { Context, MessageContext } from "./context.js";
-import { bindDurableCallSpan, type DurableCallContext } from "./durable-call-context.js";
+import {
+  bindDurableCallSpan,
+  captureDurableContinuation,
+  type DurableCallContext,
+  type DurableContinuation
+} from "./durable-call-context.js";
 import { stringAttribute, type Span } from "./environment/index.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { StreamSerde } from "./serde/index.js";
@@ -43,6 +48,36 @@ export interface DurableTransport extends Lifecycle {
     envelope: DurableEnvelope
   ): Promise<void>;
 }
+
+export class DurableDelayCaller<T> implements Caller<T> {
+  public constructor(
+    private readonly delegate: Caller<T>,
+    private readonly fromName: string,
+    private readonly toName: string,
+    private readonly serde: StreamSerde<T>
+  ) {}
+
+  public isAsync(): boolean {
+    return this.delegate.isAsync();
+  }
+
+  public async consume(context: MessageContext, value: T): Promise<void> {
+    if (context.durableCallContext() === undefined) {
+      await this.delegate.consume(context, value);
+      return;
+    }
+    if (
+      !captureDurableContinuation(context, this.fromName, this.toName, this.serde.serialize(value))
+    ) {
+      await this.delegate.consume(context, value);
+    }
+  }
+}
+
+export type DurableContinuationHandler = (
+  context: MessageContext,
+  continuation: DurableContinuation
+) => Promise<void>;
 
 export class DurableCaller<T> implements Caller<T> {
   public constructor(

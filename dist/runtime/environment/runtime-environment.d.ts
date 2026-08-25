@@ -3,7 +3,8 @@ import type { RuntimeConfig, RuntimeConfigStore } from "../config/index.js";
 import type { MessageContext } from "../context.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
-import type { DurableTransport } from "../durable.js";
+import { type DurableContinuationHandler, type DurableTransport } from "../durable.js";
+import type { DurableContinuation } from "../durable-call-context.js";
 import { DelayPool, type PriorityTaskPool, type TaskPool } from "../pool/index.js";
 import type { JoinStorage, JoinStorageConfig, Storage } from "../store/index.js";
 import { ServiceHTTPServer, type HTTPHandler } from "../service-http-server.js";
@@ -55,6 +56,8 @@ export interface RuntimeEnvironment {
     taskPool(name: string): TaskPool | undefined;
     priorityTaskPool(name: string): PriorityTaskPool | undefined;
     makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
+    registerDurableContinuation(fromName: string, toName: string, handler: DurableContinuationHandler): void;
+    resumeDurableContinuation(context: MessageContext, continuation: DurableContinuation): Promise<void>;
     makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
     delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
 }
@@ -96,6 +99,8 @@ export declare class ServiceEnvironment<T extends CanonicalConfig = CanonicalCon
     registerRuntimeBuildable(buildable: RuntimeBuildable): void;
     buildables(): readonly RuntimeBuildable[];
     makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
+    registerDurableContinuation(fromName: string, toName: string, handler: DurableContinuationHandler): void;
+    resumeDurableContinuation(context: MessageContext, continuation: DurableContinuation): Promise<void>;
     makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
     serdeRegistry(): SerdeRegistry;
     serde<T>(type: SerdeType<T>): StreamSerde<T>;

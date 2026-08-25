@@ -7,6 +7,7 @@ export declare const DurableCallEvent: {
     readonly MissingOutcome: "missing_outcome";
     readonly DuplicateTerminal: "duplicate_terminal";
     readonly LateHeartbeat: "late_heartbeat";
+    readonly Suspended: "suspended";
 };
 export type DurableCallEvent = (typeof DurableCallEvent)[keyof typeof DurableCallEvent];
 export type DurableCallDiagnostics = (event: DurableCallEvent, error?: Error) => void;
@@ -21,6 +22,20 @@ export declare class DurableCallHeartbeatAfterCompletionError extends DurableCal
 }
 export declare class DurableCallOutcomeMissingError extends DurableCallContextError {
 }
+export interface DurableContinuation {
+    readonly version: 1;
+    readonly fromName: string;
+    readonly toName: string;
+    readonly callId: string;
+    readonly streamId: string;
+    readonly priority: number;
+    readonly deadlineUnixMillis: number;
+    readonly wakeAtUnixMillis: number;
+    readonly payload: Uint8Array;
+}
+export interface DurableActivityResult {
+    readonly continuation?: DurableContinuation;
+}
 export declare class DurableCallContext {
     #private;
     readonly parentCallId: string;
@@ -31,7 +46,9 @@ export declare class DurableCallContext {
     success(): void;
     fail(error: Error): void;
     cancelWithoutOutcome(cause: unknown): void;
-    wait(): Promise<void>;
+    wait(): Promise<DurableActivityResult>;
+    beginDelay(delayMs: number): void;
+    captureContinuation(context: MessageContext, fromName: string, toName: string, payload: Uint8Array): boolean;
     finishSpan(): void;
     private complete;
     private report;
@@ -39,6 +56,8 @@ export declare class DurableCallContext {
 export declare function durableCallHeartbeat(context: MessageContext, message: unknown): void;
 export declare function durableCallSuccess(context: MessageContext): void;
 export declare function durableCallError(context: MessageContext, error: Error): void;
+export declare function beginDurableDelay(context: MessageContext, delayMs: number): boolean;
+export declare function captureDurableContinuation(context: MessageContext, fromName: string, toName: string, payload: Uint8Array): boolean;
 export declare function bindDurableCallSpan(context: MessageContext, span: Span): boolean;
-export declare function runDurableCallActivity(signal: AbortSignal, durable: DurableCallContext, invoke: () => Promise<void>): Promise<void>;
+export declare function runDurableCallActivity(signal: AbortSignal, durable: DurableCallContext, invoke: () => Promise<void>): Promise<DurableActivityResult>;
 //# sourceMappingURL=durable-call-context.d.ts.map

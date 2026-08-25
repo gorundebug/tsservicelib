@@ -1,6 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
-import { bindDurableCallSpan } from "./durable-call-context.js";
+import { bindDurableCallSpan, captureDurableContinuation } from "./durable-call-context.js";
 import { stringAttribute } from "./environment/index.js";
+export class DurableDelayCaller {
+    delegate;
+    fromName;
+    toName;
+    serde;
+    constructor(delegate, fromName, toName, serde) {
+        this.delegate = delegate;
+        this.fromName = fromName;
+        this.toName = toName;
+        this.serde = serde;
+    }
+    isAsync() {
+        return this.delegate.isAsync();
+    }
+    async consume(context, value) {
+        if (context.durableCallContext() === undefined) {
+            await this.delegate.consume(context, value);
+            return;
+        }
+        if (!captureDurableContinuation(context, this.fromName, this.toName, this.serde.serialize(value))) {
+            await this.delegate.consume(context, value);
+        }
+    }
+}
 export class DurableCaller {
     link;
     transport;

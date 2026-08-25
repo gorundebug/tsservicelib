@@ -1,5 +1,5 @@
 import type { Context, MessageContext } from "./context.js";
-import { type DurableCallContext } from "./durable-call-context.js";
+import { type DurableCallContext, type DurableContinuation } from "./durable-call-context.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { StreamSerde } from "./serde/index.js";
 import type { Caller, TypedStreamConsumer } from "./stream.js";
@@ -27,6 +27,16 @@ export interface DurableTransport extends Lifecycle {
     registerLink(link: DurableLinkId, handler: DurableLinkHandler): void;
     submitLink(context: MessageContext, link: DurableLinkId, envelope: DurableEnvelope): Promise<void>;
 }
+export declare class DurableDelayCaller<T> implements Caller<T> {
+    private readonly delegate;
+    private readonly fromName;
+    private readonly toName;
+    private readonly serde;
+    constructor(delegate: Caller<T>, fromName: string, toName: string, serde: StreamSerde<T>);
+    isAsync(): boolean;
+    consume(context: MessageContext, value: T): Promise<void>;
+}
+export type DurableContinuationHandler = (context: MessageContext, continuation: DurableContinuation) => Promise<void>;
 export declare class DurableCaller<T> implements Caller<T> {
     private readonly link;
     private readonly transport;

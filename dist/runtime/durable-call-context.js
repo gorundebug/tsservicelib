@@ -5,7 +5,8 @@ export const DurableCallEvent = {
     Error: "error",
     MissingOutcome: "missing_outcome",
     DuplicateTerminal: "duplicate_terminal",
-    LateHeartbeat: "late_heartbeat"
+    LateHeartbeat: "late_heartbeat",
+    Suspended: "suspended"
 };
 export class DurableCallContextError extends Error {
 }
@@ -27,6 +28,8 @@ export class DurableCallContext {
     #outcome;
     #span;
     #spanEnded = false;
+    #delayAtUnixMillis;
+    #continuation;
     constructor(parentCallId, heartbeat, diagnostics) {
         this.parentCallId = parentCallId;
         this.#heartbeat = heartbeat;
@@ -62,9 +65,42 @@ export class DurableCallContext {
         this.complete(DurableCallEvent.MissingOutcome, new DurableCallOutcomeMissingError(`durable call completed without explicit outcome${detail === undefined ? "" : `: ${detail.message}`}`, detail === undefined ? undefined : { cause: detail }));
     }
     async wait() {
-        await this.#terminal.promise;
+        const result = await this.#terminal.promise;
         if (this.#outcome !== undefined)
             throw this.#outcome;
+        return result;
+    }
+    beginDelay(delayMs) {
+        if (this.#completed) {
+            throw new DurableCallAlreadyCompletedError("durable call is already completed; attempted delay");
+        }
+        if (this.#delayAtUnixMillis !== undefined) {
+            throw new DurableCallContextError("durable delay is already pending");
+        }
+        this.#delayAtUnixMillis = Date.now() + delayMs;
+    }
+    captureContinuation(context, fromName, toName, payload) {
+        if (this.#delayAtUnixMillis === undefined)
+            return false;
+        if (this.#completed) {
+            throw new DurableCallAlreadyCompletedError("durable call is already completed; attempted suspension");
+        }
+        const remainingMs = context.remainingMs();
+        this.#continuation = {
+            version: 1,
+            fromName,
+            toName,
+            callId: `${this.parentCallId}/delay`,
+            streamId: context.streamId() ?? "",
+            priority: context.priority() ?? 0,
+            deadlineUnixMillis: remainingMs === undefined ? 0 : Date.now() + Math.max(0, Math.ceil(remainingMs)),
+            wakeAtUnixMillis: this.#delayAtUnixMillis,
+            payload: Uint8Array.from(payload)
+        };
+        this.#completed = true;
+        this.report(DurableCallEvent.Suspended);
+        this.#terminal.resolve({ continuation: this.#continuation });
+        return true;
     }
     finishSpan() {
         if (this.#span === undefined || this.#spanEnded)
@@ -83,7 +119,7 @@ export class DurableCallContext {
         this.#completed = true;
         this.#outcome = outcome;
         this.report(event, outcome);
-        this.#terminal.resolve(undefined);
+        this.#terminal.resolve({});
     }
     report(event, error) {
         const attributes = [stringAttribute("event", event)];
@@ -113,6 +149,19 @@ export function durableCallSuccess(context) {
 }
 export function durableCallError(context, error) {
     requireDurableCallContext(context, DurableCallEvent.Error).fail(error);
+}
+export function beginDurableDelay(context, delayMs) {
+    const durable = context.durableCallContext();
+    if (!(durable instanceof DurableCallContext))
+        return false;
+    durable.beginDelay(delayMs);
+    return true;
+}
+export function captureDurableContinuation(context, fromName, toName, payload) {
+    const durable = context.durableCallContext();
+    if (!(durable instanceof DurableCallContext))
+        return false;
+    return durable.captureContinuation(context, fromName, toName, payload);
 }
 export function bindDurableCallSpan(context, span) {
     const durable = context.durableCallContext();
@@ -145,7 +194,7 @@ export async function runDurableCallActivity(signal, durable, invoke) {
                 }
             }
         }
-        await durable.wait();
+        return await durable.wait();
     }
     finally {
         signal.removeEventListener("abort", cancelled);

@@ -9,7 +9,9 @@ import {
   MessageContext,
   NoDurableCallContextError,
   SpanStatusCode,
+  beginDurableDelay,
   bindDurableCallSpan,
+  captureDurableContinuation,
   durableCallError,
   durableCallHeartbeat,
   durableCallSuccess,
@@ -33,6 +35,33 @@ await test("Activity without a deadline waits for an explicit outcome", async ()
   assert.equal(completed, false);
   durableCallSuccess(context);
   await running;
+});
+
+await test("durable Delay returns a serializable continuation", async () => {
+  const durable = new DurableCallContext("call-1");
+  const result = await runDurableCallActivity(new AbortController().signal, durable, () => {
+    const context = new MessageContext()
+      .withStreamId("stream-1")
+      .withPriority(7)
+      .withDurableCallContext(durable);
+    assert.equal(beginDurableDelay(context, 60_000), true);
+    assert.equal(
+      captureDurableContinuation(context, "Delay", "After Delay", new Uint8Array([1, 2, 3])),
+      true
+    );
+    return Promise.resolve();
+  });
+  assert.ok(result.continuation);
+  assert.equal(result.continuation.fromName, "Delay");
+  assert.equal(result.continuation.toName, "After Delay");
+  assert.equal(result.continuation.callId, "call-1/delay");
+  assert.equal(result.continuation.streamId, "stream-1");
+  assert.equal(result.continuation.priority, 7);
+  assert.deepEqual(result.continuation.payload, new Uint8Array([1, 2, 3]));
+});
+
+await test("ordinary context keeps Delay local", () => {
+  assert.equal(beginDurableDelay(new MessageContext(), 60_000), false);
 });
 
 await test("first terminal result wins and heartbeat is accepted only while open", async () => {
