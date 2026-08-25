@@ -41,7 +41,7 @@ await test("Cron config guards preserve the generated typed contract", () => {
     /invalid Cron endpoint config/
   );
   assert.throws(
-    () => requireCronEndpointConfig({ ...endpoint, timezone: "Europe\/Moscow" } as EndpointConfig),
+    () => requireCronEndpointConfig({ ...endpoint, timezone: "Europe/Moscow" } as EndpointConfig),
     /invalid Cron endpoint config/
   );
 });
@@ -76,6 +76,7 @@ await test("Temporal config guards reject incomplete durable transport settings"
     overlapPolicy: "Skip",
     missedRunPolicy: "Skip",
     taskQueue: "automation",
+    temporalExecutionType: "Activity",
     workflowExecutionTimeout: 0,
     activityStartToCloseTimeout: 30_000,
     activityHeartbeatTimeout: 0,
@@ -85,6 +86,7 @@ await test("Temporal config guards reject incomplete durable transport settings"
 
   assert.equal(requireTemporalDataConnectorConfig(connector).namespace, "default");
   assert.equal(requireTemporalEndpointConfig(endpoint).taskQueue, "automation");
+  assert.equal(requireTemporalEndpointConfig(endpoint).temporalExecutionType, "Activity");
   assert.throws(
     () =>
       requireTemporalDataConnectorConfig({

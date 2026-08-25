@@ -185,7 +185,7 @@ await test("gRPC connector defaults connectionsCount to one", () => {
   assert.equal(requireGrpcDataConnectorConfig(config.dataConnectors[0]).connectionsCount, 1);
 });
 
-await test("Cron, Temporal and DurableCall documents normalize without losing policy", () => {
+await test("Cron and Temporal endpoint documents normalize without losing policy", () => {
   const document = canonicalDocument();
   document["dataConnectors"] = {
     temporal: {
@@ -206,6 +206,7 @@ await test("Cron, Temporal and DurableCall documents normalize without losing po
       idDataConnector: 7,
       enabled: true,
       taskQueue: "automation",
+      temporalExecutionType: "Activity",
       schedule: "*/5 * * * *",
       scheduleId: "scheduled-job",
       timezone: "UTC",
@@ -216,14 +217,10 @@ await test("Cron, Temporal and DurableCall documents normalize without losing po
     }
   };
   document["links"] = {
-    durable: {
+    direct: {
       from: 12,
       to: 13,
-      callSemantics: 6,
-      idDataConnector: 7,
-      taskQueue: "automation",
-      activityStartToCloseTimeout: 30_000,
-      maximumAttempts: 3
+      callSemantics: 2
     }
   };
 
@@ -237,16 +234,9 @@ await test("Cron, Temporal and DurableCall documents normalize without losing po
   assert.equal(connector.namespace, "default");
   assert("taskQueue" in endpoint);
   assert.equal(endpoint.taskQueue, "automation");
+  assert("temporalExecutionType" in endpoint);
+  assert.equal(endpoint.temporalExecutionType, "Activity");
   assert("overlapPolicy" in endpoint);
   assert.equal(endpoint.overlapPolicy, "Skip");
-  assert.deepEqual(link.callSemantics, {
-    durableCall: {
-      idDataConnector: 7,
-      taskQueue: "automation",
-      workflowExecutionTimeout: 0,
-      activityStartToCloseTimeout: 30_000,
-      activityHeartbeatTimeout: 0,
-      maximumAttempts: 3
-    }
-  });
+  assert.deepEqual(link.callSemantics, { functionCall: { async: false } });
 });

@@ -108,6 +108,7 @@ interface RecordValue extends Record<string, unknown> {
   readonly overlapPolicy?: unknown;
   readonly missedRunPolicy?: unknown;
   readonly taskQueue?: unknown;
+  readonly temporalExecutionType?: unknown;
   readonly workflowExecutionTimeout?: unknown;
   readonly activityStartToCloseTimeout?: unknown;
   readonly activityHeartbeatTimeout?: unknown;
@@ -186,6 +187,16 @@ function optionalEnum<const T extends readonly string[]>(
   if (!(allowed as readonly string[]).includes(result)) {
     throw new Error(`${path} must be one of: ${allowed.join(", ")}`);
   }
+  return result;
+}
+
+function requiredEnum<const T extends readonly string[]>(
+  value: unknown,
+  path: string,
+  allowed: T
+): T[number] {
+  const result = optionalEnum(value, path, allowed);
+  if (result === undefined) throw new Error(`${path} is required`);
   return result;
 }
 
@@ -652,6 +663,7 @@ const endpointKeys = new Set([
   "overlapPolicy",
   "missedRunPolicy",
   "taskQueue",
+  "temporalExecutionType",
   "workflowExecutionTimeout",
   "activityStartToCloseTimeout",
   "activityHeartbeatTimeout",
@@ -724,6 +736,11 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
       ...functions,
       enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
       taskQueue: optionalString(source.taskQueue, `${path}.taskQueue`) ?? "",
+      temporalExecutionType: requiredEnum(
+        source.temporalExecutionType,
+        `${path}.temporalExecutionType`,
+        ["Activity", "Workflow"] as const
+      ),
       schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
       scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
       timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",

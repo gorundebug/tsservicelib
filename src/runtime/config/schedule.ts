@@ -105,6 +105,8 @@ export function isTemporalEndpointConfig(
     "taskQueue" in value &&
     typeof value.taskQueue === "string" &&
     value.taskQueue.length > 0 &&
+    "temporalExecutionType" in value &&
+    (value.temporalExecutionType === "Activity" || value.temporalExecutionType === "Workflow") &&
     "scheduleId" in value &&
     typeof value.scheduleId === "string" &&
     "workflowExecutionTimeout" in value &&

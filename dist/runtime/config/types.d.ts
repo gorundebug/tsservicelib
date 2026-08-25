@@ -218,6 +218,7 @@ export interface KafkaEndpointConfig extends EndpointConfig, FunctionConfig {
 }
 export type ScheduleOverlapPolicy = "Allow" | "Skip";
 export type ScheduleMissedRunPolicy = "FireOnce" | "Skip";
+export type TemporalExecutionType = "Activity" | "Workflow";
 export interface CronEndpointConfig extends EndpointConfig, FunctionConfig {
     readonly enabled: boolean;
     readonly schedule: string;
@@ -228,6 +229,7 @@ export interface CronEndpointConfig extends EndpointConfig, FunctionConfig {
 export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
     readonly enabled: boolean;
     readonly taskQueue: string;
+    readonly temporalExecutionType: TemporalExecutionType;
     readonly schedule: string;
     readonly scheduleId: string;
     readonly timezone: string;
@@ -500,6 +502,7 @@ export interface CronEndpointConfigDocument extends EndpointConfigDocumentBase {
 }
 export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocument {
     readonly taskQueue?: string | undefined;
+    readonly temporalExecutionType?: TemporalExecutionType | undefined;
     readonly scheduleId?: string | undefined;
     readonly workflowExecutionTimeout?: number | undefined;
     readonly activityStartToCloseTimeout?: number | undefined;

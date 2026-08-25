@@ -47,6 +47,12 @@ function optionalEnum(value, path, allowed) {
     }
     return result;
 }
+function requiredEnum(value, path, allowed) {
+    const result = optionalEnum(value, path, allowed);
+    if (result === undefined)
+        throw new Error(`${path} is required`);
+    return result;
+}
 function integerArray(value, path) {
     if (value === undefined) {
         return [];
@@ -464,6 +470,7 @@ const endpointKeys = new Set([
     "overlapPolicy",
     "missedRunPolicy",
     "taskQueue",
+    "temporalExecutionType",
     "workflowExecutionTimeout",
     "activityStartToCloseTimeout",
     "activityHeartbeatTimeout",
@@ -529,6 +536,7 @@ function parseEndpoint(source, path) {
             ...functions,
             enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
             taskQueue: optionalString(source.taskQueue, `${path}.taskQueue`) ?? "",
+            temporalExecutionType: requiredEnum(source.temporalExecutionType, `${path}.temporalExecutionType`, ["Activity", "Workflow"]),
             schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
             scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
             timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",
