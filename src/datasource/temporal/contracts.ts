@@ -1,4 +1,4 @@
-import type { DurableEnvelope } from "../durable.js";
+import type { DurableEnvelope } from "../../runtime/durable.js";
 
 export const DURABLE_WORKFLOW_TYPE = "servicegen.durable-link.v1";
 export const ENDPOINT_WORKFLOW_TYPE = "servicegen.temporal-endpoint.v1";

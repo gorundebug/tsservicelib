@@ -1,4 +1,5 @@
-import { DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, errorFromUnknown, makeScheduleTrigger, makeTemporalConnector, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { makeTemporalConnector } from "./connector.js";
 class TemporalDataSource extends InputDataSource {
     constructor(connectorId, environment) {
         super(connectorId, environment);

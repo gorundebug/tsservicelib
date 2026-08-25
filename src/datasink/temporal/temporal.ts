@@ -3,23 +3,25 @@ import {
   DataSinkEndpoint,
   OutputDataSink,
   errorFromUnknown,
-  makeTemporalConnector,
   newStreamId,
   spanError,
   stringAttribute,
   type Consumer,
   type Context,
-  type EndpointEnvelope,
   type OutputEndpointConsumer,
   type MessageContext,
   type RuntimeEnvironment,
   type SinkEndpoint,
   type Span,
-  type TemporalConnector,
   type Tracer,
   type TypedSinkStream,
   type TypedSinkStreamWithResult
 } from "../../runtime/index.js";
+import {
+  makeTemporalConnector,
+  type TemporalConnector
+} from "../../datasource/temporal/connector.js";
+import type { EndpointEnvelope } from "../../datasource/temporal/contracts.js";
 
 class TemporalDataSink extends OutputDataSink {
   public constructor(connectorId: number, environment: RuntimeEnvironment) {

@@ -20,16 +20,16 @@ import {
   type DurableCallSemanticsConfig,
   type TemporalDataConnectorConfig,
   type TemporalEndpointConfig
-} from "../config/index.js";
-import type { Context } from "../context.js";
+} from "../../runtime/config/index.js";
+import type { Context } from "../../runtime/context.js";
 import type {
   DurableEnvelope,
   DurableLinkHandler,
   DurableLinkId,
   DurableTransport
-} from "../durable.js";
-import type { RuntimeEnvironment } from "../environment/index.js";
-import { normalizeTemporalPriority } from "../schedule.js";
+} from "../../runtime/durable.js";
+import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
+import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
   DURABLE_WORKFLOW_TYPE,
   ENDPOINT_WORKFLOW_TYPE,

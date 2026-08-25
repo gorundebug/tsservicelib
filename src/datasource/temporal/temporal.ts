@@ -7,25 +7,23 @@ import {
   ScheduleBackend,
   errorFromUnknown,
   makeScheduleTrigger,
-  makeTemporalConnector,
   newStreamId,
   spanError,
   stringAttribute,
   type Completion,
   type Context,
   type Consumer,
-  type EndpointEnvelope,
-  type EndpointResult,
   type InputEndpoint,
   type InputEndpointConsumer,
   type RuntimeEnvironment,
   type ScheduleEndpointFunction,
   type ScheduleTrigger,
   type Span,
-  type TemporalConnector,
   type Tracer,
   type TypedInputStream
 } from "../../runtime/index.js";
+import { makeTemporalConnector, type TemporalConnector } from "./connector.js";
+import type { EndpointEnvelope, EndpointResult } from "./contracts.js";
 
 class TemporalDataSource extends InputDataSource {
   public constructor(connectorId: number, environment: RuntimeEnvironment) {

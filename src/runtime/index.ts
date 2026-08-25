@@ -23,5 +23,4 @@ export * from "./status/index.js";
 export * from "./store/index.js";
 export * from "./stream.js";
 export * from "./task-registry.js";
-export * from "./temporal/index.js";
 export * from "./testlog/index.js";

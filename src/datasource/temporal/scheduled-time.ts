@@ -1,3 +1,4 @@
+// Temporal encodes the nominal schedule time in its generated workflow ID.
 const scheduleWorkflowIdSuffix = /-(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/u;
 
 export function scheduledTimeFromWorkflowId(workflowId: string, fallback: Date): number {

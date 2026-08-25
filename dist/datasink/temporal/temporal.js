@@ -1,4 +1,5 @@
-import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, makeTemporalConnector, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { makeTemporalConnector } from "../../datasource/temporal/connector.js";
 class TemporalDataSink extends OutputDataSink {
     constructor(connectorId, environment) {
         super(connectorId, environment);

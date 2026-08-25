@@ -1,6 +1,6 @@
-import type { Context } from "../context.js";
-import type { DurableEnvelope, DurableLinkHandler, DurableLinkId, DurableTransport } from "../durable.js";
-import type { RuntimeEnvironment } from "../environment/index.js";
+import type { Context } from "../../runtime/context.js";
+import type { DurableEnvelope, DurableLinkHandler, DurableLinkId, DurableTransport } from "../../runtime/durable.js";
+import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
 import { type EndpointEnvelope, type EndpointResult } from "./contracts.js";
 export type TemporalEndpointHandler = (envelope: EndpointEnvelope, cancellationSignal?: AbortSignal) => Promise<EndpointResult>;
 export declare class TemporalConnector implements DurableTransport {

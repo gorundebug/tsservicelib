@@ -4,8 +4,8 @@ import { Client, ScheduleAlreadyRunning, ScheduleOverlapPolicy } from "@temporal
 import { cancellationSignal } from "@temporalio/activity";
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
 import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
-import { DataConnectorType } from "../config/index.js";
-import { normalizeTemporalPriority } from "../schedule.js";
+import { DataConnectorType } from "../../runtime/config/index.js";
+import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import { DURABLE_WORKFLOW_TYPE, ENDPOINT_WORKFLOW_TYPE } from "./contracts.js";
 const MANAGED_BY = "servicegen.managedBy";
 const OWNER = "servicegen.owner";
