@@ -15,6 +15,7 @@ import {
   type StreamConfig,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
 
 class RecordingConsumer extends ServiceStream implements TypedStreamConsumer<number> {
   public readonly values: number[] = [];
@@ -58,9 +59,10 @@ await test("Workflow environment executes the ordinary graph through configured 
     types: [],
     properties: {}
   };
+  const metrics = new TestMetrics();
   const environment = new TemporalWorkflowEnvironment(config, 1, makeDefaultSerdeRegistry(), {
     logger: noopLogger,
-    metrics: noopMetrics
+    metrics
   });
   const source = new ConsumedStream(sourceConfig, environment, environment.serde(int32SerdeType));
   const target = new RecordingConsumer(targetConfig, environment);
@@ -74,6 +76,15 @@ await test("Workflow environment executes the ordinary graph through configured 
 
   assert.deepEqual(target.values, [42]);
   assert.equal(environment.linkCallCount(1, 2), 1);
+  const labels = { service: "workflow-service", name: "workflow-pool" };
+  assert.equal(metrics.counterValue("task_pool_tasks_total", labels), 1);
+  assert.equal(metrics.gaugeValue("task_pool_executors_allocated", labels), 0);
+  assert.equal(metrics.gaugeValue("task_pool_executors_busy", labels), 0);
+  assert.equal(metrics.gaugeValue("task_pool_queue_length", labels), 0);
+  assert.equal(
+    metrics.histogramValue("task_pool_task_execution_duration_seconds", labels)?.count,
+    1
+  );
 });
 
 await test("Workflow PriorityTaskPool uses stable priority then FIFO order", async () => {

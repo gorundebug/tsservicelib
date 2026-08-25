@@ -6,28 +6,14 @@ import {
   type PriorityTaskPoolLike,
   type TaskPoolLike
 } from "../../runtime/pool/pool.js";
+import { makeTaskPoolMetrics, type TaskPoolMetrics } from "../../runtime/pool/task-pool-metrics.js";
 
 interface WorkflowTask {
   readonly context: Context;
   readonly execute: PoolTask;
-  readonly priority: number;
+  priority: number;
   readonly sequence: number;
-}
-
-interface WorkflowPoolMetrics {
-  readonly queued: Gauge;
-  readonly active: Gauge;
-  readonly completed: Counter;
-}
-
-interface Gauge {
-  inc(): void;
-  dec(): void;
-  set(value: number): void;
-}
-
-interface Counter {
-  inc(context: Context): void;
+  removeAbortListener(): void;
 }
 
 class WorkflowPoolCore {
@@ -36,7 +22,7 @@ class WorkflowPoolCore {
   readonly #priority: boolean;
   readonly #onError: (error: unknown) => void;
   readonly #queue: WorkflowTask[] = [];
-  readonly #metrics: WorkflowPoolMetrics;
+  readonly #metrics: TaskPoolMetrics | undefined;
   #active = 0;
   #sequence = 0;
   #state: "created" | "running" | "stopping" | "stopped" = "created";
@@ -58,16 +44,12 @@ class WorkflowPoolCore {
     this.#executors = executors;
     this.#priority = priority;
     this.#onError = onError;
-    const scope = metrics.scope("taskpool", {
-      service,
-      taskpoolname: name,
-      type: priority ? "priority" : "task"
+    this.#metrics = makeTaskPoolMetrics(priority ? "priority" : "task", {
+      name,
+      executorsCount: executors,
+      metrics,
+      service
     });
-    this.#metrics = {
-      queued: scope.gauge("queue_length", "Current number of queued tasks"),
-      active: scope.gauge("executors_busy", "Current number of executing tasks"),
-      completed: scope.counter("tasks_total", "Total number of completed tasks")
-    };
   }
 
   public name(): string {
@@ -91,30 +73,48 @@ class WorkflowPoolCore {
       throw new Error(`workflow pool ${this.#name} cannot start from ${this.#state}`);
     }
     this.#state = "running";
+    this.#metrics?.executorsTarget.set(this.#executors);
+    this.#metrics?.executorsAllocated.set(this.#executors);
     this.pump();
   }
 
   public addTask(context: Context, priority: number, execute: PoolTask): void {
     if (context.cancelled()) {
+      this.#metrics?.taskRejected.inc(context);
       throw context.signal().reason ?? new Error("task context is cancelled");
     }
     if (this.#state === "stopping" || this.#state === "stopped") {
+      this.#metrics?.taskRejected.inc(context);
       throw new PoolStoppedError(this.#name);
     }
-    const task = { context, execute, priority, sequence: this.#sequence };
+    const task: WorkflowTask = {
+      context,
+      execute,
+      priority,
+      sequence: this.#sequence,
+      removeAbortListener: () => undefined
+    };
     this.#sequence += 1;
-    if (this.#priority) {
-      const index = this.#queue.findIndex(
-        (item) =>
-          item.priority > task.priority ||
-          (item.priority === task.priority && item.sequence > task.sequence)
-      );
-      if (index < 0) this.#queue.push(task);
-      else this.#queue.splice(index, 0, task);
-    } else {
-      this.#queue.push(task);
-    }
-    this.#metrics.queued.inc();
+    const cancel = (): void => {
+      const index = this.#queue.indexOf(task);
+      if (this.#priority ? index >= 0 : index > 0) {
+        this.#queue.splice(index, 1);
+        if (this.#priority) {
+          task.priority = Number.NEGATIVE_INFINITY;
+          this.insert(task);
+        } else {
+          this.#queue.unshift(task);
+        }
+        this.#metrics?.taskCancelledOrExpired.inc(context);
+      }
+      this.pump();
+    };
+    context.signal().addEventListener("abort", cancel, { once: true });
+    task.removeAbortListener = () => {
+      context.signal().removeEventListener("abort", cancel);
+    };
+    this.insert(task);
+    this.#metrics?.queueLength.inc();
     this.pump();
   }
 
@@ -135,8 +135,8 @@ class WorkflowPoolCore {
     while (this.#active < this.#executors && this.#queue.length > 0) {
       const task = this.#queue.shift();
       if (task === undefined) break;
-      this.#metrics.queued.dec();
-      this.#metrics.active.inc();
+      task.removeAbortListener();
+      this.#metrics?.queueLength.dec();
       this.#active += 1;
       void Promise.resolve().then(() => this.run(task));
     }
@@ -144,23 +144,41 @@ class WorkflowPoolCore {
   }
 
   private async run(task: WorkflowTask): Promise<void> {
+    const started = Date.now();
+    this.#metrics?.executorsBusy.inc();
     try {
       await task.execute();
     } catch (error: unknown) {
       this.#onError(error);
     } finally {
-      this.#metrics.active.dec();
-      this.#metrics.completed.inc(task.context);
+      this.#metrics?.executorsBusy.dec();
+      this.#metrics?.tasksTotal.inc(task.context);
+      this.#metrics?.executionDuration.observe(task.context, (Date.now() - started) / 1_000);
       this.#active -= 1;
       this.pump();
     }
   }
 
+  private insert(task: WorkflowTask): void {
+    if (!this.#priority) {
+      this.#queue.push(task);
+      return;
+    }
+    const index = this.#queue.findIndex(
+      (item) =>
+        item.priority > task.priority ||
+        (item.priority === task.priority && item.sequence > task.sequence)
+    );
+    if (index < 0) this.#queue.push(task);
+    else this.#queue.splice(index, 0, task);
+  }
+
   private finishDrainIfIdle(): void {
     if (this.#state !== "stopping" || this.#active !== 0 || this.#queue.length !== 0) return;
     this.#state = "stopped";
-    this.#metrics.queued.set(0);
-    this.#metrics.active.set(0);
+    this.#metrics?.queueLength.set(0);
+    this.#metrics?.executorsBusy.set(0);
+    this.#metrics?.executorsAllocated.set(0);
     this.#resolveDrain?.();
     this.#resolveDrain = undefined;
   }
