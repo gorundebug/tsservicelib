@@ -1,4 +1,4 @@
-import { DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, RotatingMap, RuntimeTaskRegistry, err, errorFromUnknown, makeStreamContext, newStreamId, spanError, str, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, RotatingMap, RuntimeTaskRegistry, err, errorFromUnknown, makeStreamContext, newStreamId, spanError, str, stringAttribute } from "../../runtime/index.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 class CustomResult {
     state;
@@ -218,6 +218,7 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
         }
     }
     async handleAdmitted(context, value) {
+        context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const started = this.#tracer.start(context, "local.input", [

@@ -37,6 +37,17 @@ export interface TypedInputStream<T, R, E> extends TypedStream<T>, TypedStreamCo
   consumeResult(context: MessageContext, value: R): Completion;
 }
 
+/** Apply the current reloadable source-endpoint tracing policy to one event. */
+export function applyDataSourceEndpointTracing(
+  context: MessageContext,
+  environment: RuntimeEnvironment,
+  endpointId: number
+): MessageContext {
+  return environment.runtimeConfig().endpointById(endpointId)?.tracingEnabled === true
+    ? context.withSampling(true)
+    : context;
+}
+
 /** Common typed collector context passed to datasource endpoint handlers. */
 export class StreamContext<T, R, E> {
   public readonly stream: TypedStream<T>;

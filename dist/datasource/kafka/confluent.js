@@ -1,5 +1,5 @@
 import { KafkaJS } from "@confluentinc/kafka-javascript";
-import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, RotatingMap, RuntimeTaskRegistry, boolAttribute, err, errorFromUnknown, makeStreamContext, newStreamId, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, RotatingMap, RuntimeTaskRegistry, TRACE_SAMPLING_HEADER, boolAttribute, err, errorFromUnknown, makeStreamContext, newStreamId, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 const RECONNECT_DELAY_MS = 100;
@@ -388,6 +388,13 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
     }
     async handleAdmitted(record, control, signal) {
         let context = new MessageContext().withExternalCancellation(signal);
+        const metadata = new Map();
+        for (const [name, value] of record.headers) {
+            if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(name)) {
+                metadata.set(name, Buffer.from(value).toString("utf8"));
+            }
+        }
+        context = applyDataSourceEndpointTracing(context.withMetadata(metadata), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const started = this.#tracer.start(context, "kafka.input", [

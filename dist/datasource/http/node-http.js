@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, MessageContext, RotatingMap, RuntimeTaskRegistry, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, boolAttribute, makeStreamContext, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, MessageContext, RotatingMap, RuntimeTaskRegistry, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, applyDataSourceEndpointTracing, errorFromUnknown, boolAttribute, makeStreamContext, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 class HttpResult {
     handlerState;
@@ -310,7 +310,7 @@ class NodeHttpEndpointConsumer {
         return this.#tasks.admit((lifecycleSignal) => this.serveAccepted(request, response, cancellation, lifecycleSignal), cancellation.signal);
     }
     async serveAccepted(request, response, cancellation, lifecycleSignal) {
-        let context = contextFromRequest(request, lifecycleSignal);
+        let context = applyDataSourceEndpointTracing(contextFromRequest(request, lifecycleSignal), this.stream().runtimeEnvironment(), this.endpoint().id);
         const data = { request, response };
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {

@@ -5,7 +5,7 @@ export interface DeliveryResult {
 }
 export interface KafkaProducer {
     connect(): Promise<void>;
-    send(topic: string, key: Uint8Array | undefined, value: Uint8Array, partition?: number): Promise<DeliveryResult>;
+    send(topic: string, key: Uint8Array | undefined, value: Uint8Array, partition?: number, headers?: ReadonlyMap<string, string>): Promise<DeliveryResult>;
     flush(timeoutMs?: number): Promise<void>;
     disconnect(): Promise<void>;
 }

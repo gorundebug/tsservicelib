@@ -1,4 +1,5 @@
 import {
+  applyDataSourceEndpointTracing,
   DataConnectorType,
   DataSourceEndpoint,
   FunctionCollector,
@@ -108,6 +109,11 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
       .withStreamId(envelope.streamId || newStreamId())
       .withPriority(envelope.priority)
       .withSampling(envelope.samplingEnabled);
+    context = applyDataSourceEndpointTracing(
+      context,
+      this.#stream.runtimeEnvironment(),
+      this.#endpoint.id
+    );
     if (durableCallContext !== undefined) {
       context = context.withDurableCallContext(durableCallContext);
     }

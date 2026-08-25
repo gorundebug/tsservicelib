@@ -8,6 +8,7 @@ import {
   InputDataSource,
   MessageContext,
   ScheduleBackend,
+  applyDataSourceEndpointTracing,
   err,
   makeScheduleTrigger,
   newStreamId,
@@ -147,7 +148,11 @@ class CronEndpoint extends DataSourceEndpoint {
   ): Promise<void> {
     if (this.#running && config.overlapPolicy === "Skip") return;
     this.#running = true;
-    const context = new MessageContext().withStreamId(newStreamId());
+    const context = applyDataSourceEndpointTracing(
+      new MessageContext().withStreamId(newStreamId()),
+      this.runtimeEnvironment(),
+      this.id
+    );
     const started = this.onRequestStart(context);
     let failure: Error | undefined;
     try {

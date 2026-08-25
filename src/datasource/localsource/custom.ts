@@ -1,4 +1,5 @@
 import {
+  applyDataSourceEndpointTracing,
   DataConnectorType,
   DataSourceEndpoint,
   DataSourceEndpointConsumer,
@@ -329,6 +330,11 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
   }
 
   private async handleAdmitted(context: MessageContext, value: T): Promise<void> {
+    context = applyDataSourceEndpointTracing(
+      context,
+      this.stream().runtimeEnvironment(),
+      this.endpoint().id
+    );
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "local.input", [

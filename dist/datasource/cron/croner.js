@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { Context, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, err, makeScheduleTrigger, newStreamId, str } from "../../runtime/index.js";
+import { Context, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, applyDataSourceEndpointTracing, err, makeScheduleTrigger, newStreamId, str } from "../../runtime/index.js";
 class CronEndpointConsumer {
     #endpoint;
     #function;
@@ -103,7 +103,7 @@ class CronEndpoint extends DataSourceEndpoint {
         if (this.#running && config.overlapPolicy === "Skip")
             return;
         this.#running = true;
-        const context = new MessageContext().withStreamId(newStreamId());
+        const context = applyDataSourceEndpointTracing(new MessageContext().withStreamId(newStreamId()), this.runtimeEnvironment(), this.id);
         const started = this.onRequestStart(context);
         let failure;
         try {

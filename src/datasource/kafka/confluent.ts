@@ -1,6 +1,7 @@
 import { KafkaJS } from "@confluentinc/kafka-javascript";
 
 import {
+  applyDataSourceEndpointTracing,
   DataSourceEndpoint,
   DataSourceEndpointConsumer,
   FunctionCollector,
@@ -9,6 +10,7 @@ import {
   MessageContext,
   RotatingMap,
   RuntimeTaskRegistry,
+  TRACE_SAMPLING_HEADER,
   boolAttribute,
   err,
   errorFromUnknown,
@@ -585,6 +587,17 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     signal: AbortSignal
   ): Promise<void> {
     let context = new MessageContext().withExternalCancellation(signal);
+    const metadata = new Map<string, string>();
+    for (const [name, value] of record.headers) {
+      if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(name)) {
+        metadata.set(name, Buffer.from(value).toString("utf8"));
+      }
+    }
+    context = applyDataSourceEndpointTracing(
+      context.withMetadata(metadata),
+      this.stream().runtimeEnvironment(),
+      this.endpoint().id
+    );
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "kafka.input", [

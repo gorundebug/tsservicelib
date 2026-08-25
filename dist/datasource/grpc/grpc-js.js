@@ -1,6 +1,6 @@
 import { Server, ServerCredentials } from "@grpc/grpc-js";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, spanError, str, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, spanError, str, stringAttribute } from "../../runtime/index.js";
 class GrpcJsDataSource extends InputDataSource {
     #services = new Map();
     #server;
@@ -283,7 +283,7 @@ class GrpcStreamingSourceConsumer extends DataSourceEndpointConsumer {
         return this.stream().resultStream() !== undefined;
     }
     requestContext(call) {
-        let context = contextFromCall(call);
+        let context = applyDataSourceEndpointTracing(contextFromCall(call), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.tracer !== undefined && context.samplingEnabled()) {
             const started = this.tracer.start(context, "grpc.input", [
@@ -341,7 +341,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
         };
     }
     async handleCall(call, callback) {
-        let context = contextFromCall(call);
+        let context = applyDataSourceEndpointTracing(contextFromCall(call), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const started = this.#tracer.start(context, "grpc.input", [

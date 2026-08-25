@@ -2,6 +2,12 @@ import { performance } from "node:perf_hooks";
 import { DataConnectorType } from "./config/index.js";
 import { RuntimeDataConnector } from "./data-connector.js";
 import { err, str } from "./environment/index.js";
+/** Apply the current reloadable source-endpoint tracing policy to one event. */
+export function applyDataSourceEndpointTracing(context, environment, endpointId) {
+    return environment.runtimeConfig().endpointById(endpointId)?.tracingEnabled === true
+        ? context.withSampling(true)
+        : context;
+}
 /** Common typed collector context passed to datasource endpoint handlers. */
 export class StreamContext {
     stream;

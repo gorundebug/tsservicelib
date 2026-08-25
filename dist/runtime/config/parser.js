@@ -472,6 +472,7 @@ const endpointKeys = new Set([
     ...identityKeys,
     "idDataConnector",
     "enabled",
+    "tracingEnabled",
     "httpMethodType",
     "path",
     "grpcMethodType",
@@ -515,6 +516,7 @@ function parseEndpoint(source, path) {
     const common = {
         ...identity(source, path),
         idDataConnector: integer(source.idDataConnector, `${path}.idDataConnector`),
+        tracingEnabled: optionalBoolean(source["tracingEnabled"], `${path}.tracingEnabled`) ?? false,
         properties: properties(source, endpointKeys)
     };
     const functions = functionFields(source, path);

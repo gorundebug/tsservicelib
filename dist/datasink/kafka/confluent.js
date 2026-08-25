@@ -241,7 +241,7 @@ export class KafkaDataSink extends OutputDataSink {
                 producer = this.#producer;
                 if (producer === undefined)
                     throw new Error(`Kafka data sink ${this.name} is stopped`);
-                delivery = await producer.send(topic, key, value, selectedPartition);
+                delivery = await producer.send(topic, key, value, selectedPartition, context.transportMetadata());
             }
             catch (error) {
                 failure = errorFromUnknown(error);
@@ -509,11 +509,14 @@ class ConfluentProducer {
     flush(timeoutMs) {
         return this.#producer.flush(timeoutMs === undefined ? undefined : { timeout: timeoutMs });
     }
-    async send(topic, key, value, partition) {
+    async send(topic, key, value, partition, headers) {
         const message = {
             value: Buffer.from(value),
             ...(key === undefined ? {} : { key: Buffer.from(key) }),
-            ...(partition === undefined ? {} : { partition })
+            ...(partition === undefined ? {} : { partition }),
+            ...(headers === undefined || headers.size === 0
+                ? {}
+                : { headers: Object.fromEntries(headers) })
         };
         const records = await this.#producer.send({
             topic,

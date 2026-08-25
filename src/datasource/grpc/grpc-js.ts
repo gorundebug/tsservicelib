@@ -24,6 +24,7 @@ import {
 } from "@bufbuild/protobuf";
 
 import {
+  applyDataSourceEndpointTracing,
   DataSourceEndpoint,
   DataSourceEndpointConsumer,
   FunctionCollector,
@@ -453,7 +454,11 @@ abstract class GrpcStreamingSourceConsumer<HandlerState, ReqT, ResR, T, R, E>
     context: MessageContext;
     span: Span | undefined;
   } {
-    let context = contextFromCall(call);
+    let context = applyDataSourceEndpointTracing(
+      contextFromCall(call),
+      this.stream().runtimeEnvironment(),
+      this.endpoint().id
+    );
     let span: Span | undefined;
     if (this.tracer !== undefined && context.samplingEnabled()) {
       const started = this.tracer.start(context, "grpc.input", [
@@ -542,7 +547,11 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     call: ServerUnaryCall<ReqT, ResR>,
     callback: (error: Error | null, value?: ResR) => void
   ): Promise<void> {
-    let context = contextFromCall(call);
+    let context = applyDataSourceEndpointTracing(
+      contextFromCall(call),
+      this.stream().runtimeEnvironment(),
+      this.endpoint().id
+    );
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "grpc.input", [

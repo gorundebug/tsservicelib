@@ -11,6 +11,7 @@ import {
   RuntimeTaskRegistry,
   STREAM_ID_HEADER,
   TRACE_SAMPLING_HEADER,
+  applyDataSourceEndpointTracing,
   errorFromUnknown,
   boolAttribute,
   makeStreamContext,
@@ -468,7 +469,11 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     cancellation: { readonly signal: AbortSignal; complete(): void },
     lifecycleSignal: AbortSignal
   ): Promise<void> {
-    let context = contextFromRequest(request, lifecycleSignal);
+    let context = applyDataSourceEndpointTracing(
+      contextFromRequest(request, lifecycleSignal),
+      this.stream().runtimeEnvironment(),
+      this.endpoint().id
+    );
     const data: HandlerData = { request, response };
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {

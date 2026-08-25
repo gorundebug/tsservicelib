@@ -191,6 +191,7 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
 export type AnyDataConnectorConfig = HttpDataConnectorConfig | GrpcDataConnectorConfig | KafkaDataConnectorConfig | CronDataConnectorConfig | TemporalDataConnectorConfig | CustomDataConnectorConfig;
 export interface EndpointConfig extends NamedIdentity {
     readonly idDataConnector: number;
+    readonly tracingEnabled?: boolean | undefined;
 }
 export declare const HTTPMethodType: {
     readonly Undefined: "";
@@ -482,6 +483,7 @@ export interface TemporalDataConnectorConfigDocument extends DataConnectorConfig
 }
 interface EndpointConfigDocumentBase extends ConfigDocumentIdentity, FunctionConfigDocument {
     readonly idDataConnector: number;
+    readonly tracingEnabled?: boolean | undefined;
 }
 export interface HttpEndpointConfigDocument extends EndpointConfigDocumentBase {
     readonly httpMethodType: "GET" | "POST";

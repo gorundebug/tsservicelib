@@ -308,6 +308,7 @@ export type AnyDataConnectorConfig =
 
 export interface EndpointConfig extends NamedIdentity {
   readonly idDataConnector: number;
+  readonly tracingEnabled?: boolean | undefined;
 }
 
 export const HTTPMethodType = {
@@ -661,6 +662,7 @@ export interface TemporalDataConnectorConfigDocument extends DataConnectorConfig
 
 interface EndpointConfigDocumentBase extends ConfigDocumentIdentity, FunctionConfigDocument {
   readonly idDataConnector: number;
+  readonly tracingEnabled?: boolean | undefined;
 }
 
 export interface HttpEndpointConfigDocument extends EndpointConfigDocumentBase {

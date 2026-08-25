@@ -15,6 +15,8 @@ export interface TypedInputStream<T, R, E> extends TypedStream<T>, TypedStreamCo
     consumeError(context: MessageContext, value: E): Completion;
     consumeResult(context: MessageContext, value: R): Completion;
 }
+/** Apply the current reloadable source-endpoint tracing policy to one event. */
+export declare function applyDataSourceEndpointTracing(context: MessageContext, environment: RuntimeEnvironment, endpointId: number): MessageContext;
 /** Common typed collector context passed to datasource endpoint handlers. */
 export declare class StreamContext<T, R, E> {
     #private;

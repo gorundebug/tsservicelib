@@ -37,7 +37,8 @@ export interface KafkaProducer {
     topic: string,
     key: Uint8Array | undefined,
     value: Uint8Array,
-    partition?: number
+    partition?: number,
+    headers?: ReadonlyMap<string, string>
   ): Promise<DeliveryResult>;
   flush(timeoutMs?: number): Promise<void>;
   disconnect(): Promise<void>;
@@ -396,7 +397,13 @@ export class KafkaDataSink extends OutputDataSink {
         const selectedPartition = await partition();
         producer = this.#producer;
         if (producer === undefined) throw new Error(`Kafka data sink ${this.name} is stopped`);
-        delivery = await producer.send(topic, key, value, selectedPartition);
+        delivery = await producer.send(
+          topic,
+          key,
+          value,
+          selectedPartition,
+          context.transportMetadata()
+        );
       } catch (error: unknown) {
         failure = errorFromUnknown(error);
         if (producer !== undefined) await this.recoverProducer(context, producer);
@@ -718,12 +725,16 @@ class ConfluentProducer implements KafkaProducer {
     topic: string,
     key: Uint8Array | undefined,
     value: Uint8Array,
-    partition?: number
+    partition?: number,
+    headers?: ReadonlyMap<string, string>
   ): Promise<DeliveryResult> {
     const message: KafkaJS.Message = {
       value: Buffer.from(value),
       ...(key === undefined ? {} : { key: Buffer.from(key) }),
-      ...(partition === undefined ? {} : { partition })
+      ...(partition === undefined ? {} : { partition }),
+      ...(headers === undefined || headers.size === 0
+        ? {}
+        : { headers: Object.fromEntries(headers) })
     };
     const records = await this.#producer.send({
       topic,

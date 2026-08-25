@@ -1,4 +1,4 @@
-import { DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 import { makeTemporalConnector } from "./connector.js";
 class TemporalDataSource extends InputDataSource {
     constructor(connectorId, environment) {
@@ -56,6 +56,7 @@ class TemporalEndpointConsumer {
             .withStreamId(envelope.streamId || newStreamId())
             .withPriority(envelope.priority)
             .withSampling(envelope.samplingEnabled);
+        context = applyDataSourceEndpointTracing(context, this.#stream.runtimeEnvironment(), this.#endpoint.id);
         if (durableCallContext !== undefined) {
             context = context.withDurableCallContext(durableCallContext);
         }

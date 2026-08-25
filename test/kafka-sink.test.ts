@@ -104,6 +104,7 @@ class FakeProducer implements KafkaProducer {
     readonly key?: Uint8Array;
     readonly value: Uint8Array;
     readonly partition?: number;
+    readonly headers?: ReadonlyMap<string, string>;
   }[] = [];
   public connected = false;
   public flushed = false;
@@ -126,13 +127,15 @@ class FakeProducer implements KafkaProducer {
     topic: string,
     key: Uint8Array | undefined,
     value: Uint8Array,
-    partition?: number
+    partition?: number,
+    headers?: ReadonlyMap<string, string>
   ): Promise<DeliveryResult> {
     this.sent.push({
       topic,
       ...(key === undefined ? {} : { key }),
       value,
-      ...(partition === undefined ? {} : { partition })
+      ...(partition === undefined ? {} : { partition }),
+      ...(headers === undefined ? {} : { headers })
     });
     if (this.nextFailure !== undefined) {
       const failure = this.nextFailure;
@@ -302,7 +305,24 @@ await test("Kafka sink records the canonical Go transport events", async () => {
   const tracing = new TestTracing();
   const harness = makeHarness(true, false, tracing);
   await harness.dataSink.start(Context.background());
-  await harness.source.emit(new MessageContext().withSampling(true), "payload");
+  await harness.source.emit(
+    new MessageContext()
+      .withMetadata(
+        new Map([
+          ["traceparent", "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"],
+          ["unrelated", "must-not-cross-transport"]
+        ])
+      )
+      .withSampling(true),
+    "payload"
+  );
+  const headers = harness.factory.producerInstance.sent[0]?.headers;
+  assert.equal(headers?.get("x-trace"), "1");
+  assert.equal(
+    headers?.get("traceparent"),
+    "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
+  );
+  assert.equal(headers?.has("unrelated"), false);
   const span = tracing.spans().find(({ name }) => name === "kafka.output");
   assert.ok(span);
   assert.deepEqual(
