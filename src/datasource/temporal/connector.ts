@@ -7,7 +7,7 @@ import {
   ScheduleOverlapPolicy,
   type WorkflowHandle
 } from "@temporalio/client";
-import { cancellationSignal } from "@temporalio/activity";
+import { cancellationSignal, heartbeat } from "@temporalio/activity";
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
 import { NativeConnection, Runtime, Worker } from "@temporalio/worker";
 
@@ -15,13 +15,17 @@ import {
   DataConnectorType,
   type DataConnectorConfig,
   type EndpointConfig,
-  type InputStreamConfig,
-  type StreamConfig,
   type DurableCallSemanticsConfig,
   type TemporalDataConnectorConfig,
   type TemporalEndpointConfig
 } from "../../runtime/config/index.js";
-import type { Context } from "../../runtime/context.js";
+import { Context } from "../../runtime/context.js";
+import {
+  DurableCallContext,
+  DurableCallEvent,
+  runDurableCallActivity,
+  type DurableCallDiagnostics
+} from "../../runtime/durable-call-context.js";
 import type {
   DurableEnvelope,
   DurableLinkHandler,
@@ -29,6 +33,7 @@ import type {
   DurableTransport
 } from "../../runtime/durable.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
+import { err, str, type Int64CounterVec } from "../../runtime/environment/index.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
   DURABLE_WORKFLOW_TYPE,
@@ -41,9 +46,9 @@ import {
   type EndpointWorkflowRequest
 } from "./contracts.js";
 
-const MANAGED_BY = "servicegen.managedBy";
-const OWNER = "servicegen.owner";
-const CALL_ID = "servicegen.callId";
+const MANAGED_BY = "servicelib.managedBy";
+const OWNER = "servicelib.owner";
+const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress: string | undefined;
 
@@ -68,7 +73,8 @@ function installSdkMetricsRuntime(): void {
 
 export type TemporalEndpointHandler = (
   envelope: EndpointEnvelope,
-  cancellationSignal?: AbortSignal
+  cancellationSignal?: AbortSignal,
+  durableCallContext?: DurableCallContext
 ) => Promise<EndpointResult>;
 
 interface LinkRegistration {
@@ -91,6 +97,7 @@ export class TemporalConnector implements DurableTransport {
   #client: Client | undefined;
   #workers: Worker[] = [];
   #workerRuns: Promise<void>[] = [];
+  readonly #durableEvents: Int64CounterVec;
   #started = false;
   public readonly id: number;
   public readonly name: string;
@@ -103,6 +110,10 @@ export class TemporalConnector implements DurableTransport {
     this.id = connectorId;
     this.name = config.name;
     this.#environment = environment;
+    this.#durableEvents = environment
+      .metrics()
+      .scope("durable_call", { connector: this.name })
+      .counterVec("events_total", "Total number of DurableCall Activity lifecycle events");
   }
 
   public registerLink(link: DurableLinkId, handler: DurableLinkHandler): void {
@@ -113,12 +124,39 @@ export class TemporalConnector implements DurableTransport {
     if (config.idDataConnector !== this.id) {
       throw new Error(`durable link ${key} does not belong to connector ${this.name}`);
     }
-    const serviceId = this.#environment.serviceConfig().id;
+    const serviceName = this.#environment.serviceConfig().name;
     this.#links.set(key, {
       link,
-      activityType: `servicegen.durable.${String(serviceId)}.${String(link.from)}.${String(link.to)}.v1`,
+      activityType: `${serviceName}.durable.${String(link.from)}.${String(link.to)}.v1`,
       handler
     });
+  }
+
+  private durableDiagnostics(
+    boundary: string,
+    target: string,
+    context: Context
+  ): DurableCallDiagnostics {
+    return (event, failure): void => {
+      this.#durableEvents.with({ boundary, target, event }).inc(context);
+      if (failure === undefined) return;
+      const fields = [
+        str("connector", this.name),
+        str("boundary", boundary),
+        str("target", target),
+        str("event", event),
+        err(failure)
+      ] as const;
+      if (
+        event === DurableCallEvent.MissingOutcome ||
+        event === DurableCallEvent.DuplicateTerminal ||
+        event === DurableCallEvent.LateHeartbeat
+      ) {
+        this.#environment.log().warn(context, "DurableCall Activity lifecycle misuse", ...fields);
+      } else {
+        this.#environment.log().error(context, "DurableCall Activity failed", ...fields);
+      }
+    };
   }
 
   public registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void {
@@ -210,11 +248,11 @@ export class TemporalConnector implements DurableTransport {
       priority: normalizeTemporalPriority(envelope.priority),
       envelope: durableEnvelopeToWire(envelope)
     };
-    const serviceId = this.#environment.serviceConfig().id;
-    const owner = `servicegen/${String(serviceId)}/link/${String(link.from)}/${String(link.to)}/v1`;
+    const serviceName = this.#environment.serviceConfig().name;
+    const owner = `${serviceName}/link/${String(link.from)}/${String(link.to)}/v1`;
     const handle = await this.client().workflow.start(DURABLE_WORKFLOW_TYPE, {
       args: [request],
-      workflowId: `servicegen/durable/${String(serviceId)}/${String(link.from)}/${String(link.to)}/${envelope.callId}`,
+      workflowId: `${serviceName}/durable/${String(link.from)}/${String(link.to)}/${envelope.callId}`,
       taskQueue: policy.taskQueue,
       ...(policy.workflowExecutionTimeout > 0
         ? { workflowExecutionTimeout: policy.workflowExecutionTimeout }
@@ -240,11 +278,10 @@ export class TemporalConnector implements DurableTransport {
     const config = this.endpointConfig(endpointId);
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
     const request = endpointRequest(registration, config, envelope);
-    const serviceId = this.#environment.serviceConfig().id;
-    const owner = `servicegen/${String(serviceId)}/endpoint/${String(endpointId)}/v1`;
+    const owner = `${this.name}/endpoint/${config.name}/v1`;
     const handle = await this.client().workflow.start(ENDPOINT_WORKFLOW_TYPE, {
       args: [request],
-      workflowId: `servicegen/endpoint/${String(serviceId)}/${String(endpointId)}/${envelope.executionId}`,
+      workflowId: `${this.name}/endpoint/${config.name}/${envelope.executionId}`,
       taskQueue: config.taskQueue,
       ...(config.workflowExecutionTimeout > 0
         ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
@@ -287,21 +324,45 @@ export class TemporalConnector implements DurableTransport {
     for (const registration of this.#links.values()) {
       queue(this.linkConfig(registration.link).taskQueue)[registration.activityType] = async (
         value
-      ) =>
-        registration.handler(
-          durableEnvelopeFromWire(value as DurableWorkflowRequest["envelope"]),
-          cancellationSignal()
+      ) => {
+        const signal = cancellationSignal();
+        const activityContext = new Context(signal);
+        const envelope = durableEnvelopeFromWire(value as DurableWorkflowRequest["envelope"]);
+        const durable = new DurableCallContext(
+          envelope.callId,
+          heartbeat,
+          this.durableDiagnostics(
+            "link",
+            `${String(registration.link.from)}:${String(registration.link.to)}`,
+            activityContext
+          )
         );
+        await runDurableCallActivity(signal, durable, () =>
+          registration.handler(envelope, signal, durable)
+        );
+      };
     }
     for (const registration of this.#endpoints.values()) {
       const config = this.endpointConfig(registration.endpointId);
       if (!config.enabled || registration.handler === undefined) continue;
       const handler = registration.handler;
       queue(config.taskQueue)[registration.activityType] = async (value) => {
-        const result = await handler(
-          endpointEnvelopeFromWire(value as EndpointWireEnvelope),
-          cancellationSignal()
+        const signal = cancellationSignal();
+        const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
+        if (!envelope.scheduled) {
+          const result = await handler(envelope, signal);
+          return { payload: bytesToWire(result.payload) } satisfies EndpointWireResult;
+        }
+        const activityContext = new Context(signal);
+        const durable = new DurableCallContext(
+          envelope.executionId,
+          heartbeat,
+          this.durableDiagnostics("schedule", String(registration.endpointId), activityContext)
         );
+        let result: EndpointResult = { payload: new Uint8Array() };
+        await runDurableCallActivity(signal, durable, async () => {
+          result = await handler(envelope, signal, durable);
+        });
         return { payload: bytesToWire(result.payload) } satisfies EndpointWireResult;
       };
     }
@@ -318,8 +379,7 @@ export class TemporalConnector implements DurableTransport {
   private async ensureSchedule(config: TemporalEndpointConfig): Promise<void> {
     const registration = this.#endpoints.get(config.id);
     if (registration?.handler === undefined) return;
-    const serviceId = this.#environment.serviceConfig().id;
-    const owner = `servicegen/${String(serviceId)}/endpoint/${String(config.id)}/v1`;
+    const owner = `${this.name}/endpoint/${config.name}/v1`;
     const request = endpointRequest(registration, config, {
       version: 1,
       endpointId: config.id,
@@ -342,7 +402,7 @@ export class TemporalConnector implements DurableTransport {
         action: {
           type: "startWorkflow",
           workflowType: ENDPOINT_WORKFLOW_TYPE,
-          workflowId: `servicegen/schedule/${String(serviceId)}/${String(config.id)}`,
+          workflowId: `${this.name}/schedule/${config.name}`,
           taskQueue: config.taskQueue,
           args: [request],
           memo: ownershipMemo(owner, config.scheduleId),
@@ -379,18 +439,9 @@ export class TemporalConnector implements DurableTransport {
     if (config.idDataConnector !== this.id) {
       throw new Error(`endpoint ${String(endpointId)} does not belong to connector ${this.name}`);
     }
-    const inputs = this.#environment
-      .runtimeConfig()
-      .config()
-      .streams.filter((stream) => isInputStreamConfig(stream) && stream.idEndpoint === endpointId);
-    if (inputs.length !== 1) {
-      throw new Error(
-        `Temporal endpoint ${String(endpointId)} must have exactly one input stream; found ${String(inputs.length)}`
-      );
-    }
     return {
       endpointId,
-      activityType: `servicegen.endpoint.${String(inputs[0]?.idService)}.${String(endpointId)}.v1`
+      activityType: `${this.name}.endpoint.${config.name}.v1`
     };
   }
 
@@ -438,10 +489,6 @@ function isTemporalEndpointConfig(
   config: EndpointConfig | undefined
 ): config is TemporalEndpointConfig {
   return config !== undefined && "taskQueue" in config && typeof config.taskQueue === "string";
-}
-
-function isInputStreamConfig(config: StreamConfig): config is InputStreamConfig {
-  return config.type === "Input" && "idEndpoint" in config;
 }
 
 export function makeTemporalConnector(
@@ -506,7 +553,7 @@ function bytesFromWire(value: readonly number[]): Uint8Array {
 }
 
 function ownershipMemo(owner: string, callId: string): Record<string, unknown> {
-  return { [MANAGED_BY]: "servicegen", [OWNER]: owner, [CALL_ID]: callId };
+  return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: callId };
 }
 
 async function validateWorkflowOwnership(
@@ -525,7 +572,7 @@ function validateMemo(
   owner: string,
   callId: string
 ): void {
-  if (memo?.[MANAGED_BY] !== "servicegen" || memo[OWNER] !== owner || memo[CALL_ID] !== callId) {
+  if (memo?.[MANAGED_BY] !== "servicelib" || memo[OWNER] !== owner || memo[CALL_ID] !== callId) {
     throw new Error(`Temporal ownership collision for ${owner}`);
   }
 }

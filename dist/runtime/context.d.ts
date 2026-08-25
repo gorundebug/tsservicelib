@@ -7,6 +7,11 @@ interface ContextState {
     readonly deadline: number | undefined;
     readonly samplingEnabled: boolean;
 }
+/** Minimal structural contract kept by MessageContext without a module cycle. */
+export interface DurableCallExecutionContext {
+    readonly parentCallId: string;
+    occurrence(key: string): number;
+}
 export declare class Context {
     #private;
     constructor(signal?: AbortSignal);
@@ -48,13 +53,10 @@ export declare class MessageContext extends Context {
     openTelemetryContext(): OpenTelemetryContext | undefined;
     withOpenTelemetryContext(context: OpenTelemetryContext): MessageContext;
     transportMetadata(): ReadonlyMap<string, string>;
-    /** @internal Propagates deterministic child-call identity across an Activity retry. */
-    withDurableInvocation(parentCallId: string): MessageContext;
-    /** @internal Returns and advances this invocation's per-payload occurrence. */
-    durableInvocation(): {
-        readonly parentCallId: string;
-        readonly occurrence: (key: string) => number;
-    } | undefined;
+    /** @internal Attaches processing-side Activity state without serializing it. */
+    withDurableCallContext(durable: DurableCallExecutionContext): MessageContext;
+    /** @internal Returns local state owned by the receiving Activity adapter. */
+    durableCallContext(): DurableCallExecutionContext | undefined;
 }
 export {};
 //# sourceMappingURL=context.d.ts.map

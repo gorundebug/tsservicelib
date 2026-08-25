@@ -7,11 +7,11 @@ import type {
 } from "./contracts.js";
 import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 
-export async function servicegenDurableLinkV1(request: DurableWorkflowRequest): Promise<void> {
+export async function servicelibDurableLinkV1(request: DurableWorkflowRequest): Promise<void> {
   await scheduleActivity(request.activityType, [request.envelope], activityOptions(request));
 }
 
-export async function servicegenTemporalEndpointV1(
+export async function servicelibTemporalEndpointV1(
   request: EndpointWorkflowRequest
 ): Promise<EndpointWireResult> {
   let envelope = request.envelope;
@@ -35,8 +35,8 @@ export async function servicegenTemporalEndpointV1(
 // Temporal dispatches a Workflow by the exported bundle key. Keep the
 // cross-language contract names stable without leaking them into graph nodes.
 export {
-  servicegenDurableLinkV1 as "servicegen.durable-link.v1",
-  servicegenTemporalEndpointV1 as "servicegen.temporal-endpoint.v1"
+  servicelibDurableLinkV1 as "servicelib.durable-link.v1",
+  servicelibTemporalEndpointV1 as "servicelib.temporal-endpoint.v1"
 };
 
 function activityOptions(request: {

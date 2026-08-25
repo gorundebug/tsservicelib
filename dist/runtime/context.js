@@ -96,7 +96,7 @@ export class MessageContext extends Context {
         super(signal);
         this.#messageState = {
             ...this.state(),
-            durableInvocation: undefined,
+            durableCallContext: undefined,
             metadata: undefined,
             openTelemetryContext: undefined,
             priority: undefined
@@ -209,25 +209,13 @@ export class MessageContext extends Context {
         }
         return result;
     }
-    /** @internal Propagates deterministic child-call identity across an Activity retry. */
-    withDurableInvocation(parentCallId) {
-        return this.clone({
-            durableInvocation: { parentCallId, occurrences: new Map() }
-        });
+    /** @internal Attaches processing-side Activity state without serializing it. */
+    withDurableCallContext(durable) {
+        return this.clone({ durableCallContext: durable });
     }
-    /** @internal Returns and advances this invocation's per-payload occurrence. */
-    durableInvocation() {
-        const scope = this.#messageState.durableInvocation;
-        if (scope === undefined)
-            return undefined;
-        return {
-            parentCallId: scope.parentCallId,
-            occurrence(key) {
-                const next = (scope.occurrences.get(key) ?? 0) + 1;
-                scope.occurrences.set(key, next);
-                return next;
-            }
-        };
+    /** @internal Returns local state owned by the receiving Activity adapter. */
+    durableCallContext() {
+        return this.#messageState.durableCallContext;
     }
 }
 function traceparentIsSampled(value) {

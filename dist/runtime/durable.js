@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MessageContext } from "./context.js";
+import { bindDurableCallSpan } from "./durable-call-context.js";
+import { stringAttribute } from "./environment/index.js";
 export class DurableCaller {
     link;
     transport;
@@ -31,7 +33,7 @@ export class DurableCaller {
     }
 }
 export function makeDurableLinkHandler(consumer, serde) {
-    return async (envelope, cancellationSignal) => {
+    return async (envelope, cancellationSignal, durableCallContext) => {
         if (envelope.version !== 1 || envelope.from <= 0 || envelope.to <= 0 || !envelope.callId) {
             throw new Error("invalid DurableCall envelope");
         }
@@ -39,19 +41,44 @@ export function makeDurableLinkHandler(consumer, serde) {
             .withMetadata(new Map(Object.entries(envelope.traceCarrier)))
             .withStreamId(envelope.streamId || randomUUID())
             .withPriority(envelope.priority)
-            .withSampling(envelope.samplingEnabled)
-            .withDurableInvocation(envelope.callId);
+            .withSampling(envelope.samplingEnabled);
+        if (durableCallContext !== undefined) {
+            context = context.withDurableCallContext(durableCallContext);
+        }
         if (cancellationSignal !== undefined) {
             context = context.withExternalCancellation(cancellationSignal);
         }
         if (envelope.deadlineUnixMillis > 0) {
             context = context.bounded(Math.max(0, envelope.deadlineUnixMillis - Date.now()));
         }
-        await consumer.consume(context, serde.deserialize(envelope.payload));
+        let span;
+        let durableSpan = false;
+        if (durableCallContext !== undefined && context.samplingEnabled()) {
+            const environment = consumer.runtimeEnvironment();
+            const tracer = environment.tracing()?.tracer(environment.serviceConfig().name);
+            if (tracer !== undefined) {
+                const sourceName = environment.runtimeConfig().streamById(envelope.from)?.name;
+                const started = tracer.start(context, "temporal.activity", [
+                    stringAttribute("boundary", "durable_call"),
+                    stringAttribute("from", sourceName ?? String(envelope.from)),
+                    stringAttribute("to", consumer.name)
+                ]);
+                context = started.context;
+                span = started.span;
+                durableSpan = bindDurableCallSpan(context, span);
+            }
+        }
+        try {
+            await consumer.consume(context, serde.deserialize(envelope.payload));
+        }
+        finally {
+            if (!durableSpan)
+                span?.end();
+        }
     };
 }
 function nextDurableCallId(context, link, payload) {
-    const invocation = context.durableInvocation();
+    const invocation = context.durableCallContext();
     if (invocation === undefined)
         return randomUUID();
     const payloadDigest = createHash("sha256").update(payload).digest("hex");

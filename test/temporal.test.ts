@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   DurableCaller,
+  DurableCallContext,
   MessageContext,
   StringSerde,
   makeDurableLinkHandler,
@@ -115,7 +116,9 @@ await test("nested DurableCall identities are stable across Activity retry and d
   const serde = makeStreamSerde(new StringSerde());
   const caller = new DurableCaller({ from: 2, to: 3 }, transport, serde);
   const executeAttempt = async (): Promise<readonly string[]> => {
-    const context = new MessageContext().withDurableInvocation("parent-call");
+    const context = new MessageContext().withDurableCallContext(
+      new DurableCallContext("parent-call")
+    );
     await caller.consume(context, "same");
     await caller.consume(context, "same");
     return transport.submitted.splice(0).map(({ callId }) => callId);

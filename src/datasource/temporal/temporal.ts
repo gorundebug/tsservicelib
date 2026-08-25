@@ -5,6 +5,7 @@ import {
   InputDataSource,
   MessageContext,
   ScheduleBackend,
+  bindDurableCallSpan,
   errorFromUnknown,
   makeScheduleTrigger,
   newStreamId,
@@ -13,6 +14,7 @@ import {
   type Completion,
   type Context,
   type Consumer,
+  type DurableCallContext,
   type InputEndpoint,
   type InputEndpointConsumer,
   type RuntimeEnvironment,
@@ -80,8 +82,8 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
         }
       });
     }
-    connector.registerEndpoint(endpoint.id, (envelope, cancellationSignal) =>
-      this.activate(envelope, cancellationSignal)
+    connector.registerEndpoint(endpoint.id, (envelope, cancellationSignal, durableCallContext) =>
+      this.activate(envelope, cancellationSignal, durableCallContext)
     );
   }
 
@@ -95,7 +97,8 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
 
   public async activate(
     envelope: EndpointEnvelope,
-    cancellationSignal?: AbortSignal
+    cancellationSignal?: AbortSignal,
+    durableCallContext?: DurableCallContext
   ): Promise<EndpointResult> {
     if (envelope.version !== 1 || envelope.endpointId !== this.#endpoint.id) {
       throw new Error(`invalid Temporal endpoint envelope for ${this.#endpoint.name}`);
@@ -105,6 +108,9 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
       .withStreamId(envelope.streamId || newStreamId())
       .withPriority(envelope.priority)
       .withSampling(envelope.samplingEnabled);
+    if (durableCallContext !== undefined) {
+      context = context.withDurableCallContext(durableCallContext);
+    }
     if (cancellationSignal !== undefined) {
       context = context.withExternalCancellation(cancellationSignal);
     }
@@ -114,6 +120,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
     const streamId = context.streamId();
     if (streamId === undefined) throw new Error("Temporal endpoint stream ID was not created");
     let span: Span | undefined;
+    let durableSpan = false;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const startedSpan = this.#tracer.start(context, "temporal.input", [
         stringAttribute("stream", this.#stream.name),
@@ -121,6 +128,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
       ]);
       context = startedSpan.context;
       span = startedSpan.span;
+      durableSpan = bindDurableCallSpan(context, span);
     }
     const started = this.#endpoint.onRequestStart(context);
     const expectsResult = this.#stream.resultStream() !== undefined;
@@ -152,7 +160,7 @@ class TemporalEndpointConsumer<Input, T, R, E> implements InputEndpointConsumer,
         this.#endpoint.onPendingRemove(context, streamId);
       }
       this.#endpoint.onRequestEnd(context, started, failure);
-      span?.end();
+      if (!durableSpan) span?.end();
     }
   }
 

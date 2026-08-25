@@ -1,4 +1,5 @@
 import { MessageContext, type Context } from "./context.js";
+import { type DurableCallContext } from "./durable-call-context.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { StreamSerde } from "./serde/index.js";
 import type { Caller, TypedStreamConsumer } from "./stream.js";
@@ -19,7 +20,7 @@ export interface DurableEnvelope {
     readonly traceCarrier: Readonly<Record<string, string>>;
     readonly payload: Uint8Array;
 }
-export type DurableLinkHandler = (envelope: DurableEnvelope, cancellationSignal?: AbortSignal) => Promise<void>;
+export type DurableLinkHandler = (envelope: DurableEnvelope, cancellationSignal?: AbortSignal, durableCallContext?: DurableCallContext) => Promise<void>;
 /** Infrastructure transport used by DurableCall; it never replaces the target node. */
 export interface DurableTransport extends Lifecycle {
     readonly id: number;

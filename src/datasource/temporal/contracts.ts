@@ -1,7 +1,7 @@
 import type { DurableEnvelope } from "../../runtime/durable.js";
 
-export const DURABLE_WORKFLOW_TYPE = "servicegen.durable-link.v1";
-export const ENDPOINT_WORKFLOW_TYPE = "servicegen.temporal-endpoint.v1";
+export const DURABLE_WORKFLOW_TYPE = "servicelib.durable-link.v1";
+export const ENDPOINT_WORKFLOW_TYPE = "servicelib.temporal-endpoint.v1";
 
 export interface EndpointEnvelope {
   readonly version: number;
