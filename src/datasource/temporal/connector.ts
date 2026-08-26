@@ -549,11 +549,7 @@ function validateMemo(
   owner: string,
   messageId: string
 ): void {
-  if (
-    memo?.[MANAGED_BY] !== "servicelib" ||
-    memo[OWNER] !== owner ||
-    memo[CALL_ID] !== messageId
-  ) {
+  if (memo?.[MANAGED_BY] !== "servicelib" || memo[OWNER] !== owner || memo[CALL_ID] !== messageId) {
     throw new Error(`Temporal ownership collision for ${owner}`);
   }
 }

@@ -44,7 +44,7 @@ export class DelayStream<T> extends ConsumedStream<T> implements TypedStreamCons
       }
       return;
     }
-    let durable = false;
+    let durable: boolean;
     try {
       durable = await durableCallDelay(spanContext, duration);
     } catch (error: unknown) {
