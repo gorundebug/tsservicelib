@@ -1,5 +1,6 @@
 import {
   DataConnectorType,
+  isTemporalEndpointConfig,
   type CanonicalConfig,
   type DataConnectorConfig,
   type EndpointConfig,
@@ -149,7 +150,9 @@ function endpointIcon(environment: RuntimeEnvironment, config: StreamConfig): st
   const endpoint = environment.runtimeConfig().endpointById(id);
   const connector = environment.runtimeConfig().dataConnectorById(endpoint?.idDataConnector ?? 0);
   if (connector?.type === DataConnectorType.Cron) return icons.cron;
-  if (connector?.type !== DataConnectorType.Temporal || endpoint === undefined) return undefined;
+  if (connector?.type !== DataConnectorType.Temporal || !isTemporalEndpointConfig(endpoint)) {
+    return undefined;
+  }
   if (endpoint.temporalExecutionType === "Workflow") {
     return endpoint.schedule ? icons.scheduledWorkflow : icons.workflow;
   }
