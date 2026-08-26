@@ -430,27 +430,22 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   private async waitForQuiescence(): Promise<void> {
     for (;;) {
       this.throwIfFailed();
-      const poolWork =
-        [...this.#taskPools.values()].some(
-          (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
-        ) ||
-        [...this.#priorityTaskPools.values()].some(
-          (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
-        );
-      if (this.#tasks.activeCount() === 0 && !poolWork) {
-        await Promise.resolve();
-        if (
-          this.#tasks.activeCount() === 0 &&
-          ![...this.#taskPools.values()].some(
-            (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
-          ) &&
-          ![...this.#priorityTaskPools.values()].some(
-            (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
-          )
-        )
-          return;
-      }
+      await Promise.all([
+        ...[...this.#taskPools.values()].map(async (pool) => pool.waitIdle()),
+        ...[...this.#priorityTaskPools.values()].map(async (pool) => pool.waitIdle()),
+        this.#tasks.drain()
+      ]);
       await Promise.resolve();
+      if (
+        this.#tasks.activeCount() === 0 &&
+        ![...this.#taskPools.values()].some(
+          (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
+        ) &&
+        ![...this.#priorityTaskPools.values()].some(
+          (pool) => pool.activeCount() > 0 || pool.queueLength() > 0
+        )
+      )
+        return;
     }
   }
 

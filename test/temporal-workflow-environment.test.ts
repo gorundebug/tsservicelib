@@ -227,6 +227,38 @@ await test("Workflow TaskPool limits logical executors and finish drains", async
   assert.equal(target.active, 0);
 });
 
+await test("Workflow quiescence yields while pooled asynchronous work is pending", async () => {
+  const config = workflowPoolConfig(1);
+  const environment = new TemporalWorkflowEnvironment(config, 1, makeDefaultSerdeRegistry(), {
+    logger: noopLogger,
+    metrics: noopMetrics
+  });
+  const [sourceConfig, targetConfig] = config.streams;
+  if (sourceConfig === undefined || targetConfig === undefined)
+    throw new Error("workflow pool fixture streams are missing");
+  const source = new ConsumedStream(sourceConfig, environment, environment.serde(int32SerdeType));
+  class YieldingConsumer extends ServiceStream implements TypedStreamConsumer<number> {
+    public completed = false;
+
+    public async consume(): Promise<void> {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      this.completed = true;
+    }
+  }
+  const target = new YieldingConsumer(targetConfig, environment);
+  environment.registerStream(source);
+  environment.registerStream(target);
+  source.setConsumer(target);
+
+  await environment.start();
+  await source.emit(new MessageContext(), 1);
+  assert.equal(await environment.waitForCompletion(Promise.resolve(7)), 7);
+  assert.equal(target.completed, true);
+  await environment.finish();
+});
+
 await test("Workflow TaskPool propagates failure and rejects canceled admission", async () => {
   const config = workflowPoolConfig(1);
   const environment = new TemporalWorkflowEnvironment(config, 1, makeDefaultSerdeRegistry(), {

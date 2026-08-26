@@ -28,6 +28,8 @@ class WorkflowPoolCore {
   #state: "created" | "running" | "stopping" | "stopped" = "created";
   #resolveDrain: (() => void) | undefined;
   #drain: Promise<void> | undefined;
+  #resolveIdle: (() => void) | undefined;
+  #idle: Promise<void> = Promise.resolve();
 
   public constructor(
     name: string,
@@ -87,6 +89,11 @@ class WorkflowPoolCore {
       this.#metrics?.taskRejected.inc(context);
       throw new PoolStoppedError(this.#name);
     }
+    if (this.#active === 0 && this.#queue.length === 0) {
+      this.#idle = new Promise<void>((resolve) => {
+        this.#resolveIdle = resolve;
+      });
+    }
     const task: WorkflowTask = {
       context,
       execute,
@@ -128,6 +135,10 @@ class WorkflowPoolCore {
     this.pump();
     this.finishDrainIfIdle();
     await this.#drain;
+  }
+
+  public async waitIdle(): Promise<void> {
+    await this.#idle;
   }
 
   private pump(): void {
@@ -174,7 +185,10 @@ class WorkflowPoolCore {
   }
 
   private finishDrainIfIdle(): void {
-    if (this.#state !== "stopping" || this.#active !== 0 || this.#queue.length !== 0) return;
+    if (this.#active !== 0 || this.#queue.length !== 0) return;
+    this.#resolveIdle?.();
+    this.#resolveIdle = undefined;
+    if (this.#state !== "stopping") return;
     this.#state = "stopped";
     this.#metrics?.queueLength.set(0);
     this.#metrics?.executorsBusy.set(0);
@@ -215,6 +229,9 @@ export class WorkflowTaskPool implements TaskPoolLike {
   public stop(): Promise<void> {
     return this.#core.stop();
   }
+  public waitIdle(): Promise<void> {
+    return this.#core.waitIdle();
+  }
   public addTask(context: Context, execute: PoolTask): void {
     this.#core.addTask(context, 0, execute);
   }
@@ -250,6 +267,9 @@ export class WorkflowPriorityTaskPool implements PriorityTaskPoolLike {
   }
   public stop(): Promise<void> {
     return this.#core.stop();
+  }
+  public waitIdle(): Promise<void> {
+    return this.#core.waitIdle();
   }
   public addTask(context: Context, priority: number, execute: PoolTask): void {
     this.#core.addTask(context, priority, execute);

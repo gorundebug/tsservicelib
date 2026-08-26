@@ -10,6 +10,7 @@ export declare class WorkflowTaskPool implements TaskPoolLike {
     activeCount(): number;
     start(): void;
     stop(): Promise<void>;
+    waitIdle(): Promise<void>;
     addTask(context: Context, execute: PoolTask): void;
 }
 export declare class WorkflowPriorityTaskPool implements PriorityTaskPoolLike {
@@ -21,6 +22,7 @@ export declare class WorkflowPriorityTaskPool implements PriorityTaskPoolLike {
     activeCount(): number;
     start(): void;
     stop(): Promise<void>;
+    waitIdle(): Promise<void>;
     addTask(context: Context, priority: number, execute: PoolTask): void;
 }
 //# sourceMappingURL=workflow-pool.d.ts.map
