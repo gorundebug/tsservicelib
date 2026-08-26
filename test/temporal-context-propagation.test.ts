@@ -84,8 +84,18 @@ await test("Temporal Workflow forwards its native headers to the Activity", asyn
   const outbound = registered.outbound?.[0];
   assert.ok(inbound?.execute);
   assert.ok(outbound?.scheduleActivity);
-  const carrier = { traceparent: payload("sampled-parent") };
-  await inbound.execute({ args: [], headers: carrier }, () => Promise.resolve(undefined));
+  const traceparent = "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01";
+  const carrier = { traceparent: payload(traceparent) };
+  let workflowHeaders: Headers | undefined;
+  await inbound.execute({ args: [], headers: carrier }, (input) => {
+    workflowHeaders = input.headers;
+    return Promise.resolve(undefined);
+  });
+  assert.ok(workflowHeaders);
+  assert.deepEqual(
+    defaultPayloadConverter.fromPayload(requiredHeader(workflowHeaders, "_tracer-data")),
+    { traceparent }
+  );
   let activityHeaders: Headers | undefined;
   await outbound.scheduleActivity(
     {

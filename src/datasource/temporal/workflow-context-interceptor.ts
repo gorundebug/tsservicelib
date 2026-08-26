@@ -14,6 +14,7 @@ import { MessageContext } from "../../runtime/context.js";
 import { TEMPORAL_HEADER_DEADLINE_UNIX_NANO, TEMPORAL_HEADER_PRIORITY } from "./headers.js";
 
 const CARRIER_NAMES = ["traceparent", "tracestate", "baggage", "x-trace", "x-stream-id"] as const;
+const TEMPORAL_TRACE_HEADER = "_tracer-data";
 let workflowMessageContext: MessageContext | undefined;
 
 export function currentTemporalWorkflowMessageContext(): MessageContext {
@@ -27,7 +28,8 @@ export function interceptors(): WorkflowInterceptors {
   let carrier: Headers = {};
   const inbound: WorkflowInboundCallsInterceptor = {
     execute(input: WorkflowExecuteInput, next): Promise<unknown> {
-      carrier = input.headers;
+      const headers = withTemporalTraceHeader(input.headers);
+      carrier = headers;
       const cancellation = new AbortController();
       try {
         void CancellationScope.current().cancelRequested.catch((reason: unknown) => {
@@ -36,10 +38,8 @@ export function interceptors(): WorkflowInterceptors {
       } catch {
         // Direct interceptor unit tests run outside a Workflow isolate.
       }
-      workflowMessageContext = decodeContext(input.headers).withExternalCancellation(
-        cancellation.signal
-      );
-      return next(input);
+      workflowMessageContext = decodeContext(headers).withExternalCancellation(cancellation.signal);
+      return next({ ...input, headers });
     }
   };
   const outbound: WorkflowOutboundCallsInterceptor = {
@@ -51,6 +51,21 @@ export function interceptors(): WorkflowInterceptors {
     }
   };
   return { inbound: [inbound], outbound: [outbound] };
+}
+
+function withTemporalTraceHeader(headers: Headers): Headers {
+  if (headers[TEMPORAL_TRACE_HEADER] !== undefined) return headers;
+  const traceparent = decodeString(headers["traceparent"]);
+  if (traceparent === undefined || traceparent === "") return headers;
+  const carrier: Record<string, string> = { traceparent };
+  for (const name of ["tracestate", "baggage"] as const) {
+    const value = decodeString(headers[name]);
+    if (value !== undefined && value !== "") carrier[name] = value;
+  }
+  return {
+    ...headers,
+    [TEMPORAL_TRACE_HEADER]: defaultPayloadConverter.toPayload(carrier)
+  };
 }
 
 function decodeContext(headers: Headers): MessageContext {
