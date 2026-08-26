@@ -12,7 +12,7 @@ import { ENDPOINT_WORKFLOW_TYPE, temporalDirectWorkflowType, temporalEndpointAct
 import { currentTemporalActivityMessageContext, runWithTemporalSubmissionContext, temporalActivityInterceptors, temporalWorkflowClientInterceptor } from "./context-propagation.js";
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
-const MESSAGE_ID = "servicelib.messageId";
+const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress;
 export function temporalCronExpression(expression) {
@@ -396,7 +396,7 @@ function bytesFromWire(value) {
     return Uint8Array.from(value);
 }
 function ownershipMemo(owner, messageId) {
-    return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [MESSAGE_ID]: messageId };
+    return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: messageId };
 }
 async function validateWorkflowOwnership(handle, workflowType, owner, messageId) {
     const description = await handle.describe();
@@ -407,7 +407,7 @@ async function validateWorkflowOwnership(handle, workflowType, owner, messageId)
 function validateMemo(memo, owner, messageId) {
     if (memo?.[MANAGED_BY] !== "servicelib" ||
         memo[OWNER] !== owner ||
-        memo[MESSAGE_ID] !== messageId) {
+        memo[CALL_ID] !== messageId) {
         throw new Error(`Temporal ownership collision for ${owner}`);
     }
 }

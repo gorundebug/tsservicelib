@@ -53,7 +53,7 @@ import {
 
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
-const MESSAGE_ID = "servicelib.messageId";
+const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress: string | undefined;
 
@@ -530,7 +530,7 @@ function bytesFromWire(value: readonly number[]): Uint8Array {
 }
 
 function ownershipMemo(owner: string, messageId: string): Record<string, unknown> {
-  return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [MESSAGE_ID]: messageId };
+  return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: messageId };
 }
 
 async function validateWorkflowOwnership(
@@ -552,7 +552,7 @@ function validateMemo(
   if (
     memo?.[MANAGED_BY] !== "servicelib" ||
     memo[OWNER] !== owner ||
-    memo[MESSAGE_ID] !== messageId
+    memo[CALL_ID] !== messageId
   ) {
     throw new Error(`Temporal ownership collision for ${owner}`);
   }
