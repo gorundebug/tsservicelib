@@ -34,7 +34,7 @@ export class DelayStream extends ConsumedStream {
             }
             return;
         }
-        let durable = false;
+        let durable;
         try {
             durable = await durableCallDelay(spanContext, duration);
         }

@@ -405,9 +405,7 @@ async function validateWorkflowOwnership(handle, workflowType, owner, messageId)
     validateMemo(description.memo, owner, messageId);
 }
 function validateMemo(memo, owner, messageId) {
-    if (memo?.[MANAGED_BY] !== "servicelib" ||
-        memo[OWNER] !== owner ||
-        memo[CALL_ID] !== messageId) {
+    if (memo?.[MANAGED_BY] !== "servicelib" || memo[OWNER] !== owner || memo[CALL_ID] !== messageId) {
         throw new Error(`Temporal ownership collision for ${owner}`);
     }
 }

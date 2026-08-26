@@ -102,11 +102,12 @@ function makeNode(environment, stream) {
     const config = stream.config();
     const service = statusService(environment, config);
     const api = isApi(environment, config);
-    const icon = endpointIcon(environment, config) ?? (api
-        ? config.type === "Sink"
-            ? icons.apiSink
-            : icons.api
-        : (transformationIcons[config.type] ?? icons.function));
+    const icon = endpointIcon(environment, config) ??
+        (api
+            ? config.type === "Sink"
+                ? icons.apiSink
+                : icons.api
+            : (transformationIcons[config.type] ?? icons.function));
     return {
         id: stream.id,
         label: `${stream.name}(${stream.transformationName.toUpperCase()})\n[${service.name}]`,
