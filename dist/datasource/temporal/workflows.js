@@ -1,5 +1,6 @@
 import { continueAsNew, scheduleActivity, sleep, workflowInfo } from "@temporalio/workflow";
 import { DurableCallContext, TemporalContinueAsNewRequest, runDurableCallWorkflow } from "../../runtime/durable-call-context.js";
+import { str } from "../../runtime/environment/log.js";
 import { isTemporalEndpointConfig } from "../../runtime/config/schedule.js";
 import { scheduledTimeFromWorkflowId } from "./scheduled-time.js";
 import { currentTemporalWorkflowMessageContext } from "./workflow-context-interceptor.js";
@@ -24,7 +25,8 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
         throw new Error("direct Temporal Workflow received an Activity endpoint request");
     }
     const envelope = scheduledEnvelope(endpoint.request.envelope);
-    const messageId = envelope.messageId || workflowInfo().workflowId;
+    const info = workflowInfo();
+    const messageId = envelope.messageId || info.workflowId;
     let context = currentTemporalWorkflowMessageContext()
         .withStreamId(envelope.streamId || messageId)
         .withPriority(envelope.priority);
@@ -43,6 +45,7 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
         }
     });
     context = context.withDurableCallContext(durable);
+    endpoint.environment.log().info(context, "temporal workflow graph started", str("workflow_id", info.workflowId), str("workflow_type", info.workflowType));
     let result;
     if (endpoint.stream.resultStream() !== undefined) {
         result = Promise.withResolvers();

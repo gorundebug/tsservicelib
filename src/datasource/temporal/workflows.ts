@@ -8,6 +8,7 @@ import {
 import type { Completion, Consumer } from "../../runtime/stream.js";
 import type { TypedInputStream } from "../../runtime/data-source.js";
 import type { MessageContext } from "../../runtime/context.js";
+import { str } from "../../runtime/environment/log.js";
 import { isTemporalEndpointConfig } from "../../runtime/config/schedule.js";
 import type {
   EndpointWireEnvelope,
@@ -56,7 +57,8 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
     throw new Error("direct Temporal Workflow received an Activity endpoint request");
   }
   const envelope = scheduledEnvelope(endpoint.request.envelope);
-  const messageId = envelope.messageId || workflowInfo().workflowId;
+  const info = workflowInfo();
+  const messageId = envelope.messageId || info.workflowId;
   let context = currentTemporalWorkflowMessageContext()
     .withStreamId(envelope.streamId || messageId)
     .withPriority(envelope.priority);
@@ -75,6 +77,12 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
     }
   });
   context = context.withDurableCallContext(durable);
+  endpoint.environment.log().info(
+    context,
+    "temporal workflow graph started",
+    str("workflow_id", info.workflowId),
+    str("workflow_type", info.workflowType)
+  );
 
   let result: PromiseWithResolvers<R> | undefined;
   if (endpoint.stream.resultStream() !== undefined) {
