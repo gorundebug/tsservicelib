@@ -4,12 +4,24 @@ export function newStreamId() {
     return globalThis.crypto.randomUUID();
 }
 const EMPTY_METADATA = new Map();
+/** Monotonic on Node.js and deterministic inside a Temporal Workflow isolate. */
+function contextNow() {
+    const performanceValue = Reflect.get(globalThis, "performance");
+    if (typeof performanceValue === "object" && performanceValue !== null) {
+        const now = Reflect.get(performanceValue, "now");
+        if (typeof now === "function")
+            return Number(Reflect.apply(now, performanceValue, []));
+    }
+    return Date.now();
+}
 function deadlineSignal(deadline) {
     if (deadline === undefined) {
         return undefined;
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("context deadline exceeded")), Math.max(0, Math.ceil(deadline - performance.now())));
+    const timer = setTimeout(() => {
+        controller.abort(new Error("context deadline exceeded"));
+    }, Math.max(0, Math.ceil(deadline - contextNow())));
     timer.unref?.();
     return controller.signal;
 }
@@ -21,14 +33,18 @@ function composeSignal(signal, deadline) {
 export function combineAbortSignals(signals) {
     if (signals.length === 0)
         return new AbortController().signal;
-    if (signals.length === 1)
-        return signals[0];
+    const first = signals[0];
+    if (signals.length === 1 && first !== undefined)
+        return first;
     const controller = new AbortController();
     const abort = (signal) => {
         if (!controller.signal.aborted)
             controller.abort(signal.reason);
-        for (const candidate of signals)
-            candidate.removeEventListener("abort", listeners.get(candidate));
+        for (const candidate of signals) {
+            const listener = listeners.get(candidate);
+            if (listener !== undefined)
+                candidate.removeEventListener("abort", listener);
+        }
     };
     const listeners = new Map();
     for (const signal of signals) {
@@ -36,14 +52,16 @@ export function combineAbortSignals(signals) {
             controller.abort(signal.reason);
             return controller.signal;
         }
-        const listener = () => abort(signal);
+        const listener = () => {
+            abort(signal);
+        };
         listeners.set(signal, listener);
         signal.addEventListener("abort", listener, { once: true });
     }
     return controller.signal;
 }
 function boundedDeadline(current, timeoutMs) {
-    const candidate = performance.now() + Math.max(0, timeoutMs);
+    const candidate = contextNow() + Math.max(0, timeoutMs);
     return current === undefined ? candidate : Math.min(current, candidate);
 }
 function childDeadline(current, requested) {
@@ -76,10 +94,10 @@ export class Context {
     remainingMs() {
         return this.#state.deadline === undefined
             ? undefined
-            : Math.max(0, this.#state.deadline - performance.now());
+            : Math.max(0, this.#state.deadline - contextNow());
     }
     cancelled() {
-        return this.#state.signal.aborted || (this.#state.deadline ?? Infinity) <= performance.now();
+        return this.#state.signal.aborted || (this.#state.deadline ?? Infinity) <= contextNow();
     }
     samplingEnabled() {
         return this.#state.samplingEnabled;
@@ -145,11 +163,10 @@ export class MessageContext extends Context {
     remainingMs() {
         return this.#messageState.deadline === undefined
             ? undefined
-            : Math.max(0, this.#messageState.deadline - performance.now());
+            : Math.max(0, this.#messageState.deadline - contextNow());
     }
     cancelled() {
-        return (this.#messageState.signal.aborted ||
-            (this.#messageState.deadline ?? Infinity) <= performance.now());
+        return (this.#messageState.signal.aborted || (this.#messageState.deadline ?? Infinity) <= contextNow());
     }
     samplingEnabled() {
         return this.#messageState.samplingEnabled;

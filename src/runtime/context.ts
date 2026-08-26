@@ -27,14 +27,26 @@ export interface DurableCallExecutionContext {
 
 const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
 
+/** Monotonic on Node.js and deterministic inside a Temporal Workflow isolate. */
+function contextNow(): number {
+  const performanceValue: unknown = Reflect.get(globalThis, "performance");
+  if (typeof performanceValue === "object" && performanceValue !== null) {
+    const now: unknown = Reflect.get(performanceValue, "now");
+    if (typeof now === "function") return Number(Reflect.apply(now, performanceValue, []));
+  }
+  return Date.now();
+}
+
 function deadlineSignal(deadline: number | undefined): AbortSignal | undefined {
   if (deadline === undefined) {
     return undefined;
   }
   const controller = new AbortController();
   const timer = setTimeout(
-    () => controller.abort(new Error("context deadline exceeded")),
-    Math.max(0, Math.ceil(deadline - performance.now()))
+    () => {
+      controller.abort(new Error("context deadline exceeded"));
+    },
+    Math.max(0, Math.ceil(deadline - contextNow()))
   );
   (timer as unknown as { unref?: () => void }).unref?.();
   return controller.signal;
@@ -48,12 +60,15 @@ function composeSignal(signal: AbortSignal, deadline: number | undefined): Abort
 /** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
 export function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal {
   if (signals.length === 0) return new AbortController().signal;
-  if (signals.length === 1) return signals[0]!;
+  const first = signals[0];
+  if (signals.length === 1 && first !== undefined) return first;
   const controller = new AbortController();
   const abort = (signal: AbortSignal): void => {
     if (!controller.signal.aborted) controller.abort(signal.reason);
-    for (const candidate of signals)
-      candidate.removeEventListener("abort", listeners.get(candidate)!);
+    for (const candidate of signals) {
+      const listener = listeners.get(candidate);
+      if (listener !== undefined) candidate.removeEventListener("abort", listener);
+    }
   };
   const listeners = new Map<AbortSignal, () => void>();
   for (const signal of signals) {
@@ -61,7 +76,9 @@ export function combineAbortSignals(signals: readonly AbortSignal[]): AbortSigna
       controller.abort(signal.reason);
       return controller.signal;
     }
-    const listener = (): void => abort(signal);
+    const listener = (): void => {
+      abort(signal);
+    };
     listeners.set(signal, listener);
     signal.addEventListener("abort", listener, { once: true });
   }
@@ -69,7 +86,7 @@ export function combineAbortSignals(signals: readonly AbortSignal[]): AbortSigna
 }
 
 function boundedDeadline(current: number | undefined, timeoutMs: number): number {
-  const candidate = performance.now() + Math.max(0, timeoutMs);
+  const candidate = contextNow() + Math.max(0, timeoutMs);
   return current === undefined ? candidate : Math.min(current, candidate);
 }
 
@@ -113,11 +130,11 @@ export class Context {
   public remainingMs(): number | undefined {
     return this.#state.deadline === undefined
       ? undefined
-      : Math.max(0, this.#state.deadline - performance.now());
+      : Math.max(0, this.#state.deadline - contextNow());
   }
 
   public cancelled(): boolean {
-    return this.#state.signal.aborted || (this.#state.deadline ?? Infinity) <= performance.now();
+    return this.#state.signal.aborted || (this.#state.deadline ?? Infinity) <= contextNow();
   }
 
   public samplingEnabled(): boolean {
@@ -194,13 +211,12 @@ export class MessageContext extends Context {
   public override remainingMs(): number | undefined {
     return this.#messageState.deadline === undefined
       ? undefined
-      : Math.max(0, this.#messageState.deadline - performance.now());
+      : Math.max(0, this.#messageState.deadline - contextNow());
   }
 
   public override cancelled(): boolean {
     return (
-      this.#messageState.signal.aborted ||
-      (this.#messageState.deadline ?? Infinity) <= performance.now()
+      this.#messageState.signal.aborted || (this.#messageState.deadline ?? Infinity) <= contextNow()
     );
   }
 

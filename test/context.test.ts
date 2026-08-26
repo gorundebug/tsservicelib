@@ -67,6 +67,25 @@ await test("reusing the same cancellation signal does not build a redundant comp
   assert.equal(context.withExternalCancellation(controller.signal), context);
 });
 
+await test("context deadlines remain available without the Node performance global", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
+  Object.defineProperty(globalThis, "performance", {
+    configurable: true,
+    value: undefined
+  });
+  try {
+    const context = new MessageContext().bounded(100);
+    assert.ok((context.remainingMs() ?? Infinity) <= 100);
+    assert.equal(context.cancelled(), false);
+  } finally {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(globalThis, "performance");
+    } else {
+      Object.defineProperty(globalThis, "performance", descriptor);
+    }
+  }
+});
+
 await test("detached child drops cancellation and deadline but preserves message values", async () => {
   const controller = new AbortController();
   const parent = new MessageContext()
