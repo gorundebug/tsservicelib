@@ -15,7 +15,10 @@ import {
   W3CTraceContextPropagator
 } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
+import { OTLPTraceExporter as TemporalOTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc-temporal";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import { Resource as TemporalResource } from "@opentelemetry/resources-temporal";
+import { BatchSpanProcessor as TemporalBatchSpanProcessor } from "@opentelemetry/sdk-trace-base-temporal";
 import {
   AlwaysOnSampler,
   BatchSpanProcessor,
@@ -74,6 +77,7 @@ const metadataSetter: TextMapSetter<Map<string, string>> = {
 
 export class OpenTelemetryTracingEngine implements TracingEngine {
   readonly #provider: NodeTracerProvider;
+  readonly #temporalProcessor: TemporalBatchSpanProcessor;
   readonly #tracing: Tracing;
   #shutdown: Promise<void> | undefined;
 
@@ -84,6 +88,14 @@ export class OpenTelemetryTracingEngine implements TracingEngine {
       ...options.resourceAttributes,
       [ATTR_SERVICE_NAME]: options.serviceName
     });
+    const temporalResource = new TemporalResource({
+      ...options.resourceAttributes,
+      [ATTR_SERVICE_NAME]: options.serviceName
+    });
+    this.#temporalProcessor = new TemporalBatchSpanProcessor(
+      new TemporalOTLPTraceExporter(exporterOptions(options)),
+      options.batch
+    );
     this.#provider = new NodeTracerProvider({
       resource,
       sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
@@ -91,13 +103,10 @@ export class OpenTelemetryTracingEngine implements TracingEngine {
     });
     this.#tracing = new OpenTelemetryTracing(
       this.#provider,
-      // Temporal 1.21 pins the OTel 1.x structural interfaces while the
-      // application runtime uses OTel 2.x. SpanProcessor and Resource keep the
-      // same runtime contract; isolate the compatibility boundary here.
       new OpenTelemetryPlugin({
         tracer: this.#provider.getTracer("@gorundebug/tsservicelib-temporal"),
-        resource,
-        spanProcessor: processor as never
+        resource: temporalResource,
+        spanProcessor: this.#temporalProcessor
       })
     );
   }
@@ -107,7 +116,10 @@ export class OpenTelemetryTracingEngine implements TracingEngine {
   }
 
   public async shutdown(context: Context): Promise<void> {
-    this.#shutdown ??= this.#provider.shutdown();
+    this.#shutdown ??= Promise.all([
+      this.#provider.shutdown(),
+      this.#temporalProcessor.shutdown()
+    ]).then(() => undefined);
     await waitForShutdown(this.#shutdown, context.signal());
   }
 }
@@ -216,6 +228,13 @@ class SpanAdapter implements Span {
 }
 
 function makeExporter(options: OpenTelemetryTracingOptions): SpanExporter {
+  return new OTLPTraceExporter(exporterOptions(options));
+}
+
+function exporterOptions(options: OpenTelemetryTracingOptions): {
+  url?: string;
+  timeoutMillis?: number;
+} {
   const exporterOptions: { url?: string; timeoutMillis?: number } = {};
   if (options.endpoint !== undefined) {
     exporterOptions.url = options.endpoint;
@@ -223,7 +242,7 @@ function makeExporter(options: OpenTelemetryTracingOptions): SpanExporter {
   if (options.exportTimeoutMillis !== undefined) {
     exporterOptions.timeoutMillis = options.exportTimeoutMillis;
   }
-  return new OTLPTraceExporter(exporterOptions);
+  return exporterOptions;
 }
 
 function parentContext(context: MessageContext): OpenTelemetryContext {
