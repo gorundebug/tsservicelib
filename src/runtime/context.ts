@@ -31,12 +31,41 @@ function deadlineSignal(deadline: number | undefined): AbortSignal | undefined {
   if (deadline === undefined) {
     return undefined;
   }
-  return AbortSignal.timeout(Math.max(0, Math.ceil(deadline - performance.now())));
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("context deadline exceeded")),
+    Math.max(0, Math.ceil(deadline - performance.now()))
+  );
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return controller.signal;
 }
 
 function composeSignal(signal: AbortSignal, deadline: number | undefined): AbortSignal {
   const timeoutSignal = deadlineSignal(deadline);
-  return timeoutSignal === undefined ? signal : AbortSignal.any([signal, timeoutSignal]);
+  return timeoutSignal === undefined ? signal : combineAbortSignals([signal, timeoutSignal]);
+}
+
+/** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
+export function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal {
+  if (signals.length === 0) return new AbortController().signal;
+  if (signals.length === 1) return signals[0]!;
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal): void => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+    for (const candidate of signals)
+      candidate.removeEventListener("abort", listeners.get(candidate)!);
+  };
+  const listeners = new Map<AbortSignal, () => void>();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      return controller.signal;
+    }
+    const listener = (): void => abort(signal);
+    listeners.set(signal, listener);
+    signal.addEventListener("abort", listener, { once: true });
+  }
+  return controller.signal;
 }
 
 function boundedDeadline(current: number | undefined, timeoutMs: number): number {
@@ -113,7 +142,7 @@ export class Context {
     if (signal === this.#state.signal) return this;
     return Context.fromState({
       ...this.#state,
-      signal: AbortSignal.any([this.#state.signal, signal])
+      signal: combineAbortSignals([this.#state.signal, signal])
     });
   }
 
@@ -194,7 +223,7 @@ export class MessageContext extends Context {
 
   public override withExternalCancellation(signal: AbortSignal): MessageContext {
     if (signal === this.#messageState.signal) return this;
-    return this.clone({ signal: AbortSignal.any([this.#messageState.signal, signal]) });
+    return this.clone({ signal: combineAbortSignals([this.#messageState.signal, signal]) });
   }
 
   public override withoutCancellation(): MessageContext {

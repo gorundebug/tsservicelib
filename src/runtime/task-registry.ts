@@ -1,4 +1,5 @@
 import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
+import { combineAbortSignals } from "./context.js";
 
 export type RuntimeTask<T> = (signal: AbortSignal) => Promise<T>;
 export type RuntimeTaskErrorHandler = (error: Error) => void;
@@ -54,7 +55,7 @@ export class RuntimeTaskRegistry {
     const signal =
       externalSignal === undefined
         ? this.#controller.signal
-        : AbortSignal.any([this.#controller.signal, externalSignal]);
+        : combineAbortSignals([this.#controller.signal, externalSignal]);
     let promise: Promise<T>;
     try {
       promise = task(signal);

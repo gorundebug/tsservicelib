@@ -44,20 +44,22 @@ export class DelayStream<T> extends ConsumedStream<T> implements TypedStreamCons
       }
       return;
     }
+    let durable = false;
     try {
-      if (await durableCallDelay(spanContext, duration)) {
-        try {
-          await this.emit(spanContext, value);
-        } finally {
-          started?.span.end();
-        }
-        return;
-      }
+      durable = await durableCallDelay(spanContext, duration);
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
       spanError(started?.span, failure);
       try {
         await this.#function.delayError(spanContext, this, value, failure, this);
+      } finally {
+        started?.span.end();
+      }
+      return;
+    }
+    if (durable) {
+      try {
+        await this.emit(spanContext, value);
       } finally {
         started?.span.end();
       }

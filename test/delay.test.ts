@@ -34,12 +34,25 @@ function streamConfig(id: number, name: string): StreamConfig {
 class RecordingStream<T> extends ServiceStream implements TypedStreamConsumer<T> {
   public readonly values: T[] = [];
 
+  public constructor(
+    config: StreamConfig,
+    environment: ReturnType<typeof makeTestEnvironment>,
+    readonly failure?: Error
+  ) {
+    super(config, environment);
+  }
+
   public consume(_context: MessageContext, value: T): void {
     this.values.push(value);
+    if (this.failure !== undefined) throw this.failure;
   }
 }
 
-function setup(function_: DelayFunction<number>, pool = new DelayPool()) {
+function setup(
+  function_: DelayFunction<number>,
+  pool = new DelayPool(),
+  downstreamFailure?: Error
+) {
   const sourceConfig = streamConfig(1, "source");
   const delayConfig: DelayStreamConfig = {
     ...streamConfig(2, "delay"),
@@ -53,7 +66,7 @@ function setup(function_: DelayFunction<number>, pool = new DelayPool()) {
   });
   const source = new ConsumedStream<number>(sourceConfig, environment, makeTestSerde());
   const delay = makeDelayStream(delayConfig, source, function_);
-  const output = new RecordingStream<number>(outputConfig, environment);
+  const output = new RecordingStream<number>(outputConfig, environment, downstreamFailure);
   delay.setConsumer(output);
   return { delay, environment, output, source };
 }
@@ -148,4 +161,32 @@ await test("Workflow delay uses the durable timer and awaits it before emitting"
   await source.emit(new MessageContext().withDurableCallContext(durable), 1);
   assert.deepEqual(delays, [250]);
   assert.deepEqual(output.values, [1]);
+});
+
+await test("Workflow delay propagates downstream control flow without calling delayError", async () => {
+  const continuation = new Error("continue as new");
+  let delayErrors = 0;
+  const { source } = setup(
+    {
+      duration(): number {
+        return 250;
+      },
+      delayError(): void {
+        delayErrors += 1;
+      }
+    },
+    new DelayPool(),
+    continuation
+  );
+  const durable = new DurableCallContext("workflow-message", "Workflow", {
+    timer: () => Promise.resolve()
+  });
+
+  await assert.rejects(
+    async () => {
+      await source.emit(new MessageContext().withDurableCallContext(durable), 1);
+    },
+    (error: unknown) => error === continuation
+  );
+  assert.equal(delayErrors, 0);
 });

@@ -11,6 +11,8 @@ interface ContextState {
 export interface DurableCallExecutionContext {
     readonly messageId: string;
 }
+/** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
+export declare function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal;
 export declare class Context {
     #private;
     constructor(signal?: AbortSignal);
