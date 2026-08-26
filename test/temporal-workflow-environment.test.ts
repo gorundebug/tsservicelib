@@ -16,6 +16,7 @@ import {
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
 import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
+import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
 
 class RecordingConsumer extends ServiceStream implements TypedStreamConsumer<number> {
   public readonly values: number[] = [];
@@ -60,9 +61,11 @@ await test("Workflow environment executes the ordinary graph through configured 
     properties: {}
   };
   const metrics = new TestMetrics();
+  const tracing = new TestTracing();
   const environment = new TemporalWorkflowEnvironment(config, 1, makeDefaultSerdeRegistry(), {
     logger: noopLogger,
-    metrics
+    metrics,
+    tracing
   });
   const source = new ConsumedStream(sourceConfig, environment, environment.serde(int32SerdeType));
   const target = new RecordingConsumer(targetConfig, environment);
@@ -71,11 +74,23 @@ await test("Workflow environment executes the ordinary graph through configured 
   source.setConsumer(target);
 
   await environment.start();
-  await source.emit(new MessageContext(), 42);
+  await source.emit(new MessageContext().withSampling(true), 42);
   await environment.finish();
 
   assert.deepEqual(target.values, [42]);
   assert.equal(environment.linkCallCount(1, 2), 1);
+  assert.equal(
+    metrics.counterValue("stream_messages_total", {
+      service: "workflow-service",
+      from: "source",
+      to: "target"
+    }),
+    1
+  );
+  assert.deepEqual(
+    tracing.spans().map(({ name }) => name),
+    ["stream.call"]
+  );
   const labels = { service: "workflow-service", name: "workflow-pool" };
   assert.equal(metrics.counterValue("task_pool_tasks_total", labels), 1);
   assert.equal(metrics.gaugeValue("task_pool_executors_allocated", labels), 0);

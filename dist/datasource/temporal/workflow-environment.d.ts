@@ -7,7 +7,7 @@ import type { ManagedDataConnector } from "../../runtime/data-connector.js";
 import type { Logger } from "../../runtime/environment/log.js";
 import type { Metrics } from "../../runtime/environment/metrics/metrics.js";
 import type { RuntimeBuildable, RuntimeEnvironment, RuntimeGraphLink } from "../../runtime/environment/runtime-environment.js";
-import type { Tracing } from "../../runtime/environment/tracing/index.js";
+import { type Tracing } from "../../runtime/environment/tracing/index.js";
 import type { PriorityTaskPoolLike, TaskPoolLike } from "../../runtime/pool/index.js";
 import { type SerdeRegistry, type SerdeType } from "../../runtime/serde/registry.js";
 import type { StreamSerde } from "../../runtime/serde/serde.js";

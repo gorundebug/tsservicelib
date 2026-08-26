@@ -7,6 +7,7 @@ import { RuntimeConfig } from "../../runtime/config/runtime-config.js";
 import type { MessageContext } from "../../runtime/context.js";
 import { Context } from "../../runtime/context.js";
 import { RuntimeCallerFactory } from "../../runtime/caller-factory.js";
+import { callerMetadata } from "../../runtime/caller-metadata.js";
 import type { DataSink } from "../../runtime/data-sink.js";
 import type { DataSource } from "../../runtime/data-source.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
@@ -17,7 +18,12 @@ import type {
   RuntimeEnvironment,
   RuntimeGraphLink
 } from "../../runtime/environment/runtime-environment.js";
-import type { Tracing } from "../../runtime/environment/tracing/index.js";
+import {
+  stringAttribute,
+  type Attribute,
+  type Tracer,
+  type Tracing
+} from "../../runtime/environment/tracing/index.js";
 import type { PriorityTaskPoolLike, TaskPoolLike } from "../../runtime/pool/index.js";
 import { type SerdeRegistry, type SerdeType } from "../../runtime/serde/registry.js";
 import type { StreamSerde } from "../../runtime/serde/serde.js";
@@ -283,20 +289,39 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
 
   public makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T> {
     const caller = this.#callerFactory.create(source, consumer);
-    return {
-      isAsync: () => caller.isAsync(),
-      consume: (context, value) => {
-        const key = graphLinkKey(source.id, consumer.id);
-        this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
-        return caller.consume(context, value);
-      }
-    };
+    const metadata = callerMetadata(caller);
+    const traceAttributes =
+      this.#tracing === undefined
+        ? undefined
+        : [
+            stringAttribute("from", source.name),
+            stringAttribute("to", consumer.name),
+            ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+            ...(metadata?.taskPoolName === undefined
+              ? []
+              : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+          ];
+    return new WorkflowInstrumentedCaller(
+      caller,
+      this.makeLinkRecorder(source, consumer),
+      this.#tracing?.tracer(this.serviceConfig().name),
+      traceAttributes
+    );
   }
 
   public makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void {
     const key = graphLinkKey(source.id, consumer.id);
-    return (): void => {
+    const counter = this.#metrics.enabled()
+      ? this.#metrics
+          .scope("stream", { service: this.serviceConfig().name })
+          .counter("messages_total", "Total number of messages processed by stream link", {
+            from: source.name,
+            to: consumer.name
+          })
+      : undefined;
+    return (context): void => {
       this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
+      counter?.inc(context);
     };
   }
 
@@ -412,6 +437,41 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   private recordFailure(value: unknown): void {
     if (this.#failure !== undefined) return;
     this.#failure = value instanceof Error ? value : new Error(String(value));
+  }
+}
+
+class WorkflowInstrumentedCaller<T> implements Caller<T> {
+  public constructor(
+    private readonly caller: Caller<T>,
+    private readonly recordCall: (context: MessageContext) => void,
+    private readonly tracer: Tracer | undefined,
+    private readonly traceAttributes: readonly Attribute[] | undefined
+  ) {}
+
+  public isAsync(): boolean {
+    return this.caller.isAsync();
+  }
+
+  public consume(context: MessageContext, value: T): void | Promise<void> {
+    this.recordCall(context);
+    if (this.tracer === undefined || !context.samplingEnabled()) {
+      return this.caller.consume(context, value);
+    }
+    const started = this.tracer.start(context, "stream.call", this.traceAttributes);
+    let completion: void | Promise<void>;
+    try {
+      completion = this.caller.consume(started.context, value);
+    } catch (error: unknown) {
+      started.span.end();
+      throw error;
+    }
+    if (completion === undefined) {
+      started.span.end();
+      return;
+    }
+    return completion.finally(() => {
+      started.span.end();
+    });
   }
 }
 

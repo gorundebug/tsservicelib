@@ -1,6 +1,8 @@
 import { RuntimeConfig } from "../../runtime/config/runtime-config.js";
 import { Context } from "../../runtime/context.js";
 import { RuntimeCallerFactory } from "../../runtime/caller-factory.js";
+import { callerMetadata } from "../../runtime/caller-metadata.js";
+import { stringAttribute } from "../../runtime/environment/tracing/index.js";
 import {} from "../../runtime/serde/registry.js";
 import { makeJoinStorage } from "../../runtime/store/join-storage.js";
 import { RuntimeTaskRegistry } from "../../runtime/task-registry.js";
@@ -206,19 +208,32 @@ export class TemporalWorkflowEnvironment {
     }
     makeCaller(source, consumer) {
         const caller = this.#callerFactory.create(source, consumer);
-        return {
-            isAsync: () => caller.isAsync(),
-            consume: (context, value) => {
-                const key = graphLinkKey(source.id, consumer.id);
-                this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
-                return caller.consume(context, value);
-            }
-        };
+        const metadata = callerMetadata(caller);
+        const traceAttributes = this.#tracing === undefined
+            ? undefined
+            : [
+                stringAttribute("from", source.name),
+                stringAttribute("to", consumer.name),
+                ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+                ...(metadata?.taskPoolName === undefined
+                    ? []
+                    : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+            ];
+        return new WorkflowInstrumentedCaller(caller, this.makeLinkRecorder(source, consumer), this.#tracing?.tracer(this.serviceConfig().name), traceAttributes);
     }
     makeLinkRecorder(source, consumer) {
         const key = graphLinkKey(source.id, consumer.id);
-        return () => {
+        const counter = this.#metrics.enabled()
+            ? this.#metrics
+                .scope("stream", { service: this.serviceConfig().name })
+                .counter("messages_total", "Total number of messages processed by stream link", {
+                from: source.name,
+                to: consumer.name
+            })
+            : undefined;
+        return (context) => {
             this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
+            counter?.inc(context);
         };
     }
     delay(context, delayMs, execute) {
@@ -310,6 +325,43 @@ export class TemporalWorkflowEnvironment {
         if (this.#failure !== undefined)
             return;
         this.#failure = value instanceof Error ? value : new Error(String(value));
+    }
+}
+class WorkflowInstrumentedCaller {
+    caller;
+    recordCall;
+    tracer;
+    traceAttributes;
+    constructor(caller, recordCall, tracer, traceAttributes) {
+        this.caller = caller;
+        this.recordCall = recordCall;
+        this.tracer = tracer;
+        this.traceAttributes = traceAttributes;
+    }
+    isAsync() {
+        return this.caller.isAsync();
+    }
+    consume(context, value) {
+        this.recordCall(context);
+        if (this.tracer === undefined || !context.samplingEnabled()) {
+            return this.caller.consume(context, value);
+        }
+        const started = this.tracer.start(context, "stream.call", this.traceAttributes);
+        let completion;
+        try {
+            completion = this.caller.consume(started.context, value);
+        }
+        catch (error) {
+            started.span.end();
+            throw error;
+        }
+        if (completion === undefined) {
+            started.span.end();
+            return;
+        }
+        return completion.finally(() => {
+            started.span.end();
+        });
     }
 }
 function isTypedStream(stream) {
