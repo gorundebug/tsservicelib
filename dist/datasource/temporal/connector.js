@@ -18,6 +18,21 @@ let sdkMetricsBindAddress;
 export function temporalCronExpression(expression) {
     return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
 }
+/**
+ * Workflow interceptor modules shared by live Workers and offline history
+ * replayers. Keeping this list in one place prevents replay from silently
+ * using different native-header propagation semantics.
+ */
+export function temporalWorkflowInterceptorModules() {
+    return [fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))];
+}
+/** Replay one Temporal Event History with the live Worker's Workflow bundle. */
+export async function replayTemporalWorkflowHistory(workflowsPath, history, workflowId = "servicegen-replay") {
+    await Worker.runReplayHistory({
+        workflowsPath,
+        interceptors: { workflowModules: temporalWorkflowInterceptorModules() }
+    }, history, workflowId);
+}
 export class TemporalConnector {
     #environment;
     #endpoints = new Map();
@@ -106,9 +121,7 @@ export class TemporalConnector {
                     workflowsPath: this.#workflowsPath,
                     interceptors: {
                         activity: [temporalActivityInterceptors],
-                        workflowModules: [
-                            fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))
-                        ]
+                        workflowModules: temporalWorkflowInterceptorModules()
                     },
                     ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
                     ...(config.identity === "" ? {} : { identity: config.identity }),

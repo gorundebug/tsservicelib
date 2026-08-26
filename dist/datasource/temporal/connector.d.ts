@@ -8,6 +8,14 @@ export interface TemporalConnectorOptions {
     /** Compiled service-owned module exporting every direct Workflow endpoint. */
     readonly workflowsPath?: string | undefined;
 }
+/**
+ * Workflow interceptor modules shared by live Workers and offline history
+ * replayers. Keeping this list in one place prevents replay from silently
+ * using different native-header propagation semantics.
+ */
+export declare function temporalWorkflowInterceptorModules(): string[];
+/** Replay one Temporal Event History with the live Worker's Workflow bundle. */
+export declare function replayTemporalWorkflowHistory(workflowsPath: string, history: unknown, workflowId?: string): Promise<void>;
 export declare class TemporalConnector implements ManagedDataConnector {
     #private;
     readonly id: number;

@@ -88,6 +88,22 @@ export function temporalWorkflowInterceptorModules(): string[] {
   return [fileURLToPath(new URL("./workflow-context-interceptor.js", import.meta.url))];
 }
 
+/** Replay one Temporal Event History with the live Worker's Workflow bundle. */
+export async function replayTemporalWorkflowHistory(
+  workflowsPath: string,
+  history: unknown,
+  workflowId = "servicegen-replay"
+): Promise<void> {
+  await Worker.runReplayHistory(
+    {
+      workflowsPath,
+      interceptors: { workflowModules: temporalWorkflowInterceptorModules() }
+    },
+    history,
+    workflowId
+  );
+}
+
 export class TemporalConnector implements ManagedDataConnector {
   readonly #environment: RuntimeEnvironment;
   readonly #endpoints = new Map<number, EndpointRegistration>();
