@@ -212,14 +212,16 @@ await test("Workflow TaskPool limits logical executors and finish drains", async
   for (let value = 0; value < 5; value += 1) await source.emit(new MessageContext(), value);
   await twoEntered;
   assert.equal(target.maximumActive, 2);
-  let finished = false;
-  const finish = environment.finish().then(() => {
-    finished = true;
+  let completed = false;
+  const completion = environment.waitForCompletion(Promise.resolve(42)).then((value) => {
+    completed = true;
+    return value;
   });
   await Promise.resolve();
-  assert.equal(finished, false);
+  assert.equal(completed, false);
   releaseTasks();
-  await finish;
+  assert.equal(await completion, 42);
+  await environment.finish();
 
   assert.equal(target.completed, 5);
   assert.equal(target.active, 0);
@@ -246,6 +248,10 @@ await test("Workflow TaskPool propagates failure and rejects canceled admission"
   source.setConsumer(target);
   await environment.start();
   await source.emit(new MessageContext(), 1);
+  await assert.rejects(
+    environment.waitForCompletion(new Promise<number>(() => undefined)),
+    /expected workflow pool failure/
+  );
   await assert.rejects(environment.finish(), /expected workflow pool failure/);
 
   const canceledEnvironment = new TemporalWorkflowEnvironment(

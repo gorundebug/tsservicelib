@@ -70,6 +70,7 @@ export declare class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
     start(): Promise<void>;
     finish(): Promise<void>;
+    waitForCompletion<T>(result?: Promise<T>): Promise<T | undefined>;
     throwIfFailed(): void;
     private makePools;
     private waitForQuiescence;

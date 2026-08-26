@@ -77,12 +77,14 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
     }
   });
   context = context.withDurableCallContext(durable);
-  endpoint.environment.log().info(
-    context,
-    "temporal workflow graph started",
-    str("workflow_id", info.workflowId),
-    str("workflow_type", info.workflowType)
-  );
+  endpoint.environment
+    .log()
+    .info(
+      context,
+      "temporal workflow graph started",
+      str("workflow_id", info.workflowId),
+      str("workflow_type", info.workflowType)
+    );
 
   let result: PromiseWithResolvers<R> | undefined;
   if (endpoint.stream.resultStream() !== undefined) {
@@ -99,26 +101,23 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
   try {
     return await runDurableCallWorkflow(durable, async () => {
       await endpoint.activate(context, envelope);
-      if (result === undefined) {
-        await endpoint.environment.finish();
-        return { payload: [] };
-      }
-      const value = await result.promise;
+      const value = await endpoint.environment.waitForCompletion(result?.promise);
+      if (result === undefined) return { payload: [] };
       const resultStream = endpoint.stream.resultStream();
       if (resultStream === undefined)
         throw new Error("Temporal Workflow result stream disappeared");
-      await endpoint.environment.finish();
-      return { payload: Array.from(resultStream.serde().serialize(value)) };
+      return { payload: Array.from(resultStream.serde().serialize(value as R)) };
     });
   } catch (error: unknown) {
     try {
       await endpoint.environment.finish();
     } catch (cleanupError: unknown) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "Temporal Workflow execution and graph cleanup both failed",
-        { cause: cleanupError }
-      );
+      if (cleanupError !== error)
+        throw new AggregateError(
+          [error, cleanupError],
+          "Temporal Workflow execution and graph cleanup both failed",
+          { cause: cleanupError }
+        );
     }
     if (error instanceof TemporalContinueAsNewRequest) {
       const nextEnvelope: EndpointWireEnvelope = {
@@ -129,9 +128,11 @@ export async function executeTemporalWorkflowEndpoint<T, R, E>(
         firedAtUnixMillis: 0,
         payload: Array.from(endpoint.stream.serde().serialize(error.nextInput as T))
       };
-      return continueAsNew({ ...endpoint.request, envelope: nextEnvelope });
+      return await continueAsNew({ ...endpoint.request, envelope: nextEnvelope });
     }
     throw error;
+  } finally {
+    await endpoint.environment.finish();
   }
 }
 

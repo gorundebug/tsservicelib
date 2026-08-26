@@ -64,6 +64,7 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   readonly #metrics: Metrics;
   readonly #tracing: Tracing | undefined;
   readonly #callerFactory: RuntimeCallerFactory;
+  readonly #failureSignal = Promise.withResolvers<boolean>();
   #failure: Error | undefined;
   #started = false;
 
@@ -349,7 +350,11 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
 
   public async finish(): Promise<void> {
     if (!this.#started) return;
-    await this.waitForQuiescence();
+    try {
+      await this.waitForQuiescence();
+    } catch {
+      // The recorded graph failure is rethrown after deterministic cleanup.
+    }
     this.#tasks.stopAdmission();
     const context = Context.background();
     for (const pool of this.#taskPools.values()) await pool.stop();
@@ -358,6 +363,21 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     for (const storage of this.#storages) await storage.stop(context);
     this.#started = false;
     this.throwIfFailed();
+  }
+
+  public async waitForCompletion<T>(result?: Promise<T>): Promise<T | undefined> {
+    if (result === undefined) {
+      await this.waitForQuiescence();
+      return undefined;
+    }
+    const completed = await Promise.race([
+      result.then((value) => ({ kind: "result" as const, value })),
+      this.#failureSignal.promise.then(() => ({ kind: "failure" as const }))
+    ]);
+    this.throwIfFailed();
+    if (completed.kind !== "result") throw new Error("Temporal Workflow graph failed");
+    await this.waitForQuiescence();
+    return completed.value;
   }
 
   public throwIfFailed(): void {
@@ -437,6 +457,7 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   private recordFailure(value: unknown): void {
     if (this.#failure !== undefined) return;
     this.#failure = value instanceof Error ? value : new Error(String(value));
+    this.#failureSignal.resolve(true);
   }
 }
 

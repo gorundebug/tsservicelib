@@ -33,6 +33,7 @@ export class TemporalWorkflowEnvironment {
     #metrics;
     #tracing;
     #callerFactory;
+    #failureSignal = Promise.withResolvers();
     #failure;
     #started = false;
     constructor(config, serviceId, serdeRegistry, telemetry = {}) {
@@ -259,7 +260,12 @@ export class TemporalWorkflowEnvironment {
     async finish() {
         if (!this.#started)
             return;
-        await this.waitForQuiescence();
+        try {
+            await this.waitForQuiescence();
+        }
+        catch {
+            // The recorded graph failure is rethrown after deterministic cleanup.
+        }
         this.#tasks.stopAdmission();
         const context = Context.background();
         for (const pool of this.#taskPools.values())
@@ -271,6 +277,21 @@ export class TemporalWorkflowEnvironment {
             await storage.stop(context);
         this.#started = false;
         this.throwIfFailed();
+    }
+    async waitForCompletion(result) {
+        if (result === undefined) {
+            await this.waitForQuiescence();
+            return undefined;
+        }
+        const completed = await Promise.race([
+            result.then((value) => ({ kind: "result", value })),
+            this.#failureSignal.promise.then(() => ({ kind: "failure" }))
+        ]);
+        this.throwIfFailed();
+        if (completed.kind !== "result")
+            throw new Error("Temporal Workflow graph failed");
+        await this.waitForQuiescence();
+        return completed.value;
     }
     throwIfFailed() {
         if (this.#failure !== undefined)
@@ -325,6 +346,7 @@ export class TemporalWorkflowEnvironment {
         if (this.#failure !== undefined)
             return;
         this.#failure = value instanceof Error ? value : new Error(String(value));
+        this.#failureSignal.resolve(true);
     }
 }
 class WorkflowInstrumentedCaller {
