@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
+const rootPath = fileURLToPath(root);
 const packageJson = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
 const requiredExports = [
   ".",
@@ -78,5 +81,26 @@ for (const name of requiredExports) {
     await readFile(implementation, "utf8"),
     /\/\/# sourceMappingURL=.+\.js\.map\s*$/u,
     `source map is missing for ${name}`
+  );
+}
+
+async function javascriptFiles(path) {
+  const files = [];
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = resolve(path, entry.name);
+    if (entry.isDirectory()) files.push(...(await javascriptFiles(child)));
+    else if (entry.isFile() && entry.name.endsWith(".js")) files.push(child);
+  }
+  return files;
+}
+
+const copiedRuntimeAssets = new Set(["runtime/status/web/vis.min.js"]);
+for (const implementation of await javascriptFiles(resolve(rootPath, "dist"))) {
+  const output = relative(resolve(rootPath, "dist"), implementation);
+  if (copiedRuntimeAssets.has(output)) continue;
+  const source = resolve(rootPath, "src", output.replace(/\.js$/u, ".ts"));
+  await assert.doesNotReject(
+    access(source),
+    `stale compiled output has no TypeScript source: dist/${output}`
   );
 }
