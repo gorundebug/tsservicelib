@@ -1,6 +1,6 @@
 {
   "name": "@gorundebug/tsservicelib",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "description": "TypeScript runtime for generated ServiceLib stream-processing services",
   "type": "module",
   "engines": {
