@@ -74,13 +74,17 @@ export interface TemporalEndpointHandler<State, Input, T, R, E> {
   ): Completion;
 }
 
-class DirectTemporalEndpointHandler<T, R, E>
-  implements TemporalEndpointHandler<undefined, T, T, R, E>
-{
-  public beginRequest(
-    context: MessageContext,
-    _stream: StreamContext<T, R, E>
-  ): { readonly context: MessageContext; readonly state: undefined } {
+class DirectTemporalEndpointHandler<T, R, E> implements TemporalEndpointHandler<
+  undefined,
+  T,
+  T,
+  R,
+  E
+> {
+  public beginRequest(context: MessageContext): {
+    readonly context: MessageContext;
+    readonly state: undefined;
+  } {
     return { context, state: undefined };
   }
 
@@ -93,12 +97,7 @@ class DirectTemporalEndpointHandler<T, R, E>
     return stream.collect(context, value);
   }
 
-  public endRequest(
-    _context: MessageContext,
-    _stream: StreamContext<T, R, E>,
-    _error: Error | undefined,
-    _state: undefined
-  ): void {}
+  public endRequest(): void {}
 }
 
 class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpointConsumer<T, R, E> {
@@ -179,18 +178,15 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       span = startedSpan.span;
       durableSpan = bindDurableCallSpan(context, span);
     }
-    let state!: State;
-    let began = false;
     const startedHandler = await this.#handler.beginRequest(context, this.#streamContext);
     context = startedHandler.context;
-    state = startedHandler.state;
-    began = true;
+    const state = startedHandler.state;
     const started = this.#endpoint.onRequestStart(context);
-    const expectsResult = this.#stream.resultStream() !== undefined;
+    const resultStream = this.#stream.resultStream();
     let pending: PendingResult<R> | undefined;
     let failure: Error | undefined;
     try {
-      if (expectsResult) {
+      if (resultStream !== undefined) {
         if (this.#pending.has(streamId)) {
           throw new Error(`Temporal execution ${streamId} is already active`);
         }
@@ -198,10 +194,14 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
         this.#pending.set(streamId, pending);
         this.#endpoint.onPendingAdd(context, streamId);
       }
-      await this.#handler.consumeMessage(context, this.#streamContext, state, this.#decode(envelope));
+      await this.#handler.consumeMessage(
+        context,
+        this.#streamContext,
+        state,
+        this.#decode(envelope)
+      );
       if (pending === undefined) return { payload: new Uint8Array() };
       const value = await pending.promise;
-      const resultStream = this.#stream.resultStream();
       if (resultStream === undefined)
         throw new Error("Temporal endpoint result stream disappeared");
       return { payload: resultStream.serde().serialize(value) };
@@ -214,7 +214,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
         this.#pending.delete(streamId);
         this.#endpoint.onPendingRemove(context, streamId);
       }
-      if (began) await this.#handler.endRequest(context, this.#streamContext, failure, state);
+      await this.#handler.endRequest(context, this.#streamContext, failure, state);
       this.#endpoint.onRequestEnd(context, started, failure);
       if (!durableSpan) span?.end();
     }

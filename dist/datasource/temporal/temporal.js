@@ -17,13 +17,13 @@ class TemporalDataSource extends InputDataSource {
     }
 }
 class DirectTemporalEndpointHandler {
-    beginRequest(context, _stream) {
+    beginRequest(context) {
         return { context, state: undefined };
     }
     consumeMessage(context, stream, _state, value) {
         return stream.collect(context, value);
     }
-    endRequest(_context, _stream, _error, _state) { }
+    endRequest() { }
 }
 class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
     #endpoint;
@@ -81,18 +81,15 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
             span = startedSpan.span;
             durableSpan = bindDurableCallSpan(context, span);
         }
-        let state;
-        let began = false;
         const startedHandler = await this.#handler.beginRequest(context, this.#streamContext);
         context = startedHandler.context;
-        state = startedHandler.state;
-        began = true;
+        const state = startedHandler.state;
         const started = this.#endpoint.onRequestStart(context);
-        const expectsResult = this.#stream.resultStream() !== undefined;
+        const resultStream = this.#stream.resultStream();
         let pending;
         let failure;
         try {
-            if (expectsResult) {
+            if (resultStream !== undefined) {
                 if (this.#pending.has(streamId)) {
                     throw new Error(`Temporal execution ${streamId} is already active`);
                 }
@@ -104,7 +101,6 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
             if (pending === undefined)
                 return { payload: new Uint8Array() };
             const value = await pending.promise;
-            const resultStream = this.#stream.resultStream();
             if (resultStream === undefined)
                 throw new Error("Temporal endpoint result stream disappeared");
             return { payload: resultStream.serde().serialize(value) };
@@ -119,8 +115,7 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
                 this.#pending.delete(streamId);
                 this.#endpoint.onPendingRemove(context, streamId);
             }
-            if (began)
-                await this.#handler.endRequest(context, this.#streamContext, failure, state);
+            await this.#handler.endRequest(context, this.#streamContext, failure, state);
             this.#endpoint.onRequestEnd(context, started, failure);
             if (!durableSpan)
                 span?.end();
