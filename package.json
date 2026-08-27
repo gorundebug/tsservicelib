@@ -149,15 +149,15 @@
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/**/*.test.js",
-    "test:coverage": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --experimental-test-coverage --enable-source-maps dist-test/test/**/*.test.js",
+    "test": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --enable-source-maps dist-test/test/**/*.test.js",
+    "test:coverage": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --experimental-test-coverage --enable-source-maps dist-test/test/**/*.test.js",
     "test:event-loop-stress": "node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/runtime-diagnostics-stress.test.js",
     "benchmark:tracing-disabled": "node scripts/benchmark-disabled-tracing.mjs",
     "test:lifecycle-process": "node scripts/check-no-leaked-handles.mjs",
     "check:structure": "node scripts/check-structure.mjs",
     "check:package": "node scripts/check-package.mjs",
     "check:packed-package": "node scripts/check-packed-package.mjs",
-    "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
+    "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.14.0",
