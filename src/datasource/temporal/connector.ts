@@ -61,7 +61,7 @@ export function temporalCronExpression(expression: string): string {
   return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
 }
 
-export type TemporalEndpointHandler = (
+export type TemporalConnectorEndpointHandler = (
   envelope: EndpointEnvelope,
   context: MessageContext,
   cancellationSignal?: AbortSignal
@@ -71,7 +71,7 @@ interface EndpointRegistration {
   readonly endpointId: number;
   readonly activityType: string;
   readonly workflowType: string;
-  readonly handler?: TemporalEndpointHandler;
+  readonly handler?: TemporalConnectorEndpointHandler;
 }
 
 export interface TemporalConnectorOptions {
@@ -142,7 +142,7 @@ export class TemporalConnector implements ManagedDataConnector {
     this.#telemetryClientInterceptor = getTemporalWorkflowClientInterceptor(tracing);
   }
 
-  public registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void {
+  public registerEndpoint(endpointId: number, handler: TemporalConnectorEndpointHandler): void {
     if (this.#started) throw new Error("cannot register endpoint after Temporal start");
     const registration = this.#endpoints.get(endpointId) ?? this.endpointRegistration(endpointId);
     if (registration.handler !== undefined) {

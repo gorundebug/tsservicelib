@@ -3,7 +3,7 @@ import type { ManagedDataConnector } from "../../runtime/data-connector.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
 import { type EndpointEnvelope, type EndpointResult } from "./contracts.js";
 export declare function temporalCronExpression(expression: string): string;
-export type TemporalEndpointHandler = (envelope: EndpointEnvelope, context: MessageContext, cancellationSignal?: AbortSignal) => Promise<EndpointResult>;
+export type TemporalConnectorEndpointHandler = (envelope: EndpointEnvelope, context: MessageContext, cancellationSignal?: AbortSignal) => Promise<EndpointResult>;
 export interface TemporalConnectorOptions {
     /** Compiled service-owned module exporting every direct Workflow endpoint. */
     readonly workflowsPath?: string | undefined;
@@ -21,7 +21,7 @@ export declare class TemporalConnector implements ManagedDataConnector {
     readonly id: number;
     readonly name: string;
     constructor(connectorId: number, environment: RuntimeEnvironment, options?: TemporalConnectorOptions);
-    registerEndpoint(endpointId: number, handler: TemporalEndpointHandler): void;
+    registerEndpoint(endpointId: number, handler: TemporalConnectorEndpointHandler): void;
     assertOptions(options: TemporalConnectorOptions): void;
     registerEndpointSubmission(endpointId: number): void;
     start(context: Context): Promise<void>;

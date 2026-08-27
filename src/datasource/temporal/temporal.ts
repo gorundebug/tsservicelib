@@ -9,6 +9,7 @@ import {
   bindDurableCallSpan,
   errorFromUnknown,
   makeScheduleTrigger,
+  makeStreamContext,
   newStreamId,
   spanError,
   stringAttribute,
@@ -20,6 +21,7 @@ import {
   type ScheduleEndpointFunction,
   type ScheduleTrigger,
   type Span,
+  type StreamContext,
   type Tracer,
   type TypedInputStream
 } from "../../runtime/index.js";
@@ -51,11 +53,60 @@ interface PendingResult<R> {
   settled: boolean;
 }
 
-class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsumer<T, R, E> {
+export interface TemporalEndpointHandler<State, Input, T, R, E> {
+  beginRequest(
+    context: MessageContext,
+    stream: StreamContext<T, R, E>
+  ):
+    | { readonly context: MessageContext; readonly state: State }
+    | Promise<{ readonly context: MessageContext; readonly state: State }>;
+  consumeMessage(
+    context: MessageContext,
+    stream: StreamContext<T, R, E>,
+    state: State,
+    value: Readonly<Input>
+  ): Completion;
+  endRequest(
+    context: MessageContext,
+    stream: StreamContext<T, R, E>,
+    error: Error | undefined,
+    state: State
+  ): Completion;
+}
+
+class DirectTemporalEndpointHandler<T, R, E>
+  implements TemporalEndpointHandler<undefined, T, T, R, E>
+{
+  public beginRequest(
+    context: MessageContext,
+    _stream: StreamContext<T, R, E>
+  ): { readonly context: MessageContext; readonly state: undefined } {
+    return { context, state: undefined };
+  }
+
+  public consumeMessage(
+    context: MessageContext,
+    stream: StreamContext<T, R, E>,
+    _state: undefined,
+    value: Readonly<T>
+  ): Completion {
+    return stream.collect(context, value);
+  }
+
+  public endRequest(
+    _context: MessageContext,
+    _stream: StreamContext<T, R, E>,
+    _error: Error | undefined,
+    _state: undefined
+  ): void {}
+}
+
+class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpointConsumer<T, R, E> {
   readonly #endpoint: DataSourceEndpoint;
   readonly #stream: TypedInputStream<T, R, E>;
   readonly #decode: (envelope: EndpointEnvelope) => Input;
-  readonly #activateInput: (context: MessageContext, value: Input) => Completion;
+  readonly #handler: TemporalEndpointHandler<State, Input, T, R, E>;
+  readonly #streamContext: StreamContext<T, R, E>;
   readonly #pending = new Map<string, PendingResult<R>>();
   readonly #tracer: Tracer | undefined;
 
@@ -64,13 +115,19 @@ class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsume
     stream: TypedInputStream<T, R, E>,
     connector: TemporalConnector,
     decode: (envelope: EndpointEnvelope) => Input,
-    activateInput: (context: MessageContext, value: Input) => Completion
+    handler: TemporalEndpointHandler<State, Input, T, R, E>
   ) {
     super(endpoint, stream);
     this.#endpoint = endpoint;
     this.#stream = stream;
     this.#decode = decode;
-    this.#activateInput = activateInput;
+    this.#handler = handler;
+    this.#streamContext = makeStreamContext(
+      stream,
+      stream.resultStream(),
+      new FunctionCollector((context, value: T) => stream.consume(context, value)),
+      new FunctionCollector((context, value: E) => stream.errorStream().consume(context, value))
+    );
     this.#tracer = stream
       .runtimeEnvironment()
       .tracing()
@@ -122,6 +179,12 @@ class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsume
       span = startedSpan.span;
       durableSpan = bindDurableCallSpan(context, span);
     }
+    let state!: State;
+    let began = false;
+    const startedHandler = await this.#handler.beginRequest(context, this.#streamContext);
+    context = startedHandler.context;
+    state = startedHandler.state;
+    began = true;
     const started = this.#endpoint.onRequestStart(context);
     const expectsResult = this.#stream.resultStream() !== undefined;
     let pending: PendingResult<R> | undefined;
@@ -135,7 +198,7 @@ class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsume
         this.#pending.set(streamId, pending);
         this.#endpoint.onPendingAdd(context, streamId);
       }
-      await this.#activateInput(context, this.#decode(envelope));
+      await this.#handler.consumeMessage(context, this.#streamContext, state, this.#decode(envelope));
       if (pending === undefined) return { payload: new Uint8Array() };
       const value = await pending.promise;
       const resultStream = this.#stream.resultStream();
@@ -151,6 +214,7 @@ class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsume
         this.#pending.delete(streamId);
         this.#endpoint.onPendingRemove(context, streamId);
       }
+      if (began) await this.#handler.endRequest(context, this.#streamContext, failure, state);
       this.#endpoint.onRequestEnd(context, started, failure);
       if (!durableSpan) span?.end();
     }
@@ -179,10 +243,20 @@ class TemporalEndpointConsumer<Input, T, R, E> extends DataSourceEndpointConsume
 export function makeTemporalEndpointConsumer<T, R, E>(
   stream: TypedInputStream<T, R, E>
 ): Consumer<T> {
+  return makeTemporalEndpointConsumerWithHandler(
+    stream,
+    new DirectTemporalEndpointHandler<T, R, E>()
+  );
+}
+
+export function makeTemporalEndpointConsumerWithHandler<State, T, R, E>(
+  stream: TypedInputStream<T, R, E>,
+  handler: TemporalEndpointHandler<State, T, T, R, E>
+): Consumer<T> {
   return makeEndpointConsumer(
     stream,
     (envelope) => stream.serde().deserialize(envelope.payload),
-    (context, value) => stream.consume(context, value)
+    handler
   );
 }
 
@@ -193,7 +267,6 @@ export function makeTemporalScheduleEndpointConsumer<T, R, E>(
   type Activation =
     | { readonly scheduled: true; readonly trigger: ScheduleTrigger }
     | { readonly scheduled: false; readonly value: T };
-  const collector = new FunctionCollector<T>((context, value) => stream.consume(context, value));
   return makeEndpointConsumer(
     stream,
     (envelope): Activation => {
@@ -218,17 +291,27 @@ export function makeTemporalScheduleEndpointConsumer<T, R, E>(
         )
       };
     },
-    (context, activation) =>
-      activation.scheduled
-        ? function_.onTrigger(context, activation.trigger, collector)
-        : stream.consume(context, activation.value)
+    {
+      beginRequest: (context) => ({ context, state: undefined }),
+      consumeMessage: (context, streamContext, _state, activation) =>
+        activation.scheduled
+          ? function_.onTrigger(
+              context,
+              activation.trigger,
+              new FunctionCollector((nextContext, value) =>
+                streamContext.collect(nextContext, value)
+              )
+            )
+          : streamContext.collect(context, activation.value),
+      endRequest: () => undefined
+    }
   );
 }
 
-function makeEndpointConsumer<Input, T, R, E>(
+function makeEndpointConsumer<State, Input, T, R, E>(
   stream: TypedInputStream<T, R, E>,
   decode: (envelope: EndpointEnvelope) => Input,
-  activateInput: (context: MessageContext, value: Input) => Completion
+  handler: TemporalEndpointHandler<State, Input, T, R, E>
 ): Consumer<T> {
   const environment = stream.runtimeEnvironment();
   const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
@@ -241,7 +324,7 @@ function makeEndpointConsumer<Input, T, R, E>(
     throw new Error(`Temporal endpoint ${endpointConfig.name} already exists`);
   }
   const endpoint = new DataSourceEndpoint(dataSource, endpointConfig.id);
-  const consumer = new TemporalEndpointConsumer(endpoint, stream, connector, decode, activateInput);
+  const consumer = new TemporalEndpointConsumer(endpoint, stream, connector, decode, handler);
   endpoint.addEndpointConsumer(consumer);
   dataSource.addEndpoint(endpoint);
   return consumer;
