@@ -34,4 +34,7 @@ clean:
 	corepack pnpm clean
 
 docker-build:
-	docker build --target test --tag tsservicelib-test .
+	docker build \
+		--build-arg "DEPENDENCY_DOCKER_REGISTRY=$${DEPENDENCY_DOCKER_REGISTRY:-docker.io}" \
+		--build-arg "NPM_CONFIG_REGISTRY=$${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}" \
+		--target test --tag tsservicelib-test .

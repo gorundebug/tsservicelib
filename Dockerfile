@@ -1,13 +1,16 @@
-# syntax=docker/dockerfile:1
+ARG DEPENDENCY_DOCKER_REGISTRY=docker.io
 ARG NODE_VERSION=24.19.0
 ARG PNPM_VERSION=11.18.0
 
-FROM node:${NODE_VERSION}-bookworm-slim AS development
+FROM ${DEPENDENCY_DOCKER_REGISTRY}/library/node:${NODE_VERSION}-bookworm-slim AS development
 ARG PNPM_VERSION
 ARG TARGETARCH
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
 ENV PNPM_HOME=/pnpm
 ENV PATH=${PNPM_HOME}:${PATH}
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN corepack enable \
+    && corepack prepare pnpm@${PNPM_VERSION} --activate \
+    && pnpm config set registry "${NPM_CONFIG_REGISTRY}"
 WORKDIR /workspace
 
 FROM development AS dependencies
