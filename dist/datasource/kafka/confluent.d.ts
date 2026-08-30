@@ -75,6 +75,7 @@ export declare class KafkaDataSource extends InputDataSource {
     factory(): KafkaClientFactory;
     start(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
+    stopAdmission(context: Context): Promise<void>;
     private kafkaEndpoints;
 }
 export declare function makeKafkaEndpointConsumer<HandlerState, T, R, E>(stream: TypedInputStream<T, R, E>, handler: EndpointHandler<HandlerState, T, R, E>, factory?: KafkaClientFactory): Consumer<T>;

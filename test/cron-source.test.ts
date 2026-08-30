@@ -6,6 +6,7 @@ import { Cron } from "croner";
 import { makeCronEndpointConsumer } from "@gorundebug/tsservicelib/datasource/cron";
 import { InputStream } from "@gorundebug/tsservicelib/operators";
 import {
+  ConsumedStream,
   Context,
   type Collector,
   DataConnectorType,
@@ -46,11 +47,27 @@ const endpoint: CronEndpointConfig = {
   missedRunPolicy: "FireOnce"
 };
 
+const resultConfig = {
+  ...streamConfig,
+  id: 3,
+  name: "scheduledResult",
+  type: "Map" as const,
+  idEndpoint: 0
+};
+
 class TriggerConsumer extends ServiceStream {
   public readonly received = Promise.withResolvers<string>();
 
   public consume(_context: MessageContext, value: string): void {
     this.received.resolve(value);
+  }
+}
+
+class ResultAwareTriggerConsumer extends ServiceStream {
+  public readonly received = Promise.withResolvers<MessageContext>();
+
+  public consume(context: MessageContext): void {
+    this.received.resolve(context);
   }
 }
 
@@ -114,4 +131,59 @@ await test("Croner evaluates the portable schedule in UTC", () => {
   const next = job.nextRun(new Date("2026-03-07T03:00:00Z"));
   assert.ok(next);
   assert.equal(next.toISOString(), "2026-03-08T02:30:00.000Z");
+});
+
+await test("Croner source waits for its correlated pipeline result during stop", async () => {
+  const consumerConfig = {
+    ...streamConfig,
+    id: 2,
+    name: "consumeTriggerWithResult",
+    type: "Map" as const,
+    idSource: streamConfig.id
+  };
+  const environment = makeTestEnvironment([streamConfig, consumerConfig, resultConfig], {
+    dataConnectors: [
+      {
+        id: 10,
+        name: "localCron",
+        properties: {},
+        type: DataConnectorType.Cron,
+        implementation: "node/croner"
+      }
+    ],
+    endpoints: [endpoint]
+  });
+  const input = new InputStream<string, string, Error>(
+    streamConfig,
+    environment,
+    makeTestSerde(),
+    makeTestSerde()
+  );
+  const result = new ConsumedStream<string>(resultConfig, environment, makeTestSerde());
+  input.setSource(result);
+  const consumer = new ResultAwareTriggerConsumer(consumerConfig, environment);
+  input.setConsumer(consumer);
+  makeCronEndpointConsumer(input, function_);
+  const dataSource = environment.dataSourceById(10);
+  assert.ok(dataSource);
+
+  await dataSource.start(Context.background());
+  const resultContext = await Promise.race([
+    consumer.received.promise,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => {
+        reject(new Error("cron trigger timeout"));
+      }, 2_500).unref();
+    })
+  ]);
+  let stopped = false;
+  const stopping = dataSource.stop(Context.background()).then(() => {
+    stopped = true;
+  });
+  await Promise.resolve();
+  assert.equal(stopped, false, "cron datasource stopped before the pipeline result");
+
+  await result.emit(resultContext, "done");
+  await stopping;
+  assert.equal(stopped, true);
 });

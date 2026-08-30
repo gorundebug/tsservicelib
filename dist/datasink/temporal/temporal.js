@@ -1,6 +1,7 @@
 import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 import { makeTemporalConnector } from "../../datasource/temporal/connector.js";
 class TemporalDataSink extends OutputDataSink {
+    #active = new Set();
     constructor(connectorId, environment) {
         super(connectorId, environment);
         if (this.config().type !== DataConnectorType.Temporal) {
@@ -13,7 +14,20 @@ class TemporalDataSink extends OutputDataSink {
     }
     stop(_context) {
         void _context;
-        return Promise.resolve();
+        return this.#drain();
+    }
+    track(operation) {
+        this.#active.add(operation);
+        const remove = () => {
+            this.#active.delete(operation);
+        };
+        void operation.then(remove, remove);
+        return operation;
+    }
+    async #drain() {
+        while (this.#active.size > 0) {
+            await Promise.allSettled([...this.#active]);
+        }
     }
 }
 class DirectTemporalEndpointHandler {
@@ -38,13 +52,15 @@ class DirectTemporalEndpointHandler {
 }
 class TemporalSinkConsumer {
     sinkEndpoint;
+    dataSink;
     connector;
     stream;
     handler;
     withResult;
     #tracer;
-    constructor(sinkEndpoint, connector, stream, handler, withResult) {
+    constructor(sinkEndpoint, dataSink, connector, stream, handler, withResult) {
         this.sinkEndpoint = sinkEndpoint;
+        this.dataSink = dataSink;
         this.connector = connector;
         this.stream = stream;
         this.handler = handler;
@@ -58,6 +74,9 @@ class TemporalSinkConsumer {
         return this.sinkEndpoint;
     }
     async consume(context, value) {
+        await this.dataSink.track(this.consumeTracked(context, value));
+    }
+    async consumeTracked(context, value) {
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const startedSpan = this.#tracer.start(context, "temporal.output", [
@@ -132,7 +151,7 @@ function makeSinkConsumer(stream, handler, withResult) {
         throw new Error(`Temporal endpoint ${endpointConfig.name} already exists`);
     }
     const endpoint = new DataSinkEndpoint(dataSink, endpointConfig.id);
-    const consumer = new TemporalSinkConsumer(endpoint, connector, stream, handler, withResult);
+    const consumer = new TemporalSinkConsumer(endpoint, dataSink, connector, stream, handler, withResult);
     connector.registerEndpointSubmission(endpointConfig.id);
     endpoint.addEndpointConsumer(consumer);
     dataSink.addEndpoint(endpoint);

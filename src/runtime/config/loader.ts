@@ -25,6 +25,7 @@ export interface EnvironmentPatch {
 export interface ConfigLoadOptions<T extends CanonicalConfig> {
   readonly configPath: string;
   readonly valuesPath?: string;
+  readonly overridesPath?: string | undefined;
   readonly defaults?: Readonly<Record<string, unknown>>;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly patches?: readonly EnvironmentPatch[];
@@ -135,7 +136,9 @@ export async function loadRuntimeConfig<T extends CanonicalConfig>(
 ): Promise<RuntimeConfig<T>> {
   const base = await readYaml(options.configPath);
   const values = options.valuesPath === undefined ? {} : await readYaml(options.valuesPath);
-  const merged = deepMerge(deepMerge(options.defaults ?? {}, base), values);
+  const overrides =
+    options.overridesPath === undefined ? {} : await readYaml(options.overridesPath);
+  const merged = deepMerge(deepMerge(deepMerge(options.defaults ?? {}, base), values), overrides);
   applyEnvironment(merged, options.patches ?? [], options.environment ?? process.env);
   const parsed = deepFreeze(options.schema.parse(merged));
   return new RuntimeConfig(parsed);

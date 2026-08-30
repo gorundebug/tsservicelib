@@ -16,6 +16,7 @@ export declare class ServiceRuntime {
     private stopConcurrent;
     private stopAdmission;
     private stopSequential;
+    private logStopTimeout;
     private logStopError;
 }
 //# sourceMappingURL=service-runtime.d.ts.map

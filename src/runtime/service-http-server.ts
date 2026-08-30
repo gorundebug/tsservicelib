@@ -2,15 +2,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import type { ServiceConfig } from "./config/index.js";
 import type { Context } from "./context.js";
-import type { Lifecycle } from "./lifecycle.js";
+import type { AdmissionLifecycle } from "./lifecycle.js";
 
 export type HTTPHandler = (request: IncomingMessage, response: ServerResponse) => void;
 
 /** The service-wide HTTP listener shared by non-dedicated HTTP connectors. */
-export class ServiceHTTPServer implements Lifecycle {
+export class ServiceHTTPServer implements AdmissionLifecycle {
   readonly #config: () => ServiceConfig;
   readonly #routes = new Map<string, HTTPHandler>();
   #server: Server | undefined;
+  #accepting = false;
 
   public constructor(config: () => ServiceConfig) {
     this.#config = config;
@@ -36,15 +37,22 @@ export class ServiceHTTPServer implements Lifecycle {
       this.route(request, response);
     });
     this.#server = server;
+    this.#accepting = true;
     try {
       await listen(server, config.httpPort, config.httpHost, context.signal());
     } catch (error: unknown) {
       this.#server = undefined;
+      this.#accepting = false;
       throw error;
     }
   }
 
   public async stop(context: Context): Promise<void> {
+    await this.stopAdmission(context);
+  }
+
+  public async stopAdmission(context: Context): Promise<void> {
+    this.#accepting = false;
     const server = this.#server;
     if (server === undefined) {
       return;
@@ -54,6 +62,12 @@ export class ServiceHTTPServer implements Lifecycle {
   }
 
   private route(request: IncomingMessage, response: ServerResponse): void {
+    if (!this.#accepting) {
+      response.statusCode = 503;
+      response.setHeader("connection", "close");
+      response.end("HTTP service is shutting down");
+      return;
+    }
     let path: string;
     try {
       path = new URL(request.url ?? "", "http://service.local").pathname;
@@ -130,6 +144,11 @@ function close(server: Server, signal: AbortSignal): Promise<void> {
         reject(error);
       }
     });
+    // Keep-alive connections with no admitted request are not application
+    // work and must not consume the graceful-shutdown window. Requests that
+    // are already active remain open and are drained by their endpoint task
+    // registries; the cancellation path above is still the hard deadline.
+    server.closeIdleConnections();
   });
 }
 

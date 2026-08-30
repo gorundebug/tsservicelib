@@ -4,16 +4,66 @@ class CronEndpointConsumer {
     #endpoint;
     #function;
     #collector;
+    #hasResult;
+    #pending = new Map();
     constructor(endpoint, stream, function_) {
         this.#endpoint = endpoint;
         this.#function = function_;
         this.#collector = new FunctionCollector((context, value) => stream.consume(context, value));
+        this.#hasResult = stream.resultStream() !== undefined;
+        if (this.#hasResult) {
+            stream.setResultConsumer({
+                consume: (context) => {
+                    this.consumeResult(context);
+                }
+            });
+        }
     }
     endpoint() {
         return this.#endpoint;
     }
-    consume(context, trigger) {
-        return this.#function.onTrigger(context, trigger, this.#collector);
+    async consume(context, trigger) {
+        if (!this.#hasResult) {
+            await this.#function.onTrigger(context, trigger, this.#collector);
+            return;
+        }
+        const streamId = context.streamId();
+        if (streamId === undefined || streamId === "") {
+            throw new Error(`cron endpoint ${this.#endpoint.name} activation has no stream ID`);
+        }
+        if (this.#pending.has(streamId)) {
+            throw new Error(`cron endpoint ${this.#endpoint.name} already has an active execution ${streamId}`);
+        }
+        const resolution = Promise.withResolvers();
+        const pending = { ...resolution, settled: false };
+        this.#pending.set(streamId, pending);
+        this.#endpoint.onPendingAdd(context, streamId);
+        try {
+            await this.#function.onTrigger(context, trigger, this.#collector);
+            await pending.promise;
+        }
+        finally {
+            this.#pending.delete(streamId);
+            this.#endpoint.onPendingRemove(context, streamId);
+        }
+    }
+    consumeResult(context) {
+        const streamId = context.streamId();
+        if (streamId === undefined || streamId === "") {
+            this.#endpoint.onMissingStreamId(context);
+            return;
+        }
+        const pending = this.#pending.get(streamId);
+        if (pending === undefined) {
+            this.#endpoint.onLateResult(context, streamId);
+            return;
+        }
+        if (pending.settled) {
+            this.#endpoint.onDuplicateMessageId(context, streamId, streamId);
+            return;
+        }
+        pending.settled = true;
+        pending.resolve(undefined);
     }
 }
 class CronEndpoint extends DataSourceEndpoint {
@@ -62,10 +112,34 @@ class CronEndpoint extends DataSourceEndpoint {
             throw new Error(`cron endpoint ${this.name} has no next occurrence`);
         }
     }
-    async stop() {
+    async stop(context = Context.background()) {
         this.#job?.stop();
         this.#job = undefined;
-        await Promise.allSettled(this.#active);
+        const drain = Promise.allSettled(this.#active);
+        const remainingMs = context.remainingMs();
+        if (remainingMs === undefined) {
+            await drain;
+            return;
+        }
+        let timer;
+        const timeout = new Promise((resolve) => {
+            timer = setTimeout(resolve, Math.max(0, remainingMs));
+        });
+        try {
+            const outcome = await Promise.race([
+                drain.then(() => "drained"),
+                timeout.then(() => "timeout")
+            ]);
+            if (outcome === "timeout") {
+                this.runtimeEnvironment()
+                    .log()
+                    .warn(context, "cron endpoint stopped by shutdown timeout", str("endpoint", this.name));
+            }
+        }
+        finally {
+            if (timer !== undefined)
+                clearTimeout(timer);
+        }
     }
     #startDispatch(binding, scheduledAt) {
         const execution = this.#dispatch(binding, scheduledAt);
@@ -139,16 +213,15 @@ export class CronDataSource extends InputDataSource {
         catch (error) {
             this.#started = false;
             for (const endpoint of this.cronEndpoints())
-                void endpoint.stop();
+                void endpoint.stop(_context);
             return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
     }
-    stop(_context) {
-        void _context;
+    stop(context) {
         if (!this.#started)
             return Promise.resolve();
         this.#started = false;
-        return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop())).then(() => undefined);
+        return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop(context))).then(() => undefined);
     }
     cronEndpoints() {
         return this.endpoints().map((endpoint) => {

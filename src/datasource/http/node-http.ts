@@ -229,6 +229,10 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
     return this.#consumer?.stop(context) ?? Promise.resolve();
   }
 
+  public stopAdmission(): void {
+    this.#consumer?.stopAdmission();
+  }
+
   public handler(): HTTPHandler {
     return this.#requestHandler;
   }
@@ -252,6 +256,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
 
 interface NodeHttpEndpointConsumerContract extends InputEndpointConsumer {
   start(context: Context): Promise<void>;
+  stopAdmission(): void;
   stop(context: Context): Promise<void>;
   serveHttp(request: IncomingMessage, response: ServerResponse): Promise<void>;
 }
@@ -329,14 +334,16 @@ export class NodeHttpDataSource extends InputDataSource {
       return;
     }
     this.#started = false;
+    await this.stopAdmission(context);
+    await this.stopEndpoints(context);
+  }
+
+  public async stopAdmission(context: Context): Promise<void> {
+    for (const endpoint of this.httpEndpoints()) endpoint.stopAdmission();
     const server = this.#server;
     this.#server = undefined;
-    try {
-      await this.stopEndpoints(context);
-    } finally {
-      if (server !== undefined) {
-        await closeServer(server, context.signal());
-      }
+    if (server !== undefined) {
+      await closeServer(server, context.signal());
     }
   }
 
@@ -439,20 +446,26 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   }
 
   public stop(context: Context): Promise<void> {
-    if (!this.#started) {
+    if (!this.#started && !this.#stopped) {
       return Promise.resolve();
     }
-    this.#started = false;
-    this.#stopped = true;
-    this.#tasks.stopAdmission();
+    this.stopAdmission();
     return drainAcceptedTasks(this.#tasks, context).finally(() => {
       this.#pending?.stop(context);
     });
   }
 
+  public stopAdmission(): void {
+    if (!this.#started) return;
+    this.#started = false;
+    this.#stopped = true;
+    this.#tasks.stopAdmission();
+  }
+
   public serveHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (!this.#started) {
       response.statusCode = 503;
+      response.setHeader("connection", "close");
       response.end("HTTP endpoint is not accepting requests");
       return Promise.resolve();
     }
@@ -793,6 +806,9 @@ function closeServer(server: Server, signal: AbortSignal): Promise<void> {
         reject(error);
       }
     });
+    // Existing keep-alive sockets are not accepted work. Close them now so
+    // only requests already admitted by an endpoint participate in drain.
+    server.closeIdleConnections();
   });
 }
 

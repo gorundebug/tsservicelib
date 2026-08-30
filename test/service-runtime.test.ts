@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   Context,
   errorFromUnknown,
+  type AdmissionLifecycle,
   type Lifecycle,
   RuntimeStoppedError,
   RuntimeTaskRegistry,
@@ -83,6 +84,55 @@ await test("service stop closes admission, drains accepted work, then stops sink
   await runtime.stop();
 
   assert.deepEqual(events, ["start:source", "start:sink", "stop:source", "task:done", "stop:sink"]);
+});
+
+await test("admitted source work drains before graph pools stop", async () => {
+  const events: string[] = [];
+  const tasks = new RuntimeTaskRegistry();
+  const runtime = new ServiceRuntime(makeTestEnvironment([]), tasks);
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sourceLifecycle: AdmissionLifecycle = {
+    start(): Promise<void> {
+      events.push("start:source");
+      return Promise.resolve();
+    },
+    stopAdmission(): Promise<void> {
+      events.push("admission:source");
+      return Promise.resolve();
+    },
+    stop(): Promise<void> {
+      events.push("stop:source");
+      return Promise.resolve();
+    }
+  };
+  runtime.register({
+    category: "dataSource",
+    name: "source",
+    lifecycle: sourceLifecycle
+  });
+  runtime.register({
+    category: "taskPool",
+    name: "pool",
+    lifecycle: lifecycle("pool", events)
+  });
+  await runtime.start();
+  const admitted = tasks.admit(async () => {
+    await gate;
+    events.push("task:done");
+  });
+
+  const stopping = runtime.stop(Context.background(), 100);
+  await Promise.resolve();
+  release?.();
+  await admitted;
+  await stopping;
+
+  assert.ok(events.indexOf("admission:source") < events.indexOf("task:done"));
+  assert.ok(events.indexOf("task:done") < events.indexOf("stop:pool"));
+  assert.ok(events.indexOf("task:done") < events.indexOf("stop:source"));
 });
 
 await test("accepted graph work may admit nested work while shutdown drains", async () => {
@@ -208,6 +258,36 @@ await test("service shutdown keeps sink and telemetry ownership phases determini
     { key: "category", type: "string", value: "telemetry" },
     { key: "component", type: "string", value: "metrics" }
   ]);
+});
+
+await test("shutdown timeout is one upper bound shared by every stop phase", async () => {
+  const events: string[] = [];
+  const runtime = new ServiceRuntime(makeTestEnvironment([]));
+  const slowLifecycle = (name: string): Lifecycle => ({
+    start(): Promise<void> {
+      return Promise.resolve();
+    },
+    async stop(): Promise<void> {
+      events.push(`stop:${name}`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  });
+  runtime.register({ category: "dataSource", name: "source", lifecycle: slowLifecycle("source") });
+  runtime.register({ category: "dataSink", name: "sink", lifecycle: slowLifecycle("sink") });
+  runtime.register({
+    category: "telemetry",
+    name: "telemetry",
+    lifecycle: slowLifecycle("telemetry")
+  });
+
+  await runtime.start();
+  const started = performance.now();
+  await runtime.stop(Context.background(), 20);
+  const elapsed = performance.now() - started;
+
+  assert.ok(elapsed < 80, `shutdown restarted its deadline between phases: ${String(elapsed)}ms`);
+  assert.deepEqual(events, ["stop:source", "stop:sink", "stop:telemetry"]);
+  await new Promise<void>((resolve) => setTimeout(resolve, 105));
 });
 
 await test("stop during startup cancels admission and rolls back every started component", async () => {

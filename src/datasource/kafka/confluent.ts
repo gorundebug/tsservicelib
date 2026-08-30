@@ -280,6 +280,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
   #binding: KafkaEndpointConsumerContract | undefined;
   #run: Promise<void> | undefined;
   #reconnect: AbortController | undefined;
+  #admissionStopped = false;
 
   public constructor(dataSource: KafkaDataSource, endpointId: number) {
     super(dataSource, endpointId);
@@ -324,6 +325,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
     try {
       this.#consumer = consumer;
       this.#reconnect = reconnect;
+      this.#admissionStopped = false;
       await this.#binding?.start();
       this.#run = this.supervise(context, consumer, reconnect.signal);
     } catch (error: unknown) {
@@ -335,16 +337,24 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
   }
 
   public async stop(context: Context): Promise<void> {
+    await this.stopAdmission(context);
+    await this.#binding?.stop(context);
+    await this.#run;
+    this.#consumer = undefined;
+    this.#run = undefined;
+  }
+
+  public async stopAdmission(context: Context): Promise<void> {
+    void context;
+    if (this.#admissionStopped) return;
+    this.#admissionStopped = true;
     this.#reconnect?.abort(new Error(`Kafka endpoint ${this.name} stopped`));
     this.#reconnect = undefined;
-    await this.#binding?.stop(context);
+    this.#binding?.stopAdmission();
     const consumer = this.#consumer;
     if (consumer !== undefined) {
       await consumer.stop();
     }
-    await this.#run;
-    this.#consumer = undefined;
-    this.#run = undefined;
   }
 
   private async supervise(
@@ -415,6 +425,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
 
 interface KafkaEndpointConsumerContract extends InputEndpointConsumer {
   start(): Promise<void>;
+  stopAdmission(): void;
   stop(context: Context): Promise<void>;
   handle(record: KafkaRecord, control: KafkaConsumerControl): Promise<void>;
 }
@@ -487,6 +498,13 @@ export class KafkaDataSource extends InputDataSource {
     await Promise.all(this.kafkaEndpoints().map(async (endpoint) => endpoint.stop(context)));
   }
 
+  public async stopAdmission(context: Context): Promise<void> {
+    if (!this.#started) return;
+    await Promise.all(
+      this.kafkaEndpoints().map(async (endpoint) => endpoint.stopAdmission(context))
+    );
+  }
+
   private kafkaEndpoints(): readonly KafkaSourceEndpoint[] {
     return this.endpoints().map((endpoint) => {
       if (!(endpoint instanceof KafkaSourceEndpoint))
@@ -545,16 +563,24 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
   }
 
   public async stop(context: Context): Promise<void> {
+    if (!this.#started && !this.#stopped) return;
+    this.stopAdmission();
+    try {
+      await this.#tasks.drain(context.remainingMs());
+    } catch (error: unknown) {
+      this.#tasks.cancel(error);
+      throw error;
+    } finally {
+      this.#pending?.stop(context);
+    }
+  }
+
+  public stopAdmission(): void {
     if (!this.#started) return;
     this.#started = false;
     this.#stopped = true;
     for (const wake of this.#waiters.splice(0)) wake();
-    this.#tasks.cancel(context.signal().reason ?? new Error("Kafka endpoint stopped"));
-    try {
-      await this.#tasks.drain(context.remainingMs());
-    } finally {
-      this.#pending?.stop(context);
-    }
+    this.#tasks.stopAdmission();
   }
 
   public override consume(context: MessageContext, value: T): Completion {
@@ -916,25 +942,30 @@ function defaultKafkaClientFactory(environment: RuntimeEnvironment): KafkaClient
 class ConfluentConsumer implements KafkaConsumer {
   readonly #consumer: KafkaJS.Consumer;
   #finishRun: (() => void) | undefined;
+  #disconnecting: Promise<void> | undefined;
   public constructor(consumer: KafkaJS.Consumer) {
     this.#consumer = consumer;
   }
   public connect(): Promise<void> {
     return this.#consumer.connect();
   }
-  public async disconnect(): Promise<void> {
-    try {
-      await this.#consumer.disconnect();
-    } finally {
-      this.finishRun();
-    }
+  public disconnect(): Promise<void> {
+    this.#disconnecting ??= this.disconnectOnce();
+    return this.#disconnecting;
   }
   public subscribe(topic: string): Promise<void> {
     return this.#consumer.subscribe({ topic });
   }
-  public async stop(): Promise<void> {
+  public stop(): Promise<void> {
+    // KafkaJS stop followed by disconnect performs two coordinated group
+    // shutdowns. Closing the consumer once stops admission and releases the
+    // run loop; the supervisor observes the same idempotent promise.
+    return this.disconnect();
+  }
+
+  private async disconnectOnce(): Promise<void> {
     try {
-      await this.#consumer.stop();
+      await this.#consumer.disconnect();
     } finally {
       this.finishRun();
     }

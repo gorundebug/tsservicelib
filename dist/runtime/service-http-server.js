@@ -4,6 +4,7 @@ export class ServiceHTTPServer {
     #config;
     #routes = new Map();
     #server;
+    #accepting = false;
     constructor(config) {
         this.#config = config;
     }
@@ -26,15 +27,21 @@ export class ServiceHTTPServer {
             this.route(request, response);
         });
         this.#server = server;
+        this.#accepting = true;
         try {
             await listen(server, config.httpPort, config.httpHost, context.signal());
         }
         catch (error) {
             this.#server = undefined;
+            this.#accepting = false;
             throw error;
         }
     }
     async stop(context) {
+        await this.stopAdmission(context);
+    }
+    async stopAdmission(context) {
+        this.#accepting = false;
         const server = this.#server;
         if (server === undefined) {
             return;
@@ -43,6 +50,12 @@ export class ServiceHTTPServer {
         await close(server, context.signal());
     }
     route(request, response) {
+        if (!this.#accepting) {
+            response.statusCode = 503;
+            response.setHeader("connection", "close");
+            response.end("HTTP service is shutting down");
+            return;
+        }
         let path;
         try {
             path = new URL(request.url ?? "", "http://service.local").pathname;
@@ -122,6 +135,11 @@ function close(server, signal) {
                 reject(error);
             }
         });
+        // Keep-alive connections with no admitted request are not application
+        // work and must not consume the graceful-shutdown window. Requests that
+        // are already active remain open and are drained by their endpoint task
+        // registries; the cancellation path above is still the hard deadline.
+        server.closeIdleConnections();
     });
 }
 function abortReason(signal, fallback) {

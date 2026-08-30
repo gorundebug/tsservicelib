@@ -75,7 +75,8 @@ async function readYaml(path) {
 export async function loadRuntimeConfig(options) {
     const base = await readYaml(options.configPath);
     const values = options.valuesPath === undefined ? {} : await readYaml(options.valuesPath);
-    const merged = deepMerge(deepMerge(options.defaults ?? {}, base), values);
+    const overrides = options.overridesPath === undefined ? {} : await readYaml(options.overridesPath);
+    const merged = deepMerge(deepMerge(deepMerge(options.defaults ?? {}, base), values), overrides);
     applyEnvironment(merged, options.patches ?? [], options.environment ?? process.env);
     const parsed = deepFreeze(options.schema.parse(merged));
     return new RuntimeConfig(parsed);

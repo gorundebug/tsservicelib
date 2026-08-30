@@ -213,7 +213,8 @@ export class TemporalConnector implements ManagedDataConnector {
             : {}),
           ...(config.maxConcurrentWorkflows > 0
             ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
-            : {})
+            : {}),
+          shutdownGraceTime: Math.max(0, this.#environment.serviceConfig().shutdownTimeout)
         });
         this.#workers.push(worker);
         this.#workerRuns.push(worker.run());

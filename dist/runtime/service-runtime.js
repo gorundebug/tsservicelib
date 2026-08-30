@@ -17,9 +17,6 @@ const START_ORDER = [
 const ADMISSION_CATEGORIES = new Set([
     "dataSource",
     "managedDataConnector",
-    "delayPool",
-    "taskPool",
-    "priorityTaskPool",
     "component",
     "httpServer"
 ]);
@@ -90,6 +87,7 @@ export class ServiceRuntime {
         return this.#stopPromise;
     }
     async stopOnce(context, drainTimeoutMs) {
+        const stopContext = drainTimeoutMs === undefined ? context : context.bounded(Math.max(0, drainTimeoutMs));
         if (this.#state === "starting") {
             this.#startupController.abort(new RuntimeStoppedError("runtime startup was stopped"));
             try {
@@ -106,21 +104,24 @@ export class ServiceRuntime {
         }
         this.#state = "stopping";
         const admission = this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category));
-        await this.stopAdmission(admission, context);
+        await this.stopAdmission(admission, stopContext);
         try {
-            await this.#tasks.drain(drainTimeoutMs);
+            await this.#tasks.drain(stopContext.remainingMs());
             this.#tasks.stopAdmission();
         }
         catch (error) {
             this.#tasks.cancel(error);
-            await this.#tasks.drain();
             throw error;
         }
         finally {
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink" ||
+            await this.stopConcurrent(this.#started.filter((item) => (item.category === "dataSource" && "stopAdmission" in item.lifecycle) ||
+                item.category === "dataSink" ||
                 item.category === "managedDataConnector" ||
-                item.category === "storage"), context);
-            await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), context);
+                item.category === "storage" ||
+                item.category === "delayPool" ||
+                item.category === "taskPool" ||
+                item.category === "priorityTaskPool"), stopContext);
+            await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), stopContext);
             this.#started.length = 0;
             this.#state = "stopped";
         }
@@ -138,45 +139,93 @@ export class ServiceRuntime {
         this.#started.length = 0;
     }
     async stopConcurrent(components, context) {
-        const results = await Promise.allSettled(components.toReversed().map(async (item) => item.lifecycle.stop(context)));
+        const ordered = components.toReversed();
+        const results = await settleWithinDeadline(context, ordered.map(async (item) => item.lifecycle.stop(context)));
         for (const [index, result] of results.entries()) {
+            const component = ordered[index];
+            if (component === undefined)
+                continue;
+            if (result === undefined) {
+                this.logStopTimeout(context, component);
+                continue;
+            }
             if (result.status === "rejected") {
-                const component = components[components.length - index - 1];
-                if (component !== undefined)
-                    this.logStopError(context, component, result.reason);
+                this.logStopError(context, component, result.reason);
             }
         }
     }
     async stopAdmission(components, context) {
-        const results = await Promise.allSettled(components.toReversed().map(async (item) => {
-            if (item.category === "managedDataConnector" && "stopAdmission" in item.lifecycle) {
+        const ordered = components.toReversed();
+        const results = await settleWithinDeadline(context, ordered.map(async (item) => {
+            if ("stopAdmission" in item.lifecycle) {
                 await item.lifecycle.stopAdmission(context);
                 return;
             }
             await item.lifecycle.stop(context);
         }));
         for (const [index, result] of results.entries()) {
+            const component = ordered[index];
+            if (component === undefined)
+                continue;
+            if (result === undefined) {
+                this.logStopTimeout(context, component);
+                continue;
+            }
             if (result.status === "rejected") {
-                const component = components[components.length - index - 1];
-                if (component !== undefined)
-                    this.logStopError(context, component, result.reason);
+                this.logStopError(context, component, result.reason);
             }
         }
     }
     async stopSequential(components, context) {
         for (const component of components.toReversed()) {
-            try {
-                await component.lifecycle.stop(context);
+            const [result] = await settleWithinDeadline(context, [component.lifecycle.stop(context)]);
+            if (result === undefined) {
+                this.logStopTimeout(context, component);
             }
-            catch (error) {
-                this.logStopError(context, component, error);
+            else if (result.status === "rejected") {
+                this.logStopError(context, component, result.reason);
             }
         }
+    }
+    logStopTimeout(context, component) {
+        this.#environment
+            .log()
+            .warn(context, "runtime component shutdown timed out", str("category", component.category), str("component", component.name));
     }
     logStopError(context, component, error) {
         this.#environment
             .log()
             .warn(context, "runtime component shutdown", str("category", component.category), str("component", component.name), err(error instanceof Error ? error : new Error(String(error))));
+    }
+}
+async function settleWithinDeadline(context, operations) {
+    if (operations.length === 0)
+        return [];
+    const results = new Array(operations.length);
+    const tracked = operations.map(async (operation, index) => {
+        try {
+            results[index] = { status: "fulfilled", value: await operation };
+        }
+        catch (reason) {
+            results[index] = { status: "rejected", reason };
+        }
+    });
+    const remainingMs = context.remainingMs();
+    if (remainingMs === undefined) {
+        await Promise.all(tracked);
+        return results;
+    }
+    let timer;
+    const timeout = new Promise((resolve) => {
+        timer = setTimeout(resolve, Math.max(0, remainingMs));
+    });
+    try {
+        await Promise.race([Promise.all(tracked), timeout]);
+        return results;
+    }
+    finally {
+        if (timer !== undefined)
+            clearTimeout(timer);
     }
 }
 //# sourceMappingURL=service-runtime.js.map

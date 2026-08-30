@@ -25,10 +25,18 @@ import {
 
 type CronEndpointBinding = InputEndpointConsumer & Consumer<ScheduleTrigger>;
 
+interface PendingCronResult {
+  readonly promise: Promise<undefined>;
+  readonly resolve: (value: undefined) => void;
+  settled: boolean;
+}
+
 class CronEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consumer<ScheduleTrigger> {
   readonly #endpoint: DataSourceEndpoint;
   readonly #function: ScheduleEndpointFunction<T>;
   readonly #collector: FunctionCollector<T>;
+  readonly #hasResult: boolean;
+  readonly #pending = new Map<string, PendingCronResult>();
 
   public constructor(
     endpoint: DataSourceEndpoint,
@@ -38,17 +46,64 @@ class CronEndpointConsumer<T, R, E> implements InputEndpointConsumer, Consumer<S
     this.#endpoint = endpoint;
     this.#function = function_;
     this.#collector = new FunctionCollector((context, value) => stream.consume(context, value));
+    this.#hasResult = stream.resultStream() !== undefined;
+    if (this.#hasResult) {
+      stream.setResultConsumer({
+        consume: (context) => {
+          this.consumeResult(context);
+        }
+      });
+    }
   }
 
   public endpoint(): DataSourceEndpoint {
     return this.#endpoint;
   }
 
-  public consume(
-    context: MessageContext,
-    trigger: ScheduleTrigger
-  ): ReturnType<Consumer<ScheduleTrigger>["consume"]> {
-    return this.#function.onTrigger(context, trigger, this.#collector);
+  public async consume(context: MessageContext, trigger: ScheduleTrigger): Promise<void> {
+    if (!this.#hasResult) {
+      await this.#function.onTrigger(context, trigger, this.#collector);
+      return;
+    }
+    const streamId = context.streamId();
+    if (streamId === undefined || streamId === "") {
+      throw new Error(`cron endpoint ${this.#endpoint.name} activation has no stream ID`);
+    }
+    if (this.#pending.has(streamId)) {
+      throw new Error(
+        `cron endpoint ${this.#endpoint.name} already has an active execution ${streamId}`
+      );
+    }
+    const resolution = Promise.withResolvers<undefined>();
+    const pending: PendingCronResult = { ...resolution, settled: false };
+    this.#pending.set(streamId, pending);
+    this.#endpoint.onPendingAdd(context, streamId);
+    try {
+      await this.#function.onTrigger(context, trigger, this.#collector);
+      await pending.promise;
+    } finally {
+      this.#pending.delete(streamId);
+      this.#endpoint.onPendingRemove(context, streamId);
+    }
+  }
+
+  private consumeResult(context: MessageContext): void {
+    const streamId = context.streamId();
+    if (streamId === undefined || streamId === "") {
+      this.#endpoint.onMissingStreamId(context);
+      return;
+    }
+    const pending = this.#pending.get(streamId);
+    if (pending === undefined) {
+      this.#endpoint.onLateResult(context, streamId);
+      return;
+    }
+    if (pending.settled) {
+      this.#endpoint.onDuplicateMessageId(context, streamId, streamId);
+      return;
+    }
+    pending.settled = true;
+    pending.resolve(undefined);
   }
 }
 
@@ -104,10 +159,32 @@ class CronEndpoint extends DataSourceEndpoint {
     }
   }
 
-  public async stop(): Promise<void> {
+  public async stop(context = Context.background()): Promise<void> {
     this.#job?.stop();
     this.#job = undefined;
-    await Promise.allSettled(this.#active);
+    const drain = Promise.allSettled(this.#active);
+    const remainingMs = context.remainingMs();
+    if (remainingMs === undefined) {
+      await drain;
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, remainingMs));
+    });
+    try {
+      const outcome = await Promise.race([
+        drain.then(() => "drained" as const),
+        timeout.then(() => "timeout" as const)
+      ]);
+      if (outcome === "timeout") {
+        this.runtimeEnvironment()
+          .log()
+          .warn(context, "cron endpoint stopped by shutdown timeout", str("endpoint", this.name));
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   #startDispatch(binding: CronEndpointBinding, scheduledAt: Date): Promise<void> {
@@ -199,16 +276,15 @@ export class CronDataSource extends InputDataSource {
       return Promise.resolve();
     } catch (error: unknown) {
       this.#started = false;
-      for (const endpoint of this.cronEndpoints()) void endpoint.stop();
+      for (const endpoint of this.cronEndpoints()) void endpoint.stop(_context);
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  public stop(_context: Context): Promise<void> {
-    void _context;
+  public stop(context: Context): Promise<void> {
     if (!this.#started) return Promise.resolve();
     this.#started = false;
-    return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop())).then(
+    return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop(context))).then(
       () => undefined
     );
   }

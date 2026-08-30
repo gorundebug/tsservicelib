@@ -9,6 +9,7 @@ import {
   applyEnvironment,
   Context,
   deepMerge,
+  loadRuntimeConfig,
   RuntimeConfig,
   RuntimeConfigLoader,
   RuntimeConfigStore
@@ -78,6 +79,38 @@ await test("config merge clones defaults and applies overlays before typed envir
   assert.notEqual(service.ports, defaults.service.ports);
   service.ports.push(3);
   assert.deepEqual(defaults.service.ports, [1, 2]);
+});
+
+await test("config loader applies Docker overrides after user values and before environment", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "tsservicelib-config-layers-"));
+  const configPath = join(directory, "config.yaml");
+  const valuesPath = join(directory, "values.yaml");
+  const overridesPath = join(directory, "docker.yaml");
+  try {
+    await writeFile(configPath, "properties:\n  timeout: 0\n  address: localhost\n");
+    await writeFile(valuesPath, "properties:\n  timeout: 5000\n");
+    await writeFile(overridesPath, "properties:\n  address: inventoryservice\n");
+    const loaded = await loadRuntimeConfig({
+      configPath,
+      valuesPath,
+      overridesPath,
+      environment: { SERVICE_TIMEOUT: "6000" },
+      patches: [{ environment: "SERVICE_TIMEOUT", path: ["properties", "timeout"], parse: Number }],
+      schema: {
+        parse: (value: unknown) => ({
+          ...config(0),
+          properties: (value as { properties: Record<string, unknown> }).properties
+        })
+      }
+    });
+
+    assert.deepEqual(loaded.config().properties, {
+      timeout: 6000,
+      address: "inventoryservice"
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 await test("config loader publishes stable snapshots and retains the last valid one", async () => {

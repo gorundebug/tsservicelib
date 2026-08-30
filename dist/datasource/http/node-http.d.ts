@@ -30,11 +30,13 @@ declare class NodeHttpInputEndpoint extends DataSourceEndpoint {
     bindConsumer(consumer: NodeHttpEndpointConsumerContract): void;
     start(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
+    stopAdmission(): void;
     handler(): HTTPHandler;
     private serve;
 }
 interface NodeHttpEndpointConsumerContract extends InputEndpointConsumer {
     start(context: Context): Promise<void>;
+    stopAdmission(): void;
     stop(context: Context): Promise<void>;
     serveHttp(request: IncomingMessage, response: ServerResponse): Promise<void>;
 }
@@ -44,6 +46,7 @@ export declare class NodeHttpDataSource extends InputDataSource {
     addHttpEndpoint(endpoint: NodeHttpInputEndpoint): void;
     start(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
+    stopAdmission(context: Context): Promise<void>;
     private httpEndpoints;
     private stopEndpoints;
     private route;

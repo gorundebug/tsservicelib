@@ -12,10 +12,17 @@ await test("config arguments have the canonical example defaults", () => {
 
 await test("config arguments support Go-compatible flag and equals forms", () => {
   assert.deepEqual(
-    parseConfigArguments(["-config", "/run/base.yaml", "--values=/run/values.yaml"]),
+    parseConfigArguments([
+      "-config",
+      "/run/base.yaml",
+      "--values=/run/values.yaml",
+      "--overrides",
+      "/run/docker.yaml"
+    ]),
     {
       configPath: "/run/base.yaml",
-      valuesPath: "/run/values.yaml"
+      valuesPath: "/run/values.yaml",
+      overridesPath: "/run/docker.yaml"
     }
   );
 });

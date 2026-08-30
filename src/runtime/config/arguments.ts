@@ -1,6 +1,7 @@
 export interface ConfigPaths {
   readonly configPath: string;
   readonly valuesPath: string;
+  readonly overridesPath?: string;
 }
 
 const DEFAULT_CONFIG_PATH = "./config/config.yaml";
@@ -18,6 +19,7 @@ function readValue(arguments_: readonly string[], index: number, option: string)
 export function parseConfigArguments(arguments_: readonly string[]): ConfigPaths {
   let configPath = DEFAULT_CONFIG_PATH;
   let valuesPath = DEFAULT_VALUES_PATH;
+  let overridesPath: string | undefined;
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
@@ -31,6 +33,11 @@ export function parseConfigArguments(arguments_: readonly string[]): ConfigPaths
       index += 1;
     } else if (argument?.startsWith("--values=")) {
       valuesPath = argument.slice("--values=".length);
+    } else if (argument === "--overrides" || argument === "-overrides") {
+      overridesPath = readValue(arguments_, index, argument);
+      index += 1;
+    } else if (argument?.startsWith("--overrides=")) {
+      overridesPath = argument.slice("--overrides=".length);
     } else {
       throw new Error(`unknown command-line argument: ${String(argument)}`);
     }
@@ -42,5 +49,10 @@ export function parseConfigArguments(arguments_: readonly string[]): ConfigPaths
   if (valuesPath.length === 0) {
     throw new Error("values path must not be empty");
   }
-  return { configPath, valuesPath };
+  if (overridesPath?.length === 0) {
+    throw new Error("overrides path must not be empty");
+  }
+  return overridesPath === undefined
+    ? { configPath, valuesPath }
+    : { configPath, valuesPath, overridesPath };
 }

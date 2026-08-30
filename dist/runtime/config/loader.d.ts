@@ -16,6 +16,7 @@ export interface EnvironmentPatch {
 export interface ConfigLoadOptions<T extends CanonicalConfig> {
     readonly configPath: string;
     readonly valuesPath?: string;
+    readonly overridesPath?: string | undefined;
     readonly defaults?: Readonly<Record<string, unknown>>;
     readonly environment?: Readonly<Record<string, string | undefined>>;
     readonly patches?: readonly EnvironmentPatch[];

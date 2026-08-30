@@ -38,6 +38,9 @@ class GrpcJsDataSource extends InputDataSource {
         this.#server = server;
     }
     async stop(context) {
+        await this.stopAdmission(context);
+    }
+    async stopAdmission(context) {
         const server = this.#server;
         this.#server = undefined;
         if (server === undefined)

@@ -110,6 +110,9 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
     stop(context) {
         return this.#consumer?.stop(context) ?? Promise.resolve();
     }
+    stopAdmission() {
+        this.#consumer?.stopAdmission();
+    }
     handler() {
         return this.#requestHandler;
     }
@@ -199,15 +202,16 @@ export class NodeHttpDataSource extends InputDataSource {
             return;
         }
         this.#started = false;
+        await this.stopAdmission(context);
+        await this.stopEndpoints(context);
+    }
+    async stopAdmission(context) {
+        for (const endpoint of this.httpEndpoints())
+            endpoint.stopAdmission();
         const server = this.#server;
         this.#server = undefined;
-        try {
-            await this.stopEndpoints(context);
-        }
-        finally {
-            if (server !== undefined) {
-                await closeServer(server, context.signal());
-            }
+        if (server !== undefined) {
+            await closeServer(server, context.signal());
         }
     }
     httpEndpoints() {
@@ -290,19 +294,25 @@ class NodeHttpEndpointConsumer {
         return Promise.resolve();
     }
     stop(context) {
-        if (!this.#started) {
+        if (!this.#started && !this.#stopped) {
             return Promise.resolve();
         }
-        this.#started = false;
-        this.#stopped = true;
-        this.#tasks.stopAdmission();
+        this.stopAdmission();
         return drainAcceptedTasks(this.#tasks, context).finally(() => {
             this.#pending?.stop(context);
         });
     }
+    stopAdmission() {
+        if (!this.#started)
+            return;
+        this.#started = false;
+        this.#stopped = true;
+        this.#tasks.stopAdmission();
+    }
     serveHttp(request, response) {
         if (!this.#started) {
             response.statusCode = 503;
+            response.setHeader("connection", "close");
             response.end("HTTP endpoint is not accepting requests");
             return Promise.resolve();
         }
@@ -608,6 +618,9 @@ function closeServer(server, signal) {
                 reject(error);
             }
         });
+        // Existing keep-alive sockets are not accepted work. Close them now so
+        // only requests already admitted by an endpoint participate in drain.
+        server.closeIdleConnections();
     });
 }
 function abortReason(signal, fallback) {
