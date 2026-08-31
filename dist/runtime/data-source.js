@@ -179,6 +179,13 @@ function makeDataSourceEndpointMetrics(dataSource, endpointName, oldestPendingAg
     });
     const events = scope.counterVec("events_total", "Total number of events in data source endpoint");
     scope.observableFloat64Gauge("pending_oldest_age_seconds", "Age in seconds of the oldest pending request awaiting a pipeline result", oldestPendingAge);
+    const activeRequests = scope.gauge("active_requests", "Number of active requests in data source endpoint");
+    const pendingRequests = scope.gauge("pending_requests", "Number of requests awaiting a pipeline result");
+    // Prometheus does not materialize a labelled gauge until it is touched.
+    // Endpoint lifecycle gauges are part of the status contract even before the
+    // first request, so register their zero-valued series eagerly.
+    activeRequests.set(0);
+    pendingRequests.set(0);
     return {
         missingStreamId: events.with({ event: "missing_stream_id" }),
         lateResult: events.with({ event: "late_result" }),
@@ -189,8 +196,8 @@ function makeDataSourceEndpointMetrics(dataSource, endpointName, oldestPendingAg
         requestErrors: events.with({ event: "request_error" }),
         messagesTotal: scope.counter("messages_total", "Total number of successfully processed messages in data source endpoint"),
         requestDuration: scope.histogram("request_duration_seconds", "Request duration in seconds for data source endpoint"),
-        activeRequests: scope.gauge("active_requests", "Number of active requests in data source endpoint"),
-        pendingRequests: scope.gauge("pending_requests", "Number of requests awaiting a pipeline result")
+        activeRequests,
+        pendingRequests
     };
 }
 export class DataSourceEndpointConsumer {

@@ -13,6 +13,8 @@ import {
   InputDataSource,
   MessageContext,
   OutputDataSink,
+  PrometheusMetrics,
+  PrometheusMetricsEngine,
   RuntimeConfig,
   RuntimeConfigStore,
   ServiceEnvironment,
@@ -304,5 +306,29 @@ await test("gRPC endpoint metrics carry the canonical protocol label", () => {
       protocol: "grpc"
     }),
     0
+  );
+});
+
+await test("data source lifecycle gauges exist before the first request", async () => {
+  const metrics = new PrometheusMetrics();
+  const environment = new ServiceEnvironment(
+    new RuntimeConfigStore(new RuntimeConfig(config())),
+    1,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    metrics
+  );
+  new DataSourceEndpoint(new TestDataSource(10, environment), 100);
+
+  const rendered = await new PrometheusMetricsEngine(metrics).render();
+  assert.match(
+    rendered,
+    /datasource_endpoint_active_requests\{connector="sourceConnector",endpoint="sourceEndpoint",protocol=""\} 0/u
+  );
+  assert.match(
+    rendered,
+    /datasource_endpoint_pending_requests\{connector="sourceConnector",endpoint="sourceEndpoint",protocol=""\} 0/u
   );
 });
