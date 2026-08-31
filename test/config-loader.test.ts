@@ -116,12 +116,14 @@ await test("config loader applies Docker overrides after user values and before 
 await test("config loader publishes stable snapshots and retains the last valid one", async () => {
   const directory = await mkdtemp(join(tmpdir(), "tsservicelib-config-loader-"));
   const valuesPath = join(directory, "overrides.yaml");
+  const runtimeOverridesPath = join(directory, "runtime-overrides.yaml");
   const metrics = new TestMetrics();
   const logs = new TestLog();
   const store = new RuntimeConfigStore(new RuntimeConfig(config(0)));
   await writeFile(valuesPath, "1\n");
+  await writeFile(runtimeOverridesPath, "0\n");
   const loader = new RuntimeConfigLoader({
-    valuesPath,
+    paths: [valuesPath, runtimeOverridesPath],
     pollIntervalMs: 5,
     store,
     service: "Order Service",
@@ -129,8 +131,9 @@ await test("config loader publishes stable snapshots and retains the last valid 
     logger: logs.defaultLogger(),
     async load(): Promise<RuntimeConfig> {
       const value = (await readFile(valuesPath, "utf8")).trim();
+      const runtimeOverride = (await readFile(runtimeOverridesPath, "utf8")).trim();
       if (value === "invalid") throw new Error("invalid config");
-      return new RuntimeConfig(config(Number(value)));
+      return new RuntimeConfig(config(Number(value) + Number(runtimeOverride)));
     }
   });
 
@@ -148,19 +151,8 @@ await test("config loader publishes stable snapshots and retains the last valid 
       1
     );
 
-    await writeFile(valuesPath, "invalid\n");
-    await waitUntil(
-      () =>
-        metrics.counterValue("service_config_reloads_total", {
-          service: "Order Service",
-          event: "error"
-        }) === 1
-    );
-    assert.equal(store.current().config().properties["revision"], 2);
-    assert.equal(logs.entriesAtLevel("error").length, 1);
-
-    await writeFile(valuesPath, "3\n");
-    await waitUntil(() => store.current().config().properties["revision"] === 3);
+    await writeFile(runtimeOverridesPath, "10\n");
+    await waitUntil(() => store.current().config().properties["revision"] === 12);
     assert.equal(
       metrics.counterValue("service_config_reloads_total", {
         service: "Order Service",
@@ -169,10 +161,31 @@ await test("config loader publishes stable snapshots and retains the last valid 
       2
     );
 
+    await writeFile(valuesPath, "invalid\n");
+    await waitUntil(
+      () =>
+        metrics.counterValue("service_config_reloads_total", {
+          service: "Order Service",
+          event: "error"
+        }) === 1
+    );
+    assert.equal(store.current().config().properties["revision"], 12);
+    assert.equal(logs.entriesAtLevel("error").length, 1);
+
+    await writeFile(valuesPath, "3\n");
+    await waitUntil(() => store.current().config().properties["revision"] === 13);
+    assert.equal(
+      metrics.counterValue("service_config_reloads_total", {
+        service: "Order Service",
+        event: "success"
+      }),
+      3
+    );
+
     await loader.stop(Context.background());
     await writeFile(valuesPath, "4\n");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(store.current().config().properties["revision"], 3);
+    assert.equal(store.current().config().properties["revision"], 13);
     await loader.stop(Context.background());
   } finally {
     await loader.stop(Context.background());

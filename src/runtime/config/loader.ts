@@ -33,7 +33,8 @@ export interface ConfigLoadOptions<T extends CanonicalConfig> {
 }
 
 export interface RuntimeConfigReloadSource<T extends CanonicalConfig> {
-  readonly valuesPath: string;
+  /** Every file whose contents contribute to the reloadable config snapshot. */
+  readonly paths: readonly string[];
   readonly pollIntervalMs?: number | undefined;
   load(): Promise<RuntimeConfig<T>>;
 }
@@ -206,7 +207,7 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
   readonly #success: Int64Counter;
   readonly #error: Int64Counter;
   readonly #pollIntervalMs: number;
-  #observed: Buffer | undefined;
+  #observed: readonly Buffer[] | undefined;
   #timer: NodeJS.Timeout | undefined;
   #polling: Promise<void> | undefined;
   #readFailureRecorded = false;
@@ -218,6 +219,9 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
       (options.pollIntervalMs ?? 250) < 1
     ) {
       throw new RangeError("config reload poll interval must be a positive integer");
+    }
+    if (options.paths.length === 0) {
+      throw new RangeError("config reload paths must not be empty");
     }
     this.#source = options;
     this.#store = options.store;
@@ -263,10 +267,10 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
 
   private async synchronizeInitialSnapshot(): Promise<void> {
     for (;;) {
-      const before = await readFile(this.#source.valuesPath);
+      const before = await readSnapshots(this.#source.paths);
       const candidate = await this.#source.load();
-      const after = await readFile(this.#source.valuesPath);
-      if (before.equals(after)) {
+      const after = await readSnapshots(this.#source.paths);
+      if (snapshotsEqual(before, after)) {
         this.#store.publish(candidate);
         this.#observed = after;
         return;
@@ -276,9 +280,9 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
 
   private async poll(context: Context): Promise<void> {
     if (this.#state !== "running") return;
-    let before: Buffer;
+    let before: readonly Buffer[];
     try {
-      before = await readFile(this.#source.valuesPath);
+      before = await readSnapshots(this.#source.paths);
       this.#readFailureRecorded = false;
     } catch (error: unknown) {
       if (!this.#readFailureRecorded) {
@@ -288,12 +292,12 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
       }
       return;
     }
-    if (this.#observed?.equals(before) === true) return;
+    if (this.#observed !== undefined && snapshotsEqual(this.#observed, before)) return;
 
     try {
       const candidate = await this.#source.load();
-      const after = await readFile(this.#source.valuesPath);
-      if (!before.equals(after)) return;
+      const after = await readSnapshots(this.#source.paths);
+      if (!snapshotsEqual(before, after)) return;
       this.#store.publish(candidate);
       this.#observed = after;
       this.#success.inc(context);
@@ -303,6 +307,18 @@ export class RuntimeConfigLoader<T extends CanonicalConfig> implements Lifecycle
       this.#logger.error(context, "config reload error", asErrorField(error));
     }
   }
+}
+
+async function readSnapshots(paths: readonly string[]): Promise<readonly Buffer[]> {
+  return Promise.all(paths.map((path) => readFile(path)));
+}
+
+function snapshotsEqual(left: readonly Buffer[], right: readonly Buffer[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => {
+    const candidate = right[index];
+    return candidate !== undefined && value.equals(candidate);
+  });
 }
 
 function asErrorField(value: unknown): ReturnType<typeof err> {

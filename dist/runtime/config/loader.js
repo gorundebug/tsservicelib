@@ -143,6 +143,9 @@ export class RuntimeConfigLoader {
             (options.pollIntervalMs ?? 250) < 1) {
             throw new RangeError("config reload poll interval must be a positive integer");
         }
+        if (options.paths.length === 0) {
+            throw new RangeError("config reload paths must not be empty");
+        }
         this.#source = options;
         this.#store = options.store;
         this.#logger = options.logger;
@@ -181,10 +184,10 @@ export class RuntimeConfigLoader {
     }
     async synchronizeInitialSnapshot() {
         for (;;) {
-            const before = await readFile(this.#source.valuesPath);
+            const before = await readSnapshots(this.#source.paths);
             const candidate = await this.#source.load();
-            const after = await readFile(this.#source.valuesPath);
-            if (before.equals(after)) {
+            const after = await readSnapshots(this.#source.paths);
+            if (snapshotsEqual(before, after)) {
                 this.#store.publish(candidate);
                 this.#observed = after;
                 return;
@@ -196,7 +199,7 @@ export class RuntimeConfigLoader {
             return;
         let before;
         try {
-            before = await readFile(this.#source.valuesPath);
+            before = await readSnapshots(this.#source.paths);
             this.#readFailureRecorded = false;
         }
         catch (error) {
@@ -207,12 +210,12 @@ export class RuntimeConfigLoader {
             }
             return;
         }
-        if (this.#observed?.equals(before) === true)
+        if (this.#observed !== undefined && snapshotsEqual(this.#observed, before))
             return;
         try {
             const candidate = await this.#source.load();
-            const after = await readFile(this.#source.valuesPath);
-            if (!before.equals(after))
+            const after = await readSnapshots(this.#source.paths);
+            if (!snapshotsEqual(before, after))
                 return;
             this.#store.publish(candidate);
             this.#observed = after;
@@ -224,6 +227,17 @@ export class RuntimeConfigLoader {
             this.#logger.error(context, "config reload error", asErrorField(error));
         }
     }
+}
+async function readSnapshots(paths) {
+    return Promise.all(paths.map((path) => readFile(path)));
+}
+function snapshotsEqual(left, right) {
+    if (left.length !== right.length)
+        return false;
+    return left.every((value, index) => {
+        const candidate = right[index];
+        return candidate !== undefined && value.equals(candidate);
+    });
 }
 function asErrorField(value) {
     return err(value instanceof Error ? value : new Error(String(value)));

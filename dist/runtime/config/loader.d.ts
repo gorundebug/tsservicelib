@@ -23,7 +23,8 @@ export interface ConfigLoadOptions<T extends CanonicalConfig> {
     readonly schema: ConfigSchema<T>;
 }
 export interface RuntimeConfigReloadSource<T extends CanonicalConfig> {
-    readonly valuesPath: string;
+    /** Every file whose contents contribute to the reloadable config snapshot. */
+    readonly paths: readonly string[];
     readonly pollIntervalMs?: number | undefined;
     load(): Promise<RuntimeConfig<T>>;
 }
