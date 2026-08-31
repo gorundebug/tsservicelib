@@ -36,21 +36,21 @@ await test("service runtime follows canonical start ordering and rolls back part
   runtime.register({
     category: "dataSource",
     name: "source",
-    lifecycle: lifecycle("source", events)
+    lifecycle: lifecycle("source", events, true)
   });
   runtime.register({
     category: "storage",
     name: "storage",
-    lifecycle: lifecycle("storage", events, true)
+    lifecycle: lifecycle("storage", events)
   });
 
-  await assert.rejects(runtime.start(Context.background()), /failed:storage/);
+  await assert.rejects(runtime.start(Context.background()), /failed:source/);
   assert.deepEqual(events, [
-    "start:source",
-    "start:sink",
     "start:storage",
+    "start:sink",
+    "start:source",
     "stop:sink",
-    "stop:source"
+    "stop:storage"
   ]);
   assert.equal(runtime.state(), "stopped");
 });
@@ -83,7 +83,7 @@ await test("service stop closes admission, drains accepted work, then stops sink
   await stopping;
   await runtime.stop();
 
-  assert.deepEqual(events, ["start:source", "start:sink", "stop:source", "task:done", "stop:sink"]);
+  assert.deepEqual(events, ["start:sink", "start:source", "stop:source", "task:done", "stop:sink"]);
 });
 
 await test("admitted source work drains before graph pools stop", async () => {
@@ -169,8 +169,8 @@ await test("accepted graph work may admit nested work while shutdown drains", as
 
   assert.deepEqual(errors, []);
   assert.deepEqual(events, [
-    "start:source",
     "start:sink",
+    "start:source",
     "stop:source",
     "parent:done",
     "nested:done",

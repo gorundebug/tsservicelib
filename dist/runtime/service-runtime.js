@@ -3,16 +3,16 @@ import { err, str } from "./environment/index.js";
 import { RuntimeStoppedError } from "./errors.js";
 import { RuntimeTaskRegistry } from "./task-registry.js";
 const START_ORDER = [
-    "dataSource",
-    "dataSink",
+    "telemetry",
     "managedDataConnector",
     "storage",
     "delayPool",
     "taskPool",
     "priorityTaskPool",
     "component",
-    "httpServer",
-    "telemetry"
+    "dataSink",
+    "dataSource",
+    "httpServer"
 ];
 const ADMISSION_CATEGORIES = new Set([
     "dataSource",
@@ -115,12 +115,12 @@ export class ServiceRuntime {
         }
         finally {
             await this.stopConcurrent(this.#started.filter((item) => (item.category === "dataSource" && "stopAdmission" in item.lifecycle) ||
-                item.category === "dataSink" ||
-                item.category === "managedDataConnector" ||
                 item.category === "storage" ||
                 item.category === "delayPool" ||
                 item.category === "taskPool" ||
                 item.category === "priorityTaskPool"), stopContext);
+            await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink"), stopContext);
+            await this.stopConcurrent(this.#started.filter((item) => item.category === "managedDataConnector"), stopContext);
             await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), stopContext);
             this.#started.length = 0;
             this.#state = "stopped";

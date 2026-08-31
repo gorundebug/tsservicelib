@@ -6,16 +6,16 @@ import type { AdmissionLifecycle, ComponentCategory, RuntimeComponent } from "./
 import { RuntimeTaskRegistry } from "./task-registry.js";
 
 const START_ORDER: readonly ComponentCategory[] = [
-  "dataSource",
-  "dataSink",
+  "telemetry",
   "managedDataConnector",
   "storage",
   "delayPool",
   "taskPool",
   "priorityTaskPool",
   "component",
-  "httpServer",
-  "telemetry"
+  "dataSink",
+  "dataSource",
+  "httpServer"
 ];
 
 const ADMISSION_CATEGORIES: ReadonlySet<ComponentCategory> = new Set([
@@ -133,13 +133,19 @@ export class ServiceRuntime {
         this.#started.filter(
           (item) =>
             (item.category === "dataSource" && "stopAdmission" in item.lifecycle) ||
-            item.category === "dataSink" ||
-            item.category === "managedDataConnector" ||
             item.category === "storage" ||
             item.category === "delayPool" ||
             item.category === "taskPool" ||
             item.category === "priorityTaskPool"
         ),
+        stopContext
+      );
+      await this.stopConcurrent(
+        this.#started.filter((item) => item.category === "dataSink"),
+        stopContext
+      );
+      await this.stopConcurrent(
+        this.#started.filter((item) => item.category === "managedDataConnector"),
         stopContext
       );
       await this.stopSequential(
