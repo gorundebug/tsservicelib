@@ -135,6 +135,45 @@ await test("admitted source work drains before graph pools stop", async () => {
   assert.ok(events.indexOf("task:done") < events.indexOf("stop:source"));
 });
 
+await test("ordinary sources drain before managed connector admission stops", async () => {
+  const events: string[] = [];
+  const runtime = new ServiceRuntime(makeTestEnvironment([]));
+  const source: AdmissionLifecycle = {
+    start: async () => undefined,
+    stopAdmission: async () => {
+      events.push("admission:source");
+    },
+    stop: async () => {
+      events.push("stop:source");
+    }
+  };
+  const managedConnector: AdmissionLifecycle = {
+    start: async () => undefined,
+    stopAdmission: async () => {
+      events.push("admission:managed");
+    },
+    stop: async () => {
+      events.push("stop:managed");
+    }
+  };
+  runtime.register({ category: "dataSource", name: "cron", lifecycle: source });
+  runtime.register({
+    category: "managedDataConnector",
+    name: "temporal",
+    lifecycle: managedConnector
+  });
+
+  await runtime.start();
+  await runtime.stop();
+
+  assert.deepEqual(events, [
+    "admission:source",
+    "stop:source",
+    "admission:managed",
+    "stop:managed"
+  ]);
+});
+
 await test("accepted graph work may admit nested work while shutdown drains", async () => {
   const events: string[] = [];
   const errors: Error[] = [];

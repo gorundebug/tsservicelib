@@ -20,7 +20,6 @@ const START_ORDER: readonly ComponentCategory[] = [
 
 const ADMISSION_CATEGORIES: ReadonlySet<ComponentCategory> = new Set([
   "dataSource",
-  "managedDataConnector",
   "component",
   "httpServer"
 ]);
@@ -122,6 +121,19 @@ export class ServiceRuntime {
 
     const admission = this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category));
     await this.stopAdmission(admission, stopContext);
+    // A source can be awaiting work submitted through a managed connector.
+    // Drain ordinary sources first (Cron -> Temporal is the canonical case),
+    // then stop durable worker admission while outbound clients remain alive.
+    await this.stopConcurrent(
+      this.#started.filter(
+        (item) => item.category === "dataSource" && "stopAdmission" in item.lifecycle
+      ),
+      stopContext
+    );
+    await this.stopAdmission(
+      this.#started.filter((item) => item.category === "managedDataConnector"),
+      stopContext
+    );
     try {
       await this.#tasks.drain(stopContext.remainingMs());
       this.#tasks.stopAdmission();
@@ -132,7 +144,6 @@ export class ServiceRuntime {
       await this.stopConcurrent(
         this.#started.filter(
           (item) =>
-            (item.category === "dataSource" && "stopAdmission" in item.lifecycle) ||
             item.category === "storage" ||
             item.category === "delayPool" ||
             item.category === "taskPool" ||

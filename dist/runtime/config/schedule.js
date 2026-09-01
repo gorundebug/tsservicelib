@@ -39,7 +39,9 @@ export function isTemporalDataConnectorConfig(value) {
         "maxConcurrentActivities" in value &&
         isPositiveInteger(value.maxConcurrentActivities) &&
         "maxConcurrentWorkflows" in value &&
-        isPositiveInteger(value.maxConcurrentWorkflows));
+        isPositiveInteger(value.maxConcurrentWorkflows) &&
+        "workerStopTimeout" in value &&
+        isNonNegativeInteger(value.workerStopTimeout));
 }
 export function requireTemporalDataConnectorConfig(value) {
     if (!isTemporalDataConnectorConfig(value)) {

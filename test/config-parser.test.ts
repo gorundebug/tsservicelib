@@ -7,7 +7,8 @@ import {
   requireHttpDataConnectorConfig,
   requireHttpEndpointConfig,
   requireInputStreamConfig,
-  requireMapStreamConfig
+  requireMapStreamConfig,
+  requireTemporalDataConnectorConfig
 } from "@gorundebug/tsservicelib/runtime/config";
 
 function canonicalDocument(
@@ -196,7 +197,8 @@ await test("Cron and Temporal endpoint documents normalize without losing policy
       address: "temporal:7233",
       namespace: "default",
       maxConcurrentActivities: 8,
-      maxConcurrentWorkflows: 4
+      maxConcurrentWorkflows: 4,
+      workerStopTimeout: 5_000
     }
   };
   document["endpoints"] = {
@@ -230,8 +232,9 @@ await test("Cron and Temporal endpoint documents normalize without losing policy
   const link = config.links[0];
   assert.ok(connector && endpoint && link);
   assert.equal(connector.type, 6);
-  assert("namespace" in connector);
-  assert.equal(connector.namespace, "default");
+  const temporalConnector = requireTemporalDataConnectorConfig(connector);
+  assert.equal(temporalConnector.namespace, "default");
+  assert.equal(temporalConnector.workerStopTimeout, 5_000);
   assert("taskQueue" in endpoint);
   assert.equal(endpoint.taskQueue, "automation");
   assert("temporalExecutionType" in endpoint);

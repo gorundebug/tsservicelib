@@ -169,6 +169,10 @@ export class TemporalConnector implements ManagedDataConnector {
     if (this.#started) return;
     context.signal().throwIfAborted();
     const config = this.config();
+    const workerStopTimeout = resolveWorkerStopTimeout(
+      config.workerStopTimeout,
+      this.#environment.serviceConfig().shutdownTimeout
+    );
     installSdkMetricsRuntime();
     const tls = await tlsOptions(config);
     const connection = await abortable(
@@ -214,7 +218,7 @@ export class TemporalConnector implements ManagedDataConnector {
           ...(config.maxConcurrentWorkflows > 0
             ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
             : {}),
-          shutdownGraceTime: Math.max(0, this.#environment.serviceConfig().shutdownTimeout)
+          shutdownGraceTime: workerStopTimeout
         });
         this.#workers.push(worker);
         this.#workerRuns.push(worker.run());
@@ -226,8 +230,30 @@ export class TemporalConnector implements ManagedDataConnector {
         if (endpoint.enabled && endpoint.schedule !== "") await this.ensureSchedule(endpoint);
       }
     } catch (error: unknown) {
-      await this.shutdownWorkers();
-      await connection.close();
+      try {
+        await this.shutdownWorkers();
+      } catch (shutdownError: unknown) {
+        this.#environment
+          .log()
+          .warn(
+            context,
+            "Temporal Worker startup rollback failed",
+            str("connector", this.name),
+            err(shutdownError instanceof Error ? shutdownError : new Error(String(shutdownError)))
+          );
+      }
+      try {
+        await connection.close();
+      } catch (closeError: unknown) {
+        this.#environment
+          .log()
+          .warn(
+            context,
+            "Temporal connection startup rollback failed",
+            str("connector", this.name),
+            err(closeError instanceof Error ? closeError : new Error(String(closeError)))
+          );
+      }
       this.#connection = undefined;
       this.#client = undefined;
       throw error;
@@ -240,13 +266,32 @@ export class TemporalConnector implements ManagedDataConnector {
   }
 
   public async stop(context: Context): Promise<void> {
-    void context;
-    await this.shutdownWorkers();
-    this.#started = false;
+    let shutdownError: unknown;
+    try {
+      await this.shutdownWorkers();
+    } catch (error: unknown) {
+      shutdownError = error;
+    }
     const connection = this.#connection;
+    this.#started = false;
     this.#client = undefined;
     this.#connection = undefined;
-    if (connection !== undefined) await connection.close();
+    try {
+      if (connection !== undefined) await connection.close();
+    } catch (closeError: unknown) {
+      if (shutdownError === undefined) shutdownError = closeError;
+      else {
+        this.#environment
+          .log()
+          .warn(
+            context,
+            "Temporal connection shutdown failed after Worker failure",
+            str("connector", this.name),
+            err(closeError instanceof Error ? closeError : new Error(String(closeError)))
+          );
+      }
+    }
+    if (shutdownError !== undefined) throw shutdownError;
   }
 
   public async submitEndpoint(
@@ -453,10 +498,16 @@ export class TemporalConnector implements ManagedDataConnector {
   }
 
   private async shutdownWorkers(): Promise<void> {
-    for (const worker of this.#workers) worker.shutdown();
-    await Promise.allSettled(this.#workerRuns);
+    const shutdownResults = await Promise.allSettled(
+      this.#workers.map(async (worker) => worker.shutdown())
+    );
+    const runResults = await Promise.allSettled(this.#workerRuns);
     this.#workers = [];
     this.#workerRuns = [];
+    const failure = [...shutdownResults, ...runResults].find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (failure !== undefined) throw failure.reason;
   }
 }
 
@@ -645,6 +696,22 @@ async function tlsOptions(config: TemporalDataConnectorConfig): Promise<
     ...(ca === undefined ? {} : { serverRootCACertificate: ca }),
     ...(pair === undefined ? {} : { clientCertPair: pair })
   };
+}
+
+function resolveWorkerStopTimeout(configuredMillis: number, serviceShutdownMillis: number): number {
+  if (!Number.isSafeInteger(configuredMillis) || configuredMillis < 0) {
+    throw new Error("workerStopTimeout must be a non-negative integer");
+  }
+  if (!Number.isSafeInteger(serviceShutdownMillis) || serviceShutdownMillis < 0) {
+    throw new Error("service shutdownTimeout must be a non-negative integer");
+  }
+  const timeout = configuredMillis === 0 ? serviceShutdownMillis : configuredMillis;
+  if (timeout > serviceShutdownMillis) {
+    throw new Error(
+      `workerStopTimeout ${timeout}ms exceeds service shutdownTimeout ${serviceShutdownMillis}ms`
+    );
+  }
+  return timeout;
 }
 
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

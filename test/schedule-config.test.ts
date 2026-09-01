@@ -63,6 +63,7 @@ await test("Temporal config guards reject incomplete durable transport settings"
     tlsKeyFile: "",
     maxConcurrentActivities: 2,
     maxConcurrentWorkflows: 2,
+    workerStopTimeout: 5_000,
     properties: {}
   } satisfies TemporalDataConnectorConfig;
   const endpoint = {
@@ -85,6 +86,7 @@ await test("Temporal config guards reject incomplete durable transport settings"
   } satisfies TemporalEndpointConfig;
 
   assert.equal(requireTemporalDataConnectorConfig(connector).namespace, "default");
+  assert.equal(requireTemporalDataConnectorConfig(connector).workerStopTimeout, 5_000);
   assert.equal(requireTemporalEndpointConfig(endpoint).taskQueue, "automation");
   assert.equal(requireTemporalEndpointConfig(endpoint).temporalExecutionType, "Activity");
   assert.throws(
@@ -92,6 +94,14 @@ await test("Temporal config guards reject incomplete durable transport settings"
       requireTemporalDataConnectorConfig({
         ...connector,
         maxConcurrentActivities: 0
+      } as DataConnectorConfig),
+    /invalid Temporal data connector config/
+  );
+  assert.throws(
+    () =>
+      requireTemporalDataConnectorConfig({
+        ...connector,
+        workerStopTimeout: -1
       } as DataConnectorConfig),
     /invalid Temporal data connector config/
   );

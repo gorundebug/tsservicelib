@@ -187,6 +187,7 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
     readonly tlsKeyFile: string;
     readonly maxConcurrentActivities: number;
     readonly maxConcurrentWorkflows: number;
+    readonly workerStopTimeout: number;
 }
 export type AnyDataConnectorConfig = HttpDataConnectorConfig | GrpcDataConnectorConfig | KafkaDataConnectorConfig | CronDataConnectorConfig | TemporalDataConnectorConfig | CustomDataConnectorConfig;
 export interface EndpointConfig extends NamedIdentity {
@@ -472,6 +473,7 @@ export interface TemporalDataConnectorConfigDocument extends DataConnectorConfig
     readonly tlsKeyFile?: string | undefined;
     readonly maxConcurrentActivities?: number | undefined;
     readonly maxConcurrentWorkflows?: number | undefined;
+    readonly workerStopTimeout?: number | undefined;
 }
 interface EndpointConfigDocumentBase extends ConfigDocumentIdentity, FunctionConfigDocument {
     readonly idDataConnector: number;

@@ -372,7 +372,8 @@ const connectorKeys = new Set([
     "tlsCertFile",
     "tlsKeyFile",
     "maxConcurrentActivities",
-    "maxConcurrentWorkflows"
+    "maxConcurrentWorkflows",
+    "workerStopTimeout"
 ]);
 function parseConnector(source, path) {
     const type = integer(source.type, `${path}.type`);
@@ -444,7 +445,8 @@ function parseConnector(source, path) {
                 tlsCertFile: optionalString(source.tlsCertFile, `${path}.tlsCertFile`) ?? "",
                 tlsKeyFile: optionalString(source.tlsKeyFile, `${path}.tlsKeyFile`) ?? "",
                 maxConcurrentActivities: optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
-                maxConcurrentWorkflows: optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0
+                maxConcurrentWorkflows: optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0,
+                workerStopTimeout: optionalInteger(source["workerStopTimeout"], `${path}.workerStopTimeout`) ?? 0
             };
         default:
             throw new Error(`${path}.type has an unknown data connector type`);
