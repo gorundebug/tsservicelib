@@ -116,7 +116,7 @@ export class ServiceEnvironment<
   readonly #logger: Logger;
   readonly #metrics: Metrics;
   readonly #tracing: Tracing | undefined;
-  readonly #httpServer: ServiceHTTPServer;
+  #httpServer: ServiceHTTPServer;
   readonly #linkCallCounts = new Map<string, LinkCallStatistics>();
   readonly #taskPools: ReadonlyMap<string, TaskPool>;
   readonly #priorityTaskPools: ReadonlyMap<string, PriorityTaskPool>;
@@ -322,6 +322,11 @@ export class ServiceEnvironment<
 
   public httpServer(): ServiceHTTPServer {
     return this.#httpServer;
+  }
+
+  /** Replace the service listener before generated routes are registered. */
+  public replaceHttpServer(server: ServiceHTTPServer): void {
+    this.#httpServer = server;
   }
 
   public storages(): readonly Storage[] {

@@ -169,7 +169,7 @@ class StreamingResultContext implements ResultContext {
 
 const unaryResultContext: ResultContext = { done: () => undefined };
 
-class GrpcJsDataSink extends OutputDataSink {
+export class GrpcJsDataSink extends OutputDataSink {
   readonly #service: DescService;
   readonly #clients: readonly Client[];
   #nextClient = 0;

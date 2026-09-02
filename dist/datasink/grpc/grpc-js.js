@@ -79,7 +79,7 @@ class StreamingResultContext {
     }
 }
 const unaryResultContext = { done: () => undefined };
-class GrpcJsDataSink extends OutputDataSink {
+export class GrpcJsDataSink extends OutputDataSink {
     #service;
     #clients;
     #nextClient = 0;

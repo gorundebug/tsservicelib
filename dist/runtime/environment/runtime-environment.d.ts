@@ -92,6 +92,8 @@ export declare class ServiceEnvironment<T extends CanonicalConfig = CanonicalCon
     tracing(): Tracing | undefined;
     registerHttpHandler(path: string, handler: HTTPHandler): void;
     httpServer(): ServiceHTTPServer;
+    /** Replace the service listener before generated routes are registered. */
+    replaceHttpServer(server: ServiceHTTPServer): void;
     storages(): readonly Storage[];
     registerRuntimeBuildable(buildable: RuntimeBuildable): void;
     buildables(): readonly RuntimeBuildable[];

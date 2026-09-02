@@ -108,7 +108,7 @@ export interface EndpointHandler<HandlerState, ReqT, ResR, T, R, E> {
   ): Completion;
 }
 
-class GrpcJsDataSource extends InputDataSource {
+export class GrpcJsDataSource extends InputDataSource {
   readonly #services = new Map<DescService, Map<string, UntypedHandleCall>>();
   #server: Server | undefined;
 

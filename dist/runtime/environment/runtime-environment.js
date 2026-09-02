@@ -182,6 +182,10 @@ export class ServiceEnvironment {
     httpServer() {
         return this.#httpServer;
     }
+    /** Replace the service listener before generated routes are registered. */
+    replaceHttpServer(server) {
+        this.#httpServer = server;
+    }
     storages() {
         return [...this.#storages];
     }

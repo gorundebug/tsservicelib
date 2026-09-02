@@ -1,7 +1,7 @@
 import { Server, ServerCredentials } from "@grpc/grpc-js";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, spanError, str, stringAttribute } from "../../runtime/index.js";
-class GrpcJsDataSource extends InputDataSource {
+export class GrpcJsDataSource extends InputDataSource {
     #services = new Map();
     #server;
     constructor(connectorId, environment) {
