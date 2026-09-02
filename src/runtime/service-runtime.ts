@@ -135,12 +135,8 @@ export class ServiceRuntime {
       stopContext
     );
     try {
-      await this.#tasks.drain(stopContext.remainingMs());
-      this.#tasks.stopAdmission();
-    } catch (error: unknown) {
-      this.#tasks.cancel(error);
-      throw error;
-    } finally {
+      // Pools and timers can create ParallelCall tasks while draining. Stop
+      // those graph-work producers before observing the shared task registry.
       await this.stopConcurrent(
         this.#started.filter(
           (item) =>
@@ -151,6 +147,12 @@ export class ServiceRuntime {
         ),
         stopContext
       );
+      await this.#tasks.drain(stopContext.remainingMs());
+      this.#tasks.stopAdmission();
+    } catch (error: unknown) {
+      this.#tasks.cancel(error);
+      throw error;
+    } finally {
       await this.stopConcurrent(
         this.#started.filter((item) => item.category === "dataSink"),
         stopContext

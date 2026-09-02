@@ -86,7 +86,7 @@ await test("service stop closes admission, drains accepted work, then stops sink
   assert.deepEqual(events, ["start:sink", "start:source", "stop:source", "task:done", "stop:sink"]);
 });
 
-await test("admitted source work drains before graph pools stop", async () => {
+await test("graph pools stop before the accepted parallel-work counter drains", async () => {
   const events: string[] = [];
   const tasks = new RuntimeTaskRegistry();
   const runtime = new ServiceRuntime(makeTestEnvironment([]), tasks);
@@ -125,35 +125,41 @@ await test("admitted source work drains before graph pools stop", async () => {
   });
 
   const stopping = runtime.stop(Context.background(), 100);
-  await Promise.resolve();
+  while (!events.includes("stop:pool")) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
   release?.();
   await admitted;
   await stopping;
 
-  assert.ok(events.indexOf("admission:source") < events.indexOf("task:done"));
-  assert.ok(events.indexOf("task:done") < events.indexOf("stop:pool"));
-  assert.ok(events.indexOf("task:done") < events.indexOf("stop:source"));
+  assert.ok(events.indexOf("admission:source") < events.indexOf("stop:source"));
+  assert.ok(events.indexOf("stop:source") < events.indexOf("stop:pool"));
+  assert.ok(events.indexOf("stop:pool") < events.indexOf("task:done"));
 });
 
 await test("ordinary sources drain before managed connector admission stops", async () => {
   const events: string[] = [];
   const runtime = new ServiceRuntime(makeTestEnvironment([]));
   const source: AdmissionLifecycle = {
-    start: async () => undefined,
-    stopAdmission: async () => {
+    start: () => Promise.resolve(),
+    stopAdmission: () => {
       events.push("admission:source");
+      return Promise.resolve();
     },
-    stop: async () => {
+    stop: () => {
       events.push("stop:source");
+      return Promise.resolve();
     }
   };
   const managedConnector: AdmissionLifecycle = {
-    start: async () => undefined,
-    stopAdmission: async () => {
+    start: () => Promise.resolve(),
+    stopAdmission: () => {
       events.push("admission:managed");
+      return Promise.resolve();
     },
-    stop: async () => {
+    stop: () => {
       events.push("stop:managed");
+      return Promise.resolve();
     }
   };
   runtime.register({ category: "dataSource", name: "cron", lifecycle: source });

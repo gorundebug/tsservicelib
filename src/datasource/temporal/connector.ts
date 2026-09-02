@@ -291,7 +291,11 @@ export class TemporalConnector implements ManagedDataConnector {
           );
       }
     }
-    if (shutdownError !== undefined) throw shutdownError;
+    if (shutdownError !== undefined) {
+      throw shutdownError instanceof Error
+        ? shutdownError
+        : new Error("Temporal connector shutdown failed", { cause: shutdownError });
+    }
   }
 
   public async submitEndpoint(
@@ -499,7 +503,11 @@ export class TemporalConnector implements ManagedDataConnector {
 
   private async shutdownWorkers(): Promise<void> {
     const shutdownResults = await Promise.allSettled(
-      this.#workers.map(async (worker) => worker.shutdown())
+      this.#workers.map((worker) =>
+        Promise.resolve().then(() => {
+          worker.shutdown();
+        })
+      )
     );
     const runResults = await Promise.allSettled(this.#workerRuns);
     this.#workers = [];
@@ -507,7 +515,11 @@ export class TemporalConnector implements ManagedDataConnector {
     const failure = [...shutdownResults, ...runResults].find(
       (result): result is PromiseRejectedResult => result.status === "rejected"
     );
-    if (failure !== undefined) throw failure.reason;
+    if (failure !== undefined) {
+      throw failure.reason instanceof Error
+        ? failure.reason
+        : new Error("Temporal worker shutdown failed", { cause: failure.reason });
+    }
   }
 }
 
@@ -708,7 +720,7 @@ function resolveWorkerStopTimeout(configuredMillis: number, serviceShutdownMilli
   const timeout = configuredMillis === 0 ? serviceShutdownMillis : configuredMillis;
   if (timeout > serviceShutdownMillis) {
     throw new Error(
-      `workerStopTimeout ${timeout}ms exceeds service shutdownTimeout ${serviceShutdownMillis}ms`
+      `workerStopTimeout ${String(timeout)}ms exceeds service shutdownTimeout ${String(serviceShutdownMillis)}ms`
     );
   }
   return timeout;

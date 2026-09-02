@@ -110,6 +110,12 @@ export class ServiceRuntime {
         await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSource" && "stopAdmission" in item.lifecycle), stopContext);
         await this.stopAdmission(this.#started.filter((item) => item.category === "managedDataConnector"), stopContext);
         try {
+            // Pools and timers can create ParallelCall tasks while draining. Stop
+            // those graph-work producers before observing the shared task registry.
+            await this.stopConcurrent(this.#started.filter((item) => item.category === "storage" ||
+                item.category === "delayPool" ||
+                item.category === "taskPool" ||
+                item.category === "priorityTaskPool"), stopContext);
             await this.#tasks.drain(stopContext.remainingMs());
             this.#tasks.stopAdmission();
         }
@@ -118,10 +124,6 @@ export class ServiceRuntime {
             throw error;
         }
         finally {
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "storage" ||
-                item.category === "delayPool" ||
-                item.category === "taskPool" ||
-                item.category === "priorityTaskPool"), stopContext);
             await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink"), stopContext);
             await this.stopConcurrent(this.#started.filter((item) => item.category === "managedDataConnector"), stopContext);
             await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), stopContext);

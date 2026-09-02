@@ -196,8 +196,11 @@ export class TemporalConnector {
                     .warn(context, "Temporal connection shutdown failed after Worker failure", str("connector", this.name), err(closeError instanceof Error ? closeError : new Error(String(closeError))));
             }
         }
-        if (shutdownError !== undefined)
-            throw shutdownError;
+        if (shutdownError !== undefined) {
+            throw shutdownError instanceof Error
+                ? shutdownError
+                : new Error("Temporal connector shutdown failed", { cause: shutdownError });
+        }
     }
     async submitEndpoint(context, endpointId, envelope, waitForResult) {
         if (!this.#started)
@@ -375,13 +378,18 @@ export class TemporalConnector {
         return this.#client;
     }
     async shutdownWorkers() {
-        const shutdownResults = await Promise.allSettled(this.#workers.map(async (worker) => worker.shutdown()));
+        const shutdownResults = await Promise.allSettled(this.#workers.map((worker) => Promise.resolve().then(() => {
+            worker.shutdown();
+        })));
         const runResults = await Promise.allSettled(this.#workerRuns);
         this.#workers = [];
         this.#workerRuns = [];
         const failure = [...shutdownResults, ...runResults].find((result) => result.status === "rejected");
-        if (failure !== undefined)
-            throw failure.reason;
+        if (failure !== undefined) {
+            throw failure.reason instanceof Error
+                ? failure.reason
+                : new Error("Temporal worker shutdown failed", { cause: failure.reason });
+        }
     }
 }
 export function makeTemporalConnector(connectorId, environment, options = {}) {
@@ -514,7 +522,7 @@ function resolveWorkerStopTimeout(configuredMillis, serviceShutdownMillis) {
     }
     const timeout = configuredMillis === 0 ? serviceShutdownMillis : configuredMillis;
     if (timeout > serviceShutdownMillis) {
-        throw new Error(`workerStopTimeout ${timeout}ms exceeds service shutdownTimeout ${serviceShutdownMillis}ms`);
+        throw new Error(`workerStopTimeout ${String(timeout)}ms exceeds service shutdownTimeout ${String(serviceShutdownMillis)}ms`);
     }
     return timeout;
 }
