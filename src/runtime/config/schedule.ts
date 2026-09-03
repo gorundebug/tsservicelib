@@ -56,10 +56,6 @@ export function isTemporalDataConnectorConfig(
     typeof value.tlsCertFile === "string" &&
     "tlsKeyFile" in value &&
     typeof value.tlsKeyFile === "string" &&
-    "maxConcurrentActivities" in value &&
-    isPositiveInteger(value.maxConcurrentActivities) &&
-    "maxConcurrentWorkflows" in value &&
-    isPositiveInteger(value.maxConcurrentWorkflows) &&
     "workerStopTimeout" in value &&
     isNonNegativeInteger(value.workerStopTimeout)
   );
@@ -109,6 +105,12 @@ export function isTemporalEndpointConfig(
     value.taskQueue.length > 0 &&
     "temporalExecutionType" in value &&
     (value.temporalExecutionType === "Activity" || value.temporalExecutionType === "Workflow") &&
+    "maxConcurrentActivities" in value &&
+    isNonNegativeInteger(value.maxConcurrentActivities) &&
+    (value.temporalExecutionType !== "Activity" || value.maxConcurrentActivities > 0) &&
+    "maxConcurrentWorkflowTasks" in value &&
+    isNonNegativeInteger(value.maxConcurrentWorkflowTasks) &&
+    (value.temporalExecutionType !== "Workflow" || value.maxConcurrentWorkflowTasks > 0) &&
     "scheduleId" in value &&
     typeof value.scheduleId === "string" &&
     "workflowExecutionTimeout" in value &&

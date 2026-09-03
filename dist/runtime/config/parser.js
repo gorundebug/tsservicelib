@@ -371,8 +371,6 @@ const connectorKeys = new Set([
     "tlsCaFile",
     "tlsCertFile",
     "tlsKeyFile",
-    "maxConcurrentActivities",
-    "maxConcurrentWorkflows",
     "workerStopTimeout"
 ]);
 function parseConnector(source, path) {
@@ -444,8 +442,6 @@ function parseConnector(source, path) {
                 tlsCaFile: optionalString(source.tlsCaFile, `${path}.tlsCaFile`) ?? "",
                 tlsCertFile: optionalString(source.tlsCertFile, `${path}.tlsCertFile`) ?? "",
                 tlsKeyFile: optionalString(source.tlsKeyFile, `${path}.tlsKeyFile`) ?? "",
-                maxConcurrentActivities: optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
-                maxConcurrentWorkflows: optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0,
                 workerStopTimeout: optionalInteger(source["workerStopTimeout"], `${path}.workerStopTimeout`) ?? 0
             };
         default:
@@ -473,6 +469,8 @@ const endpointKeys = new Set([
     "missedRunPolicy",
     "taskQueue",
     "temporalExecutionType",
+    "maxConcurrentActivities",
+    "maxConcurrentWorkflowTasks",
     "workflowExecutionTimeout",
     "activityStartToCloseTimeout",
     "activityHeartbeatTimeout",
@@ -539,6 +537,8 @@ function parseEndpoint(source, path) {
             enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false,
             taskQueue: optionalString(source.taskQueue, `${path}.taskQueue`) ?? "",
             temporalExecutionType: requiredEnum(source.temporalExecutionType, `${path}.temporalExecutionType`, ["Activity", "Workflow"]),
+            maxConcurrentActivities: optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
+            maxConcurrentWorkflowTasks: optionalInteger(source.maxConcurrentWorkflowTasks, `${path}.maxConcurrentWorkflowTasks`) ?? 0,
             schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
             scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
             timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",

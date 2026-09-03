@@ -89,8 +89,6 @@ interface RecordValue extends Record<string, unknown> {
   readonly tlsCaFile?: unknown;
   readonly tlsCertFile?: unknown;
   readonly tlsKeyFile?: unknown;
-  readonly maxConcurrentActivities?: unknown;
-  readonly maxConcurrentWorkflows?: unknown;
   readonly idDataConnector?: unknown;
   readonly enabled?: unknown;
   readonly httpMethodType?: unknown;
@@ -109,6 +107,8 @@ interface RecordValue extends Record<string, unknown> {
   readonly missedRunPolicy?: unknown;
   readonly taskQueue?: unknown;
   readonly temporalExecutionType?: unknown;
+  readonly maxConcurrentActivities?: unknown;
+  readonly maxConcurrentWorkflowTasks?: unknown;
   readonly workflowExecutionTimeout?: unknown;
   readonly activityStartToCloseTimeout?: unknown;
   readonly activityHeartbeatTimeout?: unknown;
@@ -550,8 +550,6 @@ const connectorKeys = new Set([
   "tlsCaFile",
   "tlsCertFile",
   "tlsKeyFile",
-  "maxConcurrentActivities",
-  "maxConcurrentWorkflows",
   "workerStopTimeout"
 ]);
 
@@ -634,10 +632,6 @@ function parseConnector(source: RecordValue, path: string): AnyDataConnectorConf
         tlsCaFile: optionalString(source.tlsCaFile, `${path}.tlsCaFile`) ?? "",
         tlsCertFile: optionalString(source.tlsCertFile, `${path}.tlsCertFile`) ?? "",
         tlsKeyFile: optionalString(source.tlsKeyFile, `${path}.tlsKeyFile`) ?? "",
-        maxConcurrentActivities:
-          optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
-        maxConcurrentWorkflows:
-          optionalInteger(source.maxConcurrentWorkflows, `${path}.maxConcurrentWorkflows`) ?? 0,
         workerStopTimeout:
           optionalInteger(source["workerStopTimeout"], `${path}.workerStopTimeout`) ?? 0
       };
@@ -667,6 +661,8 @@ const endpointKeys = new Set([
   "missedRunPolicy",
   "taskQueue",
   "temporalExecutionType",
+  "maxConcurrentActivities",
+  "maxConcurrentWorkflowTasks",
   "workflowExecutionTimeout",
   "activityStartToCloseTimeout",
   "activityHeartbeatTimeout",
@@ -744,6 +740,10 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
         `${path}.temporalExecutionType`,
         ["Activity", "Workflow"] as const
       ),
+      maxConcurrentActivities:
+        optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
+      maxConcurrentWorkflowTasks:
+        optionalInteger(source.maxConcurrentWorkflowTasks, `${path}.maxConcurrentWorkflowTasks`) ?? 0,
       schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
       scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
       timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",

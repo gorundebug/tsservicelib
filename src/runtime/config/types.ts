@@ -294,8 +294,6 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
   readonly tlsCaFile: string;
   readonly tlsCertFile: string;
   readonly tlsKeyFile: string;
-  readonly maxConcurrentActivities: number;
-  readonly maxConcurrentWorkflows: number;
   readonly workerStopTimeout: number;
 }
 
@@ -358,6 +356,8 @@ export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
   readonly enabled: boolean;
   readonly taskQueue: string;
   readonly temporalExecutionType: TemporalExecutionType;
+  readonly maxConcurrentActivities: number;
+  readonly maxConcurrentWorkflowTasks: number;
   readonly schedule: string;
   readonly scheduleId: string;
   readonly timezone: string;
@@ -649,8 +649,6 @@ export interface TemporalDataConnectorConfigDocument extends DataConnectorConfig
   readonly tlsCaFile?: string | undefined;
   readonly tlsCertFile?: string | undefined;
   readonly tlsKeyFile?: string | undefined;
-  readonly maxConcurrentActivities?: number | undefined;
-  readonly maxConcurrentWorkflows?: number | undefined;
   readonly workerStopTimeout?: number | undefined;
 }
 
@@ -694,6 +692,8 @@ export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocume
   readonly activityStartToCloseTimeout?: number | undefined;
   readonly activityHeartbeatTimeout?: number | undefined;
   readonly maximumAttempts?: number | undefined;
+  readonly maxConcurrentActivities?: number | undefined;
+  readonly maxConcurrentWorkflowTasks?: number | undefined;
 }
 
 export type CustomEndpointConfigDocument = EndpointConfigDocumentBase;

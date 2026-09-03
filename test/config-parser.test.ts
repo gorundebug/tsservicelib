@@ -8,7 +8,8 @@ import {
   requireHttpEndpointConfig,
   requireInputStreamConfig,
   requireMapStreamConfig,
-  requireTemporalDataConnectorConfig
+  requireTemporalDataConnectorConfig,
+  requireTemporalEndpointConfig
 } from "@gorundebug/tsservicelib/runtime/config";
 
 function canonicalDocument(
@@ -196,8 +197,6 @@ await test("Cron and Temporal endpoint documents normalize without losing policy
       implementation: "temporal/typescript",
       address: "temporal:7233",
       namespace: "default",
-      maxConcurrentActivities: 8,
-      maxConcurrentWorkflows: 4,
       workerStopTimeout: 5_000
     }
   };
@@ -215,7 +214,8 @@ await test("Cron and Temporal endpoint documents normalize without losing policy
       overlapPolicy: "Skip",
       missedRunPolicy: "FireOnce",
       activityStartToCloseTimeout: 30_000,
-      maximumAttempts: 3
+      maximumAttempts: 3,
+      maxConcurrentActivities: 8
     }
   };
   document["links"] = {
@@ -233,12 +233,14 @@ await test("Cron and Temporal endpoint documents normalize without losing policy
   assert.ok(connector && endpoint && link);
   assert.equal(connector.type, 6);
   const temporalConnector = requireTemporalDataConnectorConfig(connector);
+  const temporalEndpoint = requireTemporalEndpointConfig(endpoint);
   assert.equal(temporalConnector.namespace, "default");
   assert.equal(temporalConnector.workerStopTimeout, 5_000);
   assert("taskQueue" in endpoint);
   assert.equal(endpoint.taskQueue, "automation");
   assert("temporalExecutionType" in endpoint);
   assert.equal(endpoint.temporalExecutionType, "Activity");
+  assert.equal(temporalEndpoint.maxConcurrentActivities, 8);
   assert("overlapPolicy" in endpoint);
   assert.equal(endpoint.overlapPolicy, "Skip");
   assert.deepEqual(link.callSemantics, { functionCall: { async: false } });

@@ -30,6 +30,7 @@ export declare class TemporalConnector implements ManagedDataConnector {
     stop(context: Context): Promise<void>;
     submitEndpoint(context: MessageContext, endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean): Promise<EndpointResult>;
     private queueActivities;
+    private queuePolicy;
     private activityDiagnostics;
     private ensureSchedule;
     private endpointRegistration;

@@ -154,6 +154,7 @@ export class TemporalConnector {
         const workerStopTimeout = resolveWorkerStopTimeout(config.workerStopTimeout, this.#environment.serviceConfig().shutdownTimeout);
         try {
             for (const [taskQueue, activities] of this.queueActivities()) {
+                const policy = this.queuePolicy(taskQueue);
                 const worker = await Worker.create({
                     connection: this.#connection,
                     namespace: config.namespace,
@@ -166,11 +167,11 @@ export class TemporalConnector {
                     },
                     ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
                     ...(config.identity === "" ? {} : { identity: config.identity }),
-                    ...(config.maxConcurrentActivities > 0
-                        ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
+                    ...(policy.maxConcurrentActivities > 0
+                        ? { maxConcurrentActivityTaskExecutions: policy.maxConcurrentActivities }
                         : {}),
-                    ...(config.maxConcurrentWorkflows > 0
-                        ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
+                    ...(policy.maxConcurrentWorkflowTasks > 0
+                        ? { maxConcurrentWorkflowTaskExecutions: policy.maxConcurrentWorkflowTasks }
                         : {}),
                     shutdownGraceTime: workerStopTimeout
                 });
@@ -285,6 +286,30 @@ export class TemporalConnector {
             };
         }
         return queues;
+    }
+    queuePolicy(taskQueue) {
+        let maxConcurrentActivities = 0;
+        let maxConcurrentWorkflowTasks = 0;
+        for (const registration of this.#endpoints.values()) {
+            const config = this.endpointConfig(registration.endpointId);
+            if (!config.enabled || config.taskQueue !== taskQueue || registration.handler === undefined)
+                continue;
+            if (config.temporalExecutionType === "Activity") {
+                if (maxConcurrentActivities !== 0 &&
+                    maxConcurrentActivities !== config.maxConcurrentActivities) {
+                    throw new Error(`Temporal Task Queue ${taskQueue} has conflicting maxConcurrentActivities`);
+                }
+                maxConcurrentActivities = config.maxConcurrentActivities;
+            }
+            else {
+                if (maxConcurrentWorkflowTasks !== 0 &&
+                    maxConcurrentWorkflowTasks !== config.maxConcurrentWorkflowTasks) {
+                    throw new Error(`Temporal Task Queue ${taskQueue} has conflicting maxConcurrentWorkflowTasks`);
+                }
+                maxConcurrentWorkflowTasks = config.maxConcurrentWorkflowTasks;
+            }
+        }
+        return { maxConcurrentActivities, maxConcurrentWorkflowTasks };
     }
     activityDiagnostics(boundary, target, context) {
         return (event, failure) => {
