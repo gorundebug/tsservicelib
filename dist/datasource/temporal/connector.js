@@ -44,6 +44,7 @@ export class TemporalConnector {
     #workers = [];
     #workerRuns = [];
     #started = false;
+    #admissionStarted = false;
     #workflowsPath;
     id;
     name;
@@ -89,7 +90,7 @@ export class TemporalConnector {
             return;
         context.signal().throwIfAborted();
         const config = this.config();
-        const workerStopTimeout = resolveWorkerStopTimeout(config.workerStopTimeout, this.#environment.serviceConfig().shutdownTimeout);
+        resolveWorkerStopTimeout(config.workerStopTimeout, this.#environment.serviceConfig().shutdownTimeout);
         installSdkMetricsRuntime();
         const tls = await tlsOptions(config);
         const connection = await abortable(NativeConnection.connect({
@@ -113,31 +114,6 @@ export class TemporalConnector {
             ...(config.identity === "" ? {} : { identity: config.identity })
         });
         try {
-            for (const [taskQueue, activities] of this.queueActivities()) {
-                const worker = await Worker.create({
-                    connection,
-                    namespace: config.namespace,
-                    taskQueue,
-                    activities,
-                    workflowsPath: this.#workflowsPath,
-                    interceptors: {
-                        activity: [temporalActivityInterceptors],
-                        workflowModules: temporalWorkflowInterceptorModules()
-                    },
-                    ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
-                    ...(config.identity === "" ? {} : { identity: config.identity }),
-                    ...(config.maxConcurrentActivities > 0
-                        ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
-                        : {}),
-                    ...(config.maxConcurrentWorkflows > 0
-                        ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
-                        : {}),
-                    shutdownGraceTime: workerStopTimeout
-                });
-                this.#workers.push(worker);
-                this.#workerRuns.push(worker.run());
-            }
-            await ensureWorkersRunning(this.#workerRuns);
             this.#started = true;
             for (const endpointId of this.#endpoints.keys()) {
                 const endpoint = this.endpointConfig(endpointId);
@@ -167,9 +143,52 @@ export class TemporalConnector {
             throw error;
         }
     }
+    async startAdmission(context) {
+        if (!this.#started || this.#connection === undefined) {
+            throw new Error(`Temporal connector ${this.name} is not started`);
+        }
+        if (this.#admissionStarted)
+            return;
+        context.signal().throwIfAborted();
+        const config = this.config();
+        const workerStopTimeout = resolveWorkerStopTimeout(config.workerStopTimeout, this.#environment.serviceConfig().shutdownTimeout);
+        try {
+            for (const [taskQueue, activities] of this.queueActivities()) {
+                const worker = await Worker.create({
+                    connection: this.#connection,
+                    namespace: config.namespace,
+                    taskQueue,
+                    activities,
+                    workflowsPath: this.#workflowsPath,
+                    interceptors: {
+                        activity: [temporalActivityInterceptors],
+                        workflowModules: temporalWorkflowInterceptorModules()
+                    },
+                    ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
+                    ...(config.identity === "" ? {} : { identity: config.identity }),
+                    ...(config.maxConcurrentActivities > 0
+                        ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
+                        : {}),
+                    ...(config.maxConcurrentWorkflows > 0
+                        ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
+                        : {}),
+                    shutdownGraceTime: workerStopTimeout
+                });
+                this.#workers.push(worker);
+                this.#workerRuns.push(worker.run());
+            }
+            await ensureWorkersRunning(this.#workerRuns);
+            this.#admissionStarted = true;
+        }
+        catch (error) {
+            await this.shutdownWorkers();
+            throw error;
+        }
+    }
     async stopAdmission(context) {
         void context;
         await this.shutdownWorkers();
+        this.#admissionStarted = false;
     }
     async stop(context) {
         let shutdownError;
@@ -181,6 +200,7 @@ export class TemporalConnector {
         }
         const connection = this.#connection;
         this.#started = false;
+        this.#admissionStarted = false;
         this.#client = undefined;
         this.#connection = undefined;
         try {

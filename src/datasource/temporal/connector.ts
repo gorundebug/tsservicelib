@@ -115,6 +115,7 @@ export class TemporalConnector implements ManagedDataConnector {
   #workers: Worker[] = [];
   #workerRuns: Promise<void>[] = [];
   #started = false;
+  #admissionStarted = false;
   readonly #workflowsPath: string;
   public readonly id: number;
   public readonly name: string;
@@ -169,7 +170,7 @@ export class TemporalConnector implements ManagedDataConnector {
     if (this.#started) return;
     context.signal().throwIfAborted();
     const config = this.config();
-    const workerStopTimeout = resolveWorkerStopTimeout(
+    resolveWorkerStopTimeout(
       config.workerStopTimeout,
       this.#environment.serviceConfig().shutdownTimeout
     );
@@ -199,31 +200,6 @@ export class TemporalConnector implements ManagedDataConnector {
       ...(config.identity === "" ? {} : { identity: config.identity })
     });
     try {
-      for (const [taskQueue, activities] of this.queueActivities()) {
-        const worker = await Worker.create({
-          connection,
-          namespace: config.namespace,
-          taskQueue,
-          activities,
-          workflowsPath: this.#workflowsPath,
-          interceptors: {
-            activity: [temporalActivityInterceptors],
-            workflowModules: temporalWorkflowInterceptorModules()
-          },
-          ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
-          ...(config.identity === "" ? {} : { identity: config.identity }),
-          ...(config.maxConcurrentActivities > 0
-            ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
-            : {}),
-          ...(config.maxConcurrentWorkflows > 0
-            ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
-            : {}),
-          shutdownGraceTime: workerStopTimeout
-        });
-        this.#workers.push(worker);
-        this.#workerRuns.push(worker.run());
-      }
-      await ensureWorkersRunning(this.#workerRuns);
       this.#started = true;
       for (const endpointId of this.#endpoints.keys()) {
         const endpoint = this.endpointConfig(endpointId);
@@ -260,9 +236,54 @@ export class TemporalConnector implements ManagedDataConnector {
     }
   }
 
+  public async startAdmission(context: Context): Promise<void> {
+    if (!this.#started || this.#connection === undefined) {
+      throw new Error(`Temporal connector ${this.name} is not started`);
+    }
+    if (this.#admissionStarted) return;
+    context.signal().throwIfAborted();
+    const config = this.config();
+    const workerStopTimeout = resolveWorkerStopTimeout(
+      config.workerStopTimeout,
+      this.#environment.serviceConfig().shutdownTimeout
+    );
+    try {
+      for (const [taskQueue, activities] of this.queueActivities()) {
+        const worker = await Worker.create({
+          connection: this.#connection,
+          namespace: config.namespace,
+          taskQueue,
+          activities,
+          workflowsPath: this.#workflowsPath,
+          interceptors: {
+            activity: [temporalActivityInterceptors],
+            workflowModules: temporalWorkflowInterceptorModules()
+          },
+          ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
+          ...(config.identity === "" ? {} : { identity: config.identity }),
+          ...(config.maxConcurrentActivities > 0
+            ? { maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities }
+            : {}),
+          ...(config.maxConcurrentWorkflows > 0
+            ? { maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows }
+            : {}),
+          shutdownGraceTime: workerStopTimeout
+        });
+        this.#workers.push(worker);
+        this.#workerRuns.push(worker.run());
+      }
+      await ensureWorkersRunning(this.#workerRuns);
+      this.#admissionStarted = true;
+    } catch (error: unknown) {
+      await this.shutdownWorkers();
+      throw error;
+    }
+  }
+
   public async stopAdmission(context: Context): Promise<void> {
     void context;
     await this.shutdownWorkers();
+    this.#admissionStarted = false;
   }
 
   public async stop(context: Context): Promise<void> {
@@ -274,6 +295,7 @@ export class TemporalConnector implements ManagedDataConnector {
     }
     const connection = this.#connection;
     this.#started = false;
+    this.#admissionStarted = false;
     this.#client = undefined;
     this.#connection = undefined;
     try {

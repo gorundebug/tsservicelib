@@ -1,4 +1,5 @@
 import { Context } from "./context.js";
+import type { ManagedDataConnector } from "./data-connector.js";
 import type { RuntimeEnvironment } from "./environment/index.js";
 import { err, str } from "./environment/index.js";
 import { RuntimeStoppedError } from "./errors.js";
@@ -77,6 +78,14 @@ export class ServiceRuntime {
       context.signal().throwIfAborted();
       this.#environment.validateRuntimeTopology();
       for (const category of START_ORDER) {
+        if (category === "dataSource") {
+          for (const component of this.#started.filter(
+            (item) => item.category === "managedDataConnector"
+          )) {
+            await (component.lifecycle as ManagedDataConnector).startAdmission(context);
+            context.signal().throwIfAborted();
+          }
+        }
         for (const component of this.#components.filter((item) => item.category === category)) {
           context.signal().throwIfAborted();
           await component.lifecycle.start(context);

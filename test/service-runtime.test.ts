@@ -141,7 +141,10 @@ await test("ordinary sources drain before managed connector admission stops", as
   const events: string[] = [];
   const runtime = new ServiceRuntime(makeTestEnvironment([]));
   const source: AdmissionLifecycle = {
-    start: () => Promise.resolve(),
+    start: () => {
+      events.push("start:source");
+      return Promise.resolve();
+    },
     stopAdmission: () => {
       events.push("admission:source");
       return Promise.resolve();
@@ -151,8 +154,17 @@ await test("ordinary sources drain before managed connector admission stops", as
       return Promise.resolve();
     }
   };
-  const managedConnector: AdmissionLifecycle = {
-    start: () => Promise.resolve(),
+  const managedConnector: AdmissionLifecycle & {
+    startAdmission(context: Context): Promise<void>;
+  } = {
+    start: () => {
+      events.push("start:managed");
+      return Promise.resolve();
+    },
+    startAdmission: () => {
+      events.push("start-admission:managed");
+      return Promise.resolve();
+    },
     stopAdmission: () => {
       events.push("admission:managed");
       return Promise.resolve();
@@ -162,6 +174,10 @@ await test("ordinary sources drain before managed connector admission stops", as
       return Promise.resolve();
     }
   };
+  const sink = lifecycle("sink", events);
+  const pool = lifecycle("pool", events);
+  runtime.register({ category: "delayPool", name: "delay", lifecycle: pool });
+  runtime.register({ category: "dataSink", name: "sink", lifecycle: sink });
   runtime.register({ category: "dataSource", name: "cron", lifecycle: source });
   runtime.register({
     category: "managedDataConnector",
@@ -173,9 +189,16 @@ await test("ordinary sources drain before managed connector admission stops", as
   await runtime.stop();
 
   assert.deepEqual(events, [
+    "start:managed",
+    "start:pool",
+    "start:sink",
+    "start-admission:managed",
+    "start:source",
     "admission:source",
     "stop:source",
     "admission:managed",
+    "stop:pool",
+    "stop:sink",
     "stop:managed"
   ]);
 });

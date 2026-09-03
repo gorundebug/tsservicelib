@@ -25,6 +25,7 @@ export declare class TemporalConnector implements ManagedDataConnector {
     assertOptions(options: TemporalConnectorOptions): void;
     registerEndpointSubmission(endpointId: number): void;
     start(context: Context): Promise<void>;
+    startAdmission(context: Context): Promise<void>;
     stopAdmission(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
     submitEndpoint(context: MessageContext, endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean): Promise<EndpointResult>;
