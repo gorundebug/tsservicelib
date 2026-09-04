@@ -1,8 +1,15 @@
-import { KafkaJS } from "@confluentinc/kafka-javascript";
+import { createRequire } from "node:module";
 import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, RotatingMap, RuntimeTaskRegistry, TRACE_SAMPLING_HEADER, boolAttribute, err, errorFromUnknown, makeStreamContext, newStreamId, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 const RECONNECT_DELAY_MS = 100;
+const require = createRequire(import.meta.url);
+let confluentKafka;
+function kafkaJS() {
+    confluentKafka ??=
+        require("@confluentinc/kafka-javascript");
+    return confluentKafka.KafkaJS;
+}
 export class ConsumerMessage {
     key;
     value;
@@ -655,7 +662,7 @@ async function waitForResult(result, signal) {
 }
 function makeKafka(brokers, connectionTimeoutMs, metrics, security) {
     const statistics = metrics === undefined ? undefined : librdkafkaStatisticsOptions(metrics, "consumer");
-    return new KafkaJS.Kafka({
+    return new (kafkaJS().Kafka)({
         ...statistics,
         kafkaJS: {
             brokers: [...brokers],

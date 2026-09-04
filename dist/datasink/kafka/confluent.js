@@ -1,6 +1,13 @@
-import { KafkaJS } from "@confluentinc/kafka-javascript";
+import { createRequire } from "node:module";
 import { DataSinkEndpoint, DataSinkEndpointConsumer, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
+const require = createRequire(import.meta.url);
+let confluentKafka;
+function kafkaJS() {
+    confluentKafka ??=
+        require("@confluentinc/kafka-javascript");
+    return confluentKafka.KafkaJS;
+}
 export class ConfluentKafkaClientFactory {
     #metrics;
     constructor(metrics) {
@@ -452,7 +459,7 @@ function splitBrokers(value, connectorName) {
 }
 function makeKafka(brokers, connectionTimeoutMs, metrics, security) {
     const statistics = metrics === undefined ? undefined : librdkafkaStatisticsOptions(metrics, "producer");
-    return new KafkaJS.Kafka({
+    return new (kafkaJS().Kafka)({
         ...statistics,
         kafkaJS: {
             brokers: [...brokers],

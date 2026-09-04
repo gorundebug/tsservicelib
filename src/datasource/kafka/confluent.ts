@@ -1,4 +1,6 @@
-import { KafkaJS } from "@confluentinc/kafka-javascript";
+import { createRequire } from "node:module";
+
+import type { KafkaJS } from "@confluentinc/kafka-javascript";
 
 import {
   applyDataSourceEndpointTracing,
@@ -35,6 +37,14 @@ import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-
 
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 const RECONNECT_DELAY_MS = 100;
+const require = createRequire(import.meta.url);
+let confluentKafka: typeof import("@confluentinc/kafka-javascript") | undefined;
+
+function kafkaJS(): typeof KafkaJS {
+  confluentKafka ??=
+    require("@confluentinc/kafka-javascript") as typeof import("@confluentinc/kafka-javascript");
+  return confluentKafka.KafkaJS;
+}
 
 export interface KafkaRecord {
   readonly topic: string;
@@ -892,7 +902,7 @@ function makeKafka(
 ): KafkaJS.Kafka {
   const statistics =
     metrics === undefined ? undefined : librdkafkaStatisticsOptions(metrics, "consumer");
-  return new KafkaJS.Kafka({
+  return new (kafkaJS().Kafka)({
     ...statistics,
     kafkaJS: {
       brokers: [...brokers],
