@@ -235,15 +235,17 @@ function validateRuntimePools(config, pools) {
             throw new Error(`pool config ${name} not found`);
     }
 }
+export function environmentFlagEnabled(name, environment = process.env) {
+    const value = environment[name]?.trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 export function makeServiceMetricsEngine(environment = process.env) {
-    const disabled = environment["SERVICELIB_NOOP_METRICS"]?.trim().toLowerCase();
-    return disabled === "1" || disabled === "true" || disabled === "yes" || disabled === "on"
+    return environmentFlagEnabled("SERVICELIB_NOOP_METRICS", environment)
         ? new NoopMetricsEngine()
         : new PrometheusMetricsEngine();
 }
 export function makeServiceLogsEngine(environment = process.env) {
-    const disabled = environment["SERVICELIB_NOOP_LOGS"]?.trim().toLowerCase();
-    return disabled === "1" || disabled === "true" || disabled === "yes" || disabled === "on"
+    return environmentFlagEnabled("SERVICELIB_NOOP_LOGS", environment)
         ? new NoopLogsEngine()
         : new JsonLogsEngine();
 }

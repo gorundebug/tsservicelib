@@ -65,6 +65,10 @@ await test("standard benchmark flag selects renderable no-op metrics", async () 
   assert.equal(engine.metrics().enabled(), false);
   assert.match(await engine.render(), /metrics are disabled/u);
   assert.match(engine.contentType(), /^text\/plain/u);
+  assert.ok(
+    makeServiceMetricsEngine({ SERVICELIB_NOOP_METRICS: "0" }) instanceof
+      PrometheusMetricsEngine
+  );
 });
 
 await test("Prometheus metrics reject incompatible family declarations", () => {

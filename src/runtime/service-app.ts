@@ -334,18 +334,24 @@ export type ServiceMetricsEngine = (PrometheusMetricsEngine | NoopMetricsEngine)
   render(): Promise<string>;
 };
 
+export function environmentFlagEnabled(
+  name: string,
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  const value = environment[name]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
 export function makeServiceMetricsEngine(
   environment: NodeJS.ProcessEnv = process.env
 ): ServiceMetricsEngine {
-  const disabled = environment["SERVICELIB_NOOP_METRICS"]?.trim().toLowerCase();
-  return disabled === "1" || disabled === "true" || disabled === "yes" || disabled === "on"
+  return environmentFlagEnabled("SERVICELIB_NOOP_METRICS", environment)
     ? new NoopMetricsEngine()
     : new PrometheusMetricsEngine();
 }
 
 export function makeServiceLogsEngine(environment: NodeJS.ProcessEnv = process.env): LogsEngine {
-  const disabled = environment["SERVICELIB_NOOP_LOGS"]?.trim().toLowerCase();
-  return disabled === "1" || disabled === "true" || disabled === "yes" || disabled === "on"
+  return environmentFlagEnabled("SERVICELIB_NOOP_LOGS", environment)
     ? new NoopLogsEngine()
     : new JsonLogsEngine();
 }

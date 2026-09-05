@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   bool,
   Context,
+  environmentFlagEnabled,
   err,
   float64,
   int64,
@@ -26,6 +27,16 @@ class RecordingSink implements JsonLogSink {
     this.records.push(record);
   }
 }
+
+await test("environment flags use strict boolean values", () => {
+  for (const value of ["1", "true", "TRUE", " yes ", "On"]) {
+    assert.equal(environmentFlagEnabled("FLAG", { FLAG: value }), true);
+  }
+  for (const value of ["", "0", "false", "no", "off", "anything"]) {
+    assert.equal(environmentFlagEnabled("FLAG", { FLAG: value }), false);
+  }
+  assert.equal(environmentFlagEnabled("FLAG", {}), false);
+});
 
 await test("structured logging preserves the canonical levels and typed fields", () => {
   const engine = new TestLog();
@@ -103,4 +114,8 @@ await test("standard benchmark flag selects the no-op logs engine", () => {
     true
   );
   assert.equal(makeServiceLogsEngine({}) instanceof JsonLogsEngine, true);
+  assert.equal(
+    makeServiceLogsEngine({ SERVICELIB_NOOP_LOGS: "0" }) instanceof JsonLogsEngine,
+    true
+  );
 });

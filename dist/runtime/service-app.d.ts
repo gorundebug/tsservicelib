@@ -33,6 +33,7 @@ export type ServiceMetricsEngine = (PrometheusMetricsEngine | NoopMetricsEngine)
     contentType(): string;
     render(): Promise<string>;
 };
+export declare function environmentFlagEnabled(name: string, environment?: NodeJS.ProcessEnv): boolean;
 export declare function makeServiceMetricsEngine(environment?: NodeJS.ProcessEnv): ServiceMetricsEngine;
 export declare function makeServiceLogsEngine(environment?: NodeJS.ProcessEnv): LogsEngine;
 //# sourceMappingURL=service-app.d.ts.map
