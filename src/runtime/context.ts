@@ -196,6 +196,12 @@ export class MessageContext extends Context {
     };
   }
 
+  public static fromContext(context: Context): MessageContext {
+    return new MessageContext(context.signal())
+      .withDeadline(context.deadline())
+      .withSampling(context.samplingEnabled());
+  }
+
   private static fromMessageState(state: MessageContextState): MessageContext {
     const context = new MessageContext(state.signal);
     context.#messageState = state;
