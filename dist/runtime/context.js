@@ -14,20 +14,29 @@ function contextNow() {
     }
     return Date.now();
 }
-function deadlineSignal(deadline) {
-    if (deadline === undefined) {
-        return undefined;
-    }
+function composeSignal(signal, deadline) {
+    if (deadline === undefined)
+        return signal;
     const controller = new AbortController();
+    const abortFromParent = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abortFromParent);
+        if (!controller.signal.aborted)
+            controller.abort(signal.reason);
+    };
     const timer = setTimeout(() => {
-        controller.abort(new Error("context deadline exceeded"));
+        signal.removeEventListener("abort", abortFromParent);
+        if (!controller.signal.aborted) {
+            controller.abort(new Error("context deadline exceeded"));
+        }
     }, Math.max(0, Math.ceil(deadline - contextNow())));
     timer.unref?.();
+    signal.addEventListener("abort", abortFromParent, { once: true });
+    // Cover an already-aborted parent and the generic EventTarget race between
+    // inspecting a signal and subscribing to it.
+    if (signal.aborted)
+        abortFromParent();
     return controller.signal;
-}
-function composeSignal(signal, deadline) {
-    const timeoutSignal = deadlineSignal(deadline);
-    return timeoutSignal === undefined ? signal : combineAbortSignals([signal, timeoutSignal]);
 }
 /** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
 export function combineAbortSignals(signals) {

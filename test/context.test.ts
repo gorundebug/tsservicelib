@@ -44,6 +44,31 @@ await test("bounded context keeps the earlier deadline and observes later cancel
   assert.equal(bounded.cancelled(), true);
 });
 
+await test("parent cancellation releases a pending deadline timer", () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const timer = { unref(): void {} } as unknown as ReturnType<typeof setTimeout>;
+  let cleared = false;
+  globalThis.setTimeout = (() => timer) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (candidate: Parameters<typeof clearTimeout>[0]): void => {
+    if (candidate === timer) cleared = true;
+  };
+
+  try {
+    const parent = new AbortController();
+    const context = new MessageContext(parent.signal).bounded(60_000);
+    assert.equal(context.cancelled(), false);
+
+    parent.abort(new Error("request completed"));
+
+    assert.equal(context.cancelled(), true);
+    assert.equal(cleared, true);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 await test("child contexts report the same earliest deadline that controls cancellation", () => {
   const parent = new MessageContext().bounded(100);
   const parentDeadline = parent.deadline();
