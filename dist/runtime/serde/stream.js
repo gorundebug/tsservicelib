@@ -34,9 +34,11 @@ class ValueStreamSerde {
 export class StreamKeyValueSerde {
     keySerde;
     valueSerde;
-    constructor(keySerde, valueSerde) {
+    streamTypeName;
+    constructor(keySerde, valueSerde, streamTypeName = "") {
         this.keySerde = keySerde;
         this.valueSerde = valueSerde;
+        this.streamTypeName = streamTypeName;
     }
     serialize(value, prefix) {
         const key = this.keySerde.serialize(value.key);
@@ -58,7 +60,7 @@ export class StreamKeyValueSerde {
         return this.keySerde.isStub() || this.valueSerde.isStub();
     }
     typeName() {
-        return "";
+        return this.streamTypeName;
     }
     isKeyValue() {
         return true;
@@ -83,6 +85,6 @@ export function makeStreamSerde(serde) {
     return new ValueStreamSerde(serde);
 }
 export function makeStreamKeyValueSerde(keySerde, valueSerde) {
-    return new StreamKeyValueSerde(keySerde, valueSerde);
+    return new StreamKeyValueSerde(keySerde, valueSerde, `KeyValue[${keySerde.typeName()},${valueSerde.typeName()}]`);
 }
 //# sourceMappingURL=stream.js.map

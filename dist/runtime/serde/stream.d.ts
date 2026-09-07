@@ -3,7 +3,8 @@ import { type Serde, type StreamSerde } from "./serde.js";
 export declare class StreamKeyValueSerde<K, V> implements StreamSerde<KeyValue<K, V>> {
     private readonly keySerde;
     private readonly valueSerde;
-    constructor(keySerde: Serde<K>, valueSerde: Serde<V>);
+    private readonly streamTypeName;
+    constructor(keySerde: Serde<K>, valueSerde: Serde<V>, streamTypeName?: string);
     serialize(value: KeyValue<K, V>, prefix?: Uint8Array): Uint8Array;
     deserialize(data: Uint8Array): KeyValue<K, V>;
     isStub(): boolean;
@@ -14,5 +15,5 @@ export declare class StreamKeyValueSerde<K, V> implements StreamSerde<KeyValue<K
     deserializeKeyValue(key: Uint8Array | undefined, value: Uint8Array): KeyValue<K, V>;
 }
 export declare function makeStreamSerde<T>(serde: Serde<T>): StreamSerde<T>;
-export declare function makeStreamKeyValueSerde<K, V>(keySerde: Serde<K>, valueSerde: Serde<V>): StreamSerde<KeyValue<K, V>>;
+export declare function makeStreamKeyValueSerde<K, V>(keySerde: StreamSerde<K>, valueSerde: StreamSerde<V>): StreamSerde<KeyValue<K, V>>;
 //# sourceMappingURL=stream.d.ts.map

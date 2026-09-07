@@ -42,7 +42,8 @@ class ValueStreamSerde<T> implements StreamSerde<T> {
 export class StreamKeyValueSerde<K, V> implements StreamSerde<KeyValue<K, V>> {
   public constructor(
     private readonly keySerde: Serde<K>,
-    private readonly valueSerde: Serde<V>
+    private readonly valueSerde: Serde<V>,
+    private readonly streamTypeName = ""
   ) {}
 
   public serialize(value: KeyValue<K, V>, prefix?: Uint8Array): Uint8Array {
@@ -68,7 +69,7 @@ export class StreamKeyValueSerde<K, V> implements StreamSerde<KeyValue<K, V>> {
   }
 
   public typeName(): string {
-    return "";
+    return this.streamTypeName;
   }
 
   public isKeyValue(): boolean {
@@ -99,8 +100,12 @@ export function makeStreamSerde<T>(serde: Serde<T>): StreamSerde<T> {
 }
 
 export function makeStreamKeyValueSerde<K, V>(
-  keySerde: Serde<K>,
-  valueSerde: Serde<V>
+  keySerde: StreamSerde<K>,
+  valueSerde: StreamSerde<V>
 ): StreamSerde<KeyValue<K, V>> {
-  return new StreamKeyValueSerde(keySerde, valueSerde);
+  return new StreamKeyValueSerde(
+    keySerde,
+    valueSerde,
+    `KeyValue[${keySerde.typeName()},${valueSerde.typeName()}]`
+  );
 }

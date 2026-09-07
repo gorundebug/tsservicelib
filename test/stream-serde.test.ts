@@ -77,6 +77,7 @@ await test("type-changing and KeyValue operators resolve the declared output ser
       return out.out(context, { key: value.length, value });
     }
   });
+  assert.equal(keyBy.typeName(), "KeyValue[int32,string]");
   const value = { key: 3, value: "abc" };
   assert.equal(hex(keyBy.serde().serializeKey(value)), "80000003");
   assert.equal(hex(keyBy.serde().serializeValue(value)), "0000000000000003616263");

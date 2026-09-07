@@ -33,6 +33,7 @@ export declare class Context {
 export declare class MessageContext extends Context {
     #private;
     constructor(signal?: AbortSignal);
+    static fromContext(context: Context): MessageContext;
     private static fromMessageState;
     private clone;
     signal(): AbortSignal;

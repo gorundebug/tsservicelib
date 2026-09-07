@@ -1,5 +1,6 @@
 /** Workflow-isolate-safe configuration API without filesystem loading. */
 export * from "./grpc.js";
+export * from "./custom.js";
 export * from "./http.js";
 export * from "./kafka.js";
 export * from "./parser.js";

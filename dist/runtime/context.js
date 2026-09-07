@@ -155,6 +155,11 @@ export class MessageContext extends Context {
             priority: undefined
         };
     }
+    static fromContext(context) {
+        return new MessageContext(context.signal())
+            .withDeadline(context.deadline())
+            .withSampling(context.samplingEnabled());
+    }
     static fromMessageState(state) {
         const context = new MessageContext(state.signal);
         context.#messageState = state;
