@@ -946,15 +946,16 @@ function serviceDefinition(service) {
             path: `/${service.typeName}/${method.name}`,
             requestStream: method.methodKind === "client_streaming" || method.methodKind === "bidi_streaming",
             responseStream: method.methodKind === "server_streaming" || method.methodKind === "bidi_streaming",
-            requestSerialize: (value) => Buffer.from(serialize(method.input, value)),
+            requestSerialize: (value) => serialize(method.input, value),
             requestDeserialize: (bytes) => deserialize(method.input, bytes),
-            responseSerialize: (value) => Buffer.from(serialize(method.output, value)),
+            responseSerialize: (value) => serialize(method.output, value),
             responseDeserialize: (bytes) => deserialize(method.output, bytes)
         }
     ]));
 }
 function serialize(schema, value) {
-    return toBinary(schema, value);
+    const bytes = toBinary(schema, value);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 function deserialize(schema, bytes) {
     return fromBinary(schema, bytes);

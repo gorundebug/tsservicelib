@@ -30,6 +30,7 @@ export declare class GrpcJsDataSink extends OutputDataSink {
     serverStream<ResR>(context: MessageContext, method: DescMethod, request: unknown): ClientReadableStream<ResR>;
     clientStream<ReqT, ResR>(context: MessageContext, method: DescMethod): readonly [ClientWritableStream<ReqT>, Promise<ResR>];
     bidiStream<ReqT, ResR>(context: MessageContext, method: DescMethod): ClientDuplexStream<ReqT, ResR>;
+    private codec;
     private nextClient;
 }
 export declare function makeGrpcNoStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>(stream: TypedSinkStreamWithResult<T, R, E>, service: DescService, method: DescMethod, handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>): Consumer<T>;

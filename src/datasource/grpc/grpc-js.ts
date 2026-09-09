@@ -1244,17 +1244,18 @@ function serviceDefinition(service: DescService): ServiceDefinition {
           method.methodKind === "client_streaming" || method.methodKind === "bidi_streaming",
         responseStream:
           method.methodKind === "server_streaming" || method.methodKind === "bidi_streaming",
-        requestSerialize: (value: unknown) => Buffer.from(serialize(method.input, value)),
+        requestSerialize: (value: unknown) => serialize(method.input, value),
         requestDeserialize: (bytes: Buffer) => deserialize(method.input, bytes),
-        responseSerialize: (value: unknown) => Buffer.from(serialize(method.output, value)),
+        responseSerialize: (value: unknown) => serialize(method.output, value),
         responseDeserialize: (bytes: Buffer) => deserialize(method.output, bytes)
       }
     ])
   );
 }
 
-function serialize(schema: DescMessage, value: unknown): Uint8Array {
-  return toBinary(schema, value as MessageShape<DescMessage>);
+function serialize(schema: DescMessage, value: unknown): Buffer {
+  const bytes = toBinary(schema, value as MessageShape<DescMessage>);
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 function deserialize(schema: DescMessage, bytes: Uint8Array): unknown {

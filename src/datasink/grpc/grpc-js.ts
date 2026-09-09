@@ -173,6 +173,14 @@ export class GrpcJsDataSink extends OutputDataSink {
   readonly #service: DescService;
   readonly #clients: readonly Client[];
   #nextClient = 0;
+  readonly #codecs = new WeakMap<
+    DescMethod,
+    {
+      path: string;
+      encode: (value: unknown) => Buffer;
+      decode: (bytes: Buffer) => unknown;
+    }
+  >();
   #started = false;
   readonly #tasks = new Set<Promise<void>>();
 
@@ -246,10 +254,11 @@ export class GrpcJsDataSink extends OutputDataSink {
     const metadata = metadataFromContext(context);
     const remainingMs = context.remainingMs();
     return new Promise((resolve, reject) => {
+      const codec = this.codec(method);
       const call: ClientUnaryCall = this.nextClient().makeUnaryRequest(
-        `/${this.#service.typeName}/${method.name}`,
-        (value: unknown) => Buffer.from(serialize(method.input, value)),
-        (bytes: Buffer) => deserialize(method.output, bytes) as ResR,
+        codec.path,
+        codec.encode,
+        codec.decode as (bytes: Buffer) => ResR,
         request,
         metadata,
         remainingMs === undefined ? {} : { deadline: Date.now() + remainingMs },
@@ -274,10 +283,11 @@ export class GrpcJsDataSink extends OutputDataSink {
     method: DescMethod,
     request: unknown
   ): ClientReadableStream<ResR> {
+    const codec = this.codec(method);
     const call = this.nextClient().makeServerStreamRequest(
-      `/${this.#service.typeName}/${method.name}`,
-      (value: unknown) => Buffer.from(serialize(method.input, value)),
-      (bytes: Buffer) => deserialize(method.output, bytes) as ResR,
+      codec.path,
+      codec.encode,
+      codec.decode as (bytes: Buffer) => ResR,
       request,
       metadataFromContext(context),
       callOptions(context)
@@ -292,10 +302,11 @@ export class GrpcJsDataSink extends OutputDataSink {
   ): readonly [ClientWritableStream<ReqT>, Promise<ResR>] {
     let call: ClientWritableStream<ReqT> | undefined;
     const response = new Promise<ResR>((resolve, reject) => {
+      const codec = this.codec(method);
       call = this.nextClient().makeClientStreamRequest(
-        `/${this.#service.typeName}/${method.name}`,
-        (value: ReqT) => Buffer.from(serialize(method.input, value)),
-        (bytes: Buffer) => deserialize(method.output, bytes) as ResR,
+        codec.path,
+        codec.encode,
+        codec.decode as (bytes: Buffer) => ResR,
         metadataFromContext(context),
         callOptions(context),
         (error, value) => {
@@ -315,15 +326,29 @@ export class GrpcJsDataSink extends OutputDataSink {
     context: MessageContext,
     method: DescMethod
   ): ClientDuplexStream<ReqT, ResR> {
+    const codec = this.codec(method);
     const call = this.nextClient().makeBidiStreamRequest(
-      `/${this.#service.typeName}/${method.name}`,
-      (value: ReqT) => Buffer.from(serialize(method.input, value)),
-      (bytes: Buffer) => deserialize(method.output, bytes) as ResR,
+      codec.path,
+      codec.encode,
+      codec.decode as (bytes: Buffer) => ResR,
       metadataFromContext(context),
       callOptions(context)
     );
     bindCancellation(context, call);
     return call;
+  }
+
+  private codec(method: DescMethod) {
+    let codec = this.#codecs.get(method);
+    if (codec === undefined) {
+      codec = {
+        path: `/${this.#service.typeName}/${method.name}`,
+        encode: (value: unknown) => serialize(method.input, value),
+        decode: (bytes: Buffer) => deserialize(method.output, bytes)
+      };
+      this.#codecs.set(method, codec);
+    }
+    return codec;
   }
 
   private nextClient(): Client {
@@ -1095,8 +1120,9 @@ function bindCancellation(
   }
 }
 
-function serialize(schema: DescMessage, value: unknown): Uint8Array {
-  return toBinary(schema, value as MessageShape<DescMessage>);
+function serialize(schema: DescMessage, value: unknown): Buffer {
+  const bytes = toBinary(schema, value as MessageShape<DescMessage>);
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 function deserialize(schema: DescMessage, bytes: Uint8Array): unknown {

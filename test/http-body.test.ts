@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import {
   createServer,
   request as httpRequest,
-  type IncomingMessage,
+  IncomingMessage,
   type Server,
   type ServerResponse
 } from "node:http";
-import { connect } from "node:net";
+import { connect, Socket } from "node:net";
 import { test } from "node:test";
 
 import {
@@ -196,3 +196,18 @@ function chunkedRequest(
     request.end();
   });
 }
+
+await test("HTTP JSON decoder respects sliced buffers and split UTF-8", async () => {
+  const value = "Заказ 🍊";
+  const json = Buffer.from(JSON.stringify({ value }));
+  const storage = Buffer.concat([Buffer.from("prefix"), json, Buffer.from("suffix")]);
+  const body = storage.subarray(6, 6 + json.length);
+  for (const chunks of [[body], [body.subarray(0, 12), body.subarray(12)]]) {
+    const request = new IncomingMessage(new Socket());
+    const result = readJsonBody(request, decodeTestBody, body.length);
+    for (const chunk of chunks) request.emit("data", chunk);
+    request.emit("end");
+    assert.deepEqual(await result, { value });
+    request.destroy();
+  }
+});

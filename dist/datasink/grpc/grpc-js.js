@@ -83,6 +83,7 @@ export class GrpcJsDataSink extends OutputDataSink {
     #service;
     #clients;
     #nextClient = 0;
+    #codecs = new WeakMap();
     #started = false;
     #tasks = new Set();
     constructor(connectorId, environment, service) {
@@ -150,7 +151,8 @@ export class GrpcJsDataSink extends OutputDataSink {
         const metadata = metadataFromContext(context);
         const remainingMs = context.remainingMs();
         return new Promise((resolve, reject) => {
-            const call = this.nextClient().makeUnaryRequest(`/${this.#service.typeName}/${method.name}`, (value) => Buffer.from(serialize(method.input, value)), (bytes) => deserialize(method.output, bytes), request, metadata, remainingMs === undefined ? {} : { deadline: Date.now() + remainingMs }, (error, response) => {
+            const codec = this.codec(method);
+            const call = this.nextClient().makeUnaryRequest(codec.path, codec.encode, codec.decode, request, metadata, remainingMs === undefined ? {} : { deadline: Date.now() + remainingMs }, (error, response) => {
                 context.signal().removeEventListener("abort", cancel);
                 if (error !== null)
                     reject(error);
@@ -169,14 +171,16 @@ export class GrpcJsDataSink extends OutputDataSink {
         });
     }
     serverStream(context, method, request) {
-        const call = this.nextClient().makeServerStreamRequest(`/${this.#service.typeName}/${method.name}`, (value) => Buffer.from(serialize(method.input, value)), (bytes) => deserialize(method.output, bytes), request, metadataFromContext(context), callOptions(context));
+        const codec = this.codec(method);
+        const call = this.nextClient().makeServerStreamRequest(codec.path, codec.encode, codec.decode, request, metadataFromContext(context), callOptions(context));
         bindCancellation(context, call);
         return call;
     }
     clientStream(context, method) {
         let call;
         const response = new Promise((resolve, reject) => {
-            call = this.nextClient().makeClientStreamRequest(`/${this.#service.typeName}/${method.name}`, (value) => Buffer.from(serialize(method.input, value)), (bytes) => deserialize(method.output, bytes), metadataFromContext(context), callOptions(context), (error, value) => {
+            const codec = this.codec(method);
+            call = this.nextClient().makeClientStreamRequest(codec.path, codec.encode, codec.decode, metadataFromContext(context), callOptions(context), (error, value) => {
                 if (error !== null)
                     reject(error);
                 else if (value === undefined)
@@ -191,9 +195,22 @@ export class GrpcJsDataSink extends OutputDataSink {
         return [call, response];
     }
     bidiStream(context, method) {
-        const call = this.nextClient().makeBidiStreamRequest(`/${this.#service.typeName}/${method.name}`, (value) => Buffer.from(serialize(method.input, value)), (bytes) => deserialize(method.output, bytes), metadataFromContext(context), callOptions(context));
+        const codec = this.codec(method);
+        const call = this.nextClient().makeBidiStreamRequest(codec.path, codec.encode, codec.decode, metadataFromContext(context), callOptions(context));
         bindCancellation(context, call);
         return call;
+    }
+    codec(method) {
+        let codec = this.#codecs.get(method);
+        if (codec === undefined) {
+            codec = {
+                path: `/${this.#service.typeName}/${method.name}`,
+                encode: (value) => serialize(method.input, value),
+                decode: (bytes) => deserialize(method.output, bytes)
+            };
+            this.#codecs.set(method, codec);
+        }
+        return codec;
     }
     nextClient() {
         const client = this.#clients[this.#nextClient];
@@ -788,7 +805,8 @@ function bindCancellation(context, call) {
     }
 }
 function serialize(schema, value) {
-    return toBinary(schema, value);
+    const bytes = toBinary(schema, value);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 function deserialize(schema, bytes) {
     return fromBinary(schema, bytes);

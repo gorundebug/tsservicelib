@@ -43,7 +43,7 @@ export async function readRequestBody(
     let size = 0;
     const completed = (): void => {
       cleanup();
-      resolve(Buffer.concat(chunks, size));
+      resolve(chunks.length === 1 ? (chunks[0] ?? Buffer.alloc(0)) : Buffer.concat(chunks, size));
     };
     const failed = (error: Error): void => {
       cleanup();
@@ -93,7 +93,9 @@ export async function readJsonBody<T>(
   const bytes = await readRequestBody(request, maxBytes);
   let value: unknown;
   try {
-    value = JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown;
+    value = JSON.parse(
+      Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8")
+    ) as unknown;
   } catch (error: unknown) {
     throw new InvalidJsonBodyError(error);
   }

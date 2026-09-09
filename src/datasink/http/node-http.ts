@@ -112,11 +112,12 @@ export class Response {
       }
       chunks.push(bytes);
     }
-    return Buffer.concat(chunks, size);
+    return chunks.length === 1 ? (chunks[0] ?? Buffer.alloc(0)) : Buffer.concat(chunks, size);
   }
 
   public async text(maxBytes?: number): Promise<string> {
-    return Buffer.from(await this.read(maxBytes)).toString("utf8");
+    const bytes = await this.read(maxBytes);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
   }
 
   public async close(): Promise<void> {
