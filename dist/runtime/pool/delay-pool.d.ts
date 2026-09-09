@@ -15,6 +15,8 @@ export declare class DelayPool implements Lifecycle {
     pendingCount(): number;
     start(context: Context): Promise<void>;
     delay(context: Context, delayMs: number, execute: () => Completion): void;
+    private arm;
+    private dispatch;
     stop(context: Context): Promise<void>;
     private completeTask;
     private reportStopTimeout;

@@ -100,7 +100,7 @@ export class RuntimeConfig {
             this.validateCallSemantics(service.defaultCallSemantics, `service ${service.name}`);
         }
         for (const pool of this.#config.pools) {
-            validatePositive(pool.executorsCount, `pool ${pool.name} executorsCount`);
+            validateNonNegative(pool.executorsCount, `pool ${pool.name} executorsCount`);
             validateNonNegative(pool.queueCapacity, `pool ${pool.name} queueCapacity`);
         }
         for (const connector of this.#config.dataConnectors) {

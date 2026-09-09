@@ -203,14 +203,14 @@ await test("task pool shrink lets admitted work finish before starting queued wo
   assert.equal(pool.activeCount(), 0);
 });
 
-await test("async pools require at least one executor", () => {
+await test("async pools reject negative executor counts", () => {
   assert.throws(
-    () => new TaskPool({ name: "invalid", executorsCount: 0 }),
-    /executorsCount must be a positive integer/
+    () => new TaskPool({ name: "invalid", executorsCount: -1 }),
+    /executorsCount must be a non-negative integer/
   );
   assert.throws(
-    () => new PriorityTaskPool({ name: "invalid-priority", executorsCount: 0 }),
-    /executorsCount must be a positive integer/
+    () => new PriorityTaskPool({ name: "invalid-priority", executorsCount: -1 }),
+    /executorsCount must be a non-negative integer/
   );
 });
 

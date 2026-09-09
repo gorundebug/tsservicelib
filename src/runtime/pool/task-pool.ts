@@ -1,3 +1,10 @@
+import { FifoQueue } from "./fifo-queue.js";
+import {
+  bindPoolTask,
+  normalizeExecutorsCount,
+  subscribeAbort,
+  reportPoolError
+} from "./pool-support.js";
 import type { Context } from "../context.js";
 import { err, int, str, type Logger } from "../environment/log.js";
 import type { Lifecycle } from "../lifecycle.js";
@@ -16,7 +23,7 @@ export class TaskPool implements Lifecycle {
   readonly #onError: (error: unknown) => void;
   readonly #logger: Logger | undefined;
   readonly #metrics: TaskPoolMetrics | undefined;
-  readonly #queue: QueuedTask[] = [];
+  readonly #queue = new FifoQueue<QueuedTask>();
   #executorsCount: number;
   #active = 0;
   #state: "created" | "running" | "stopping" | "stopped" = "created";
@@ -48,10 +55,11 @@ export class TaskPool implements Lifecycle {
   }
 
   public resize(executorsCount: number): void {
+    if (this.#state === "stopping" || this.#state === "stopped") return;
     this.#executorsCount = normalizeExecutorsCount(executorsCount);
     if (this.#state === "running") {
       this.#metrics?.executorsTarget.set(this.#executorsCount);
-      this.#metrics?.executorsAllocated.set(this.#executorsCount);
+      this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     }
     this.pump();
   }
@@ -63,7 +71,7 @@ export class TaskPool implements Lifecycle {
     }
     this.#state = "running";
     this.#metrics?.executorsTarget.set(this.#executorsCount);
-    this.#metrics?.executorsAllocated.set(this.#executorsCount);
+    this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     this.pump();
     return Promise.resolve();
   }
@@ -80,22 +88,16 @@ export class TaskPool implements Lifecycle {
 
     const task: QueuedTask = {
       context,
-      execute,
+      execute: bindPoolTask(execute),
       removeAbortListener: () => undefined
     };
     const cancel = (): void => {
-      const index = this.#queue.indexOf(task);
-      if (index > 0) {
-        this.#queue.splice(index, 1);
-        this.#queue.unshift(task);
+      if (this.#queue.moveToFront(task)) {
         this.#metrics?.taskCancelledOrExpired.inc(context);
       }
       this.pump();
     };
-    context.signal().addEventListener("abort", cancel, { once: true });
-    task.removeAbortListener = () => {
-      context.signal().removeEventListener("abort", cancel);
-    };
+    task.removeAbortListener = subscribeAbort(context.signal(), cancel);
     this.#queue.push(task);
     this.#metrics?.queueLength.inc();
     this.pump();
@@ -107,15 +109,6 @@ export class TaskPool implements Lifecycle {
     }
     if (this.#drain !== undefined) {
       await this.#drain;
-      return;
-    }
-    if (this.#state === "created") {
-      for (const task of this.#queue.splice(0)) {
-        task.removeAbortListener();
-        this.#metrics?.queueLength.dec();
-      }
-      this.#state = "stopped";
-      this.#metrics?.executorsAllocated.set(0);
       return;
     }
     this.#state = "stopping";
@@ -163,13 +156,13 @@ export class TaskPool implements Lifecycle {
     try {
       completion = task.execute();
     } catch (error: unknown) {
-      this.#onError(error);
+      reportPoolError(this.#onError, error);
       this.taskFinished(task.context, started);
       return;
     }
     void Promise.resolve(completion)
       .catch((error: unknown) => {
-        this.#onError(error);
+        reportPoolError(this.#onError, error);
       })
       .finally(() => {
         this.taskFinished(task.context, started);
@@ -181,6 +174,7 @@ export class TaskPool implements Lifecycle {
     this.#metrics?.tasksTotal.inc(context);
     this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
     this.#active -= 1;
+    this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     this.pump();
   }
 
@@ -193,11 +187,4 @@ export class TaskPool implements Lifecycle {
     this.#resolveDrain?.();
     this.#resolveDrain = undefined;
   }
-}
-
-function normalizeExecutorsCount(executorsCount: number): number {
-  if (!Number.isInteger(executorsCount) || executorsCount < 1) {
-    throw new RangeError("executorsCount must be a positive integer");
-  }
-  return executorsCount;
 }

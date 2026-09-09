@@ -1,3 +1,6 @@
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { IndexedHeap } from "./indexed-heap.js";
+import { subscribeAbort, reportPoolError } from "./pool-support.js";
 import { performance } from "node:perf_hooks";
 
 import type { Context } from "../context.js";
@@ -23,7 +26,11 @@ export interface DelayPoolOptions {
 
 interface DelayTask {
   completed: boolean;
-  timer: NodeJS.Timeout | undefined;
+  readonly runAt: number;
+  readonly sequence: number;
+  readonly context: Context;
+  readonly execute: () => Completion;
+  readonly expeditedByDeadline: boolean;
   removeAbortListener(): void;
 }
 
@@ -36,11 +43,18 @@ interface DelayPoolMetrics {
 }
 
 export class DelayPool implements Lifecycle {
+  readonly #schedule = AsyncLocalStorage.snapshot();
   readonly #name: string;
   readonly #onError: (error: unknown) => void;
   readonly #logger: Logger | undefined;
   readonly #metrics: DelayPoolMetrics | undefined;
   readonly #tasks = new Set<DelayTask>();
+  readonly #queue = new IndexedHeap<DelayTask>(
+    (a, b) => a.runAt - b.runAt || a.sequence - b.sequence
+  );
+  #timer: NodeJS.Timeout | undefined;
+  #armedAt: number | undefined;
+  #sequence = 0;
   #state: "created" | "running" | "stopping" | "stopped" = "created";
   #drain: Promise<void> | undefined;
   #resolveDrain: (() => void) | undefined;
@@ -73,57 +87,82 @@ export class DelayPool implements Lifecycle {
       throw new PoolStoppedError(this.#name);
     }
 
+    if (Number.isNaN(delayMs)) throw new RangeError("delay must not be NaN");
     const remaining = context.remainingMs();
     const effectiveDelay = Math.max(0, Math.min(delayMs, remaining ?? Infinity));
     const task: DelayTask = {
       completed: false,
-      timer: undefined,
+      runAt: performance.now() + effectiveDelay,
+      sequence: this.#sequence++,
+      context,
+      execute: AsyncResource.bind(execute),
+      expeditedByDeadline: remaining !== undefined && remaining < delayMs,
       removeAbortListener: () => undefined
     };
+    this.#tasks.add(task);
     this.#metrics?.waitQueueLength.inc();
-    const finish = (cancelled: boolean): void => {
-      if (task.completed) {
-        return;
-      }
-      task.completed = true;
-      if (task.timer !== undefined) {
-        clearTimeout(task.timer);
-      }
-      task.removeAbortListener();
+    if (effectiveDelay === 0) {
+      this.dispatch(task, task.expeditedByDeadline);
+      return;
+    }
+    this.#queue.push(task);
+    task.removeAbortListener = subscribeAbort(context.signal(), () => {
+      this.dispatch(task, true);
+      this.arm();
+    });
+    this.arm();
+  }
+
+  private arm(): void {
+    const next = this.#queue.peek()?.runAt;
+    if (next === this.#armedAt) return;
+    if (this.#timer !== undefined) clearTimeout(this.#timer);
+    this.#timer = undefined;
+    this.#armedAt = next;
+    if (next === undefined || next === Infinity) return;
+    // Node otherwise turns delays above INT32_MAX into a one millisecond timer.
+    this.#timer = this.#schedule(() =>
+      setTimeout(
+        () => {
+          this.#timer = undefined;
+          this.#armedAt = undefined;
+          const now = performance.now();
+          for (;;) {
+            const task = this.#queue.peek();
+            if (task === undefined || task.runAt > now) break;
+            this.dispatch(task, task.expeditedByDeadline || task.context.cancelled());
+          }
+          this.arm();
+        },
+        Math.min(2_147_483_647, Math.max(0, Math.ceil(next - performance.now())))
+      )
+    );
+  }
+
+  private dispatch(task: DelayTask, cancelled: boolean): void {
+    if (task.completed) return;
+    task.completed = true;
+    this.#queue.remove(task);
+    task.removeAbortListener();
+    // In particular, abort listeners must never invoke user code inline.
+    queueMicrotask(() => {
       const started = performance.now();
       let completion: Completion;
       try {
-        completion = execute();
+        completion = task.execute();
       } catch (error: unknown) {
-        this.#onError(error);
-        this.completeTask(task, context, started, cancelled);
+        reportPoolError(this.#onError, error);
+        this.completeTask(task, task.context, started, cancelled);
         return;
       }
       void Promise.resolve(completion)
         .catch((error: unknown) => {
-          this.#onError(error);
+          reportPoolError(this.#onError, error);
         })
         .finally(() => {
-          this.completeTask(task, context, started, cancelled);
+          this.completeTask(task, task.context, started, cancelled);
         });
-    };
-    const cancelled = (): void => {
-      finish(true);
-    };
-    context.signal().addEventListener("abort", cancelled, { once: true });
-    task.removeAbortListener = () => {
-      context.signal().removeEventListener("abort", cancelled);
-    };
-    this.#tasks.add(task);
-    if (effectiveDelay === 0) {
-      queueMicrotask(() => {
-        finish(false);
-      });
-    } else {
-      task.timer = setTimeout(() => {
-        finish(false);
-      }, effectiveDelay);
-    }
+    });
   }
 
   public async stop(context: Context): Promise<void> {

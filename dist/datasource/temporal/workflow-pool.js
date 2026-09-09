@@ -1,11 +1,13 @@
+import { FifoQueue } from "../../runtime/pool/fifo-queue.js";
+import { IndexedHeap } from "../../runtime/pool/indexed-heap.js";
+import { subscribeAbort, reportPoolError } from "../../runtime/pool/pool-support.js";
 import { PoolStoppedError } from "../../runtime/pool/pool.js";
 import { makeTaskPoolMetrics } from "../../runtime/pool/task-pool-metrics.js";
 class WorkflowPoolCore {
     #name;
     #executors;
-    #priority;
     #onError;
-    #queue = [];
+    #queue;
     #metrics;
     #active = 0;
     #sequence = 0;
@@ -15,12 +17,16 @@ class WorkflowPoolCore {
     #resolveIdle;
     #idle = Promise.resolve();
     constructor(name, executors, priority, metrics, service, onError) {
-        if (!Number.isInteger(executors) || executors < 1) {
-            throw new RangeError("executors must be a positive integer");
+        if (!Number.isSafeInteger(executors) || executors < 0) {
+            throw new RangeError("executors must be a non-negative integer");
         }
+        // Workflow replay must not depend on the host CPU count.
+        executors = executors || 1;
+        this.#queue = priority
+            ? new IndexedHeap((a, b) => a.priority - b.priority || a.sequence - b.sequence)
+            : new FifoQueue();
         this.#name = name;
         this.#executors = executors;
-        this.#priority = priority;
         this.#onError = onError;
         this.#metrics = makeTaskPoolMetrics(priority ? "priority" : "task", {
             name,
@@ -73,24 +79,22 @@ class WorkflowPoolCore {
         };
         this.#sequence += 1;
         const cancel = () => {
-            const index = this.#queue.indexOf(task);
-            if (this.#priority ? index >= 0 : index > 0) {
-                this.#queue.splice(index, 1);
-                if (this.#priority) {
+            let moved = false;
+            if (this.#queue instanceof IndexedHeap) {
+                if (this.#queue.has(task)) {
                     task.priority = Number.NEGATIVE_INFINITY;
-                    this.insert(task);
+                    this.#queue.fix(task);
+                    moved = true;
                 }
-                else {
-                    this.#queue.unshift(task);
-                }
-                this.#metrics?.taskCancelledOrExpired.inc(context);
             }
+            else {
+                moved = this.#queue.moveToFront(task);
+            }
+            if (moved)
+                this.#metrics?.taskCancelledOrExpired.inc(context);
             this.pump();
         };
-        context.signal().addEventListener("abort", cancel, { once: true });
-        task.removeAbortListener = () => {
-            context.signal().removeEventListener("abort", cancel);
-        };
+        task.removeAbortListener = subscribeAbort(context.signal(), cancel);
         this.insert(task);
         this.#metrics?.queueLength.inc();
         this.pump();
@@ -115,7 +119,7 @@ class WorkflowPoolCore {
         if (this.#state !== "running" && this.#state !== "stopping")
             return;
         while (this.#active < this.#executors && this.#queue.length > 0) {
-            const task = this.#queue.shift();
+            const task = this.#queue instanceof IndexedHeap ? this.#queue.pop() : this.#queue.shift();
             if (task === undefined)
                 break;
             task.removeAbortListener();
@@ -132,7 +136,7 @@ class WorkflowPoolCore {
             await task.execute();
         }
         catch (error) {
-            this.#onError(error);
+            reportPoolError(this.#onError, error);
         }
         finally {
             this.#metrics?.executorsBusy.dec();
@@ -143,16 +147,7 @@ class WorkflowPoolCore {
         }
     }
     insert(task) {
-        if (!this.#priority) {
-            this.#queue.push(task);
-            return;
-        }
-        const index = this.#queue.findIndex((item) => item.priority > task.priority ||
-            (item.priority === task.priority && item.sequence > task.sequence));
-        if (index < 0)
-            this.#queue.push(task);
-        else
-            this.#queue.splice(index, 0, task);
+        this.#queue.push(task);
     }
     finishDrainIfIdle() {
         if (this.#active !== 0 || this.#queue.length !== 0)

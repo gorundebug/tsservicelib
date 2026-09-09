@@ -165,9 +165,9 @@ await test("runtime config rejects mismatched endpoint transports, pools and ran
     () =>
       new RuntimeConfig({
         ...base,
-        pools: [{ name: "workers", executorsCount: 0, queueCapacity: 0, properties: {} }]
+        pools: [{ name: "workers", executorsCount: -1, queueCapacity: 0, properties: {} }]
       }),
-    /executorsCount must be a positive integer/
+    /executorsCount must be a non-negative integer/
   );
 
   assert.throws(

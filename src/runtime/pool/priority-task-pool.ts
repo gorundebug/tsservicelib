@@ -1,3 +1,10 @@
+import { IndexedHeap } from "./indexed-heap.js";
+import {
+  bindPoolTask,
+  normalizeExecutorsCount,
+  subscribeAbort,
+  reportPoolError
+} from "./pool-support.js";
 import type { Context } from "../context.js";
 import { err, int, str, type Logger } from "../environment/log.js";
 import type { Lifecycle } from "../lifecycle.js";
@@ -18,7 +25,9 @@ export class PriorityTaskPool implements Lifecycle {
   readonly #onError: (error: unknown) => void;
   readonly #logger: Logger | undefined;
   readonly #metrics: TaskPoolMetrics | undefined;
-  readonly #queue: PriorityTask[] = [];
+  readonly #queue = new IndexedHeap<PriorityTask>((a, b) =>
+    a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : a.sequence - b.sequence
+  );
   #executorsCount: number;
   #active = 0;
   #sequence = 0;
@@ -51,10 +60,11 @@ export class PriorityTaskPool implements Lifecycle {
   }
 
   public resize(executorsCount: number): void {
+    if (this.#state === "stopping" || this.#state === "stopped") return;
     this.#executorsCount = normalizeExecutorsCount(executorsCount);
     if (this.#state === "running") {
       this.#metrics?.executorsTarget.set(this.#executorsCount);
-      this.#metrics?.executorsAllocated.set(this.#executorsCount);
+      this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     }
     this.pump();
   }
@@ -66,7 +76,7 @@ export class PriorityTaskPool implements Lifecycle {
     }
     this.#state = "running";
     this.#metrics?.executorsTarget.set(this.#executorsCount);
-    this.#metrics?.executorsAllocated.set(this.#executorsCount);
+    this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     this.pump();
     return Promise.resolve();
   }
@@ -83,26 +93,21 @@ export class PriorityTaskPool implements Lifecycle {
 
     const task: PriorityTask = {
       context,
-      execute,
+      execute: bindPoolTask(execute),
       priority,
       sequence: this.#sequence,
       removeAbortListener: () => undefined
     };
     this.#sequence += 1;
     const cancel = (): void => {
-      const index = this.#queue.indexOf(task);
-      if (index >= 0) {
-        this.#queue.splice(index, 1);
+      if (this.#queue.has(task)) {
         task.priority = Number.NEGATIVE_INFINITY;
-        this.insert(task);
+        this.#queue.fix(task);
         this.#metrics?.taskCancelledOrExpired.inc(context);
       }
       this.pump();
     };
-    context.signal().addEventListener("abort", cancel, { once: true });
-    task.removeAbortListener = () => {
-      context.signal().removeEventListener("abort", cancel);
-    };
+    task.removeAbortListener = subscribeAbort(context.signal(), cancel);
     this.insert(task);
     this.#metrics?.queueLength.inc();
     this.pump();
@@ -114,15 +119,6 @@ export class PriorityTaskPool implements Lifecycle {
     }
     if (this.#drain !== undefined) {
       await this.#drain;
-      return;
-    }
-    if (this.#state === "created") {
-      for (const task of this.#queue.splice(0)) {
-        task.removeAbortListener();
-        this.#metrics?.queueLength.dec();
-      }
-      this.#state = "stopped";
-      this.#metrics?.executorsAllocated.set(0);
       return;
     }
     this.#state = "stopping";
@@ -145,16 +141,7 @@ export class PriorityTaskPool implements Lifecycle {
   }
 
   private insert(task: PriorityTask): void {
-    const index = this.#queue.findIndex(
-      (item) =>
-        item.priority > task.priority ||
-        (item.priority === task.priority && item.sequence > task.sequence)
-    );
-    if (index === -1) {
-      this.#queue.push(task);
-    } else {
-      this.#queue.splice(index, 0, task);
-    }
+    this.#queue.push(task);
   }
 
   private pump(): void {
@@ -162,7 +149,7 @@ export class PriorityTaskPool implements Lifecycle {
       return;
     }
     while (this.#active < this.#executorsCount && this.#queue.length > 0) {
-      const task = this.#queue.shift();
+      const task = this.#queue.pop();
       if (task === undefined) {
         break;
       }
@@ -183,13 +170,13 @@ export class PriorityTaskPool implements Lifecycle {
     try {
       completion = task.execute();
     } catch (error: unknown) {
-      this.#onError(error);
+      reportPoolError(this.#onError, error);
       this.taskFinished(task.context, started);
       return;
     }
     void Promise.resolve(completion)
       .catch((error: unknown) => {
-        this.#onError(error);
+        reportPoolError(this.#onError, error);
       })
       .finally(() => {
         this.taskFinished(task.context, started);
@@ -201,6 +188,7 @@ export class PriorityTaskPool implements Lifecycle {
     this.#metrics?.tasksTotal.inc(context);
     this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
     this.#active -= 1;
+    this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     this.pump();
   }
 
@@ -213,11 +201,4 @@ export class PriorityTaskPool implements Lifecycle {
     this.#resolveDrain?.();
     this.#resolveDrain = undefined;
   }
-}
-
-function normalizeExecutorsCount(executorsCount: number): number {
-  if (!Number.isInteger(executorsCount) || executorsCount < 1) {
-    throw new RangeError("executorsCount must be a positive integer");
-  }
-  return executorsCount;
 }

@@ -1,3 +1,5 @@
+import { IndexedHeap } from "./indexed-heap.js";
+import { bindPoolTask, normalizeExecutorsCount, subscribeAbort, reportPoolError } from "./pool-support.js";
 import { err, int, str } from "../environment/log.js";
 import { PoolStoppedError } from "./pool.js";
 import { awaitPoolDrain, makeTaskPoolMetrics } from "./task-pool-metrics.js";
@@ -7,7 +9,7 @@ export class PriorityTaskPool {
     #onError;
     #logger;
     #metrics;
-    #queue = [];
+    #queue = new IndexedHeap((a, b) => a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : a.sequence - b.sequence);
     #executorsCount;
     #active = 0;
     #sequence = 0;
@@ -34,10 +36,12 @@ export class PriorityTaskPool {
         return this.#active;
     }
     resize(executorsCount) {
+        if (this.#state === "stopping" || this.#state === "stopped")
+            return;
         this.#executorsCount = normalizeExecutorsCount(executorsCount);
         if (this.#state === "running") {
             this.#metrics?.executorsTarget.set(this.#executorsCount);
-            this.#metrics?.executorsAllocated.set(this.#executorsCount);
+            this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
         }
         this.pump();
     }
@@ -48,7 +52,7 @@ export class PriorityTaskPool {
         }
         this.#state = "running";
         this.#metrics?.executorsTarget.set(this.#executorsCount);
-        this.#metrics?.executorsAllocated.set(this.#executorsCount);
+        this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
         this.pump();
         return Promise.resolve();
     }
@@ -63,26 +67,21 @@ export class PriorityTaskPool {
         }
         const task = {
             context,
-            execute,
+            execute: bindPoolTask(execute),
             priority,
             sequence: this.#sequence,
             removeAbortListener: () => undefined
         };
         this.#sequence += 1;
         const cancel = () => {
-            const index = this.#queue.indexOf(task);
-            if (index >= 0) {
-                this.#queue.splice(index, 1);
+            if (this.#queue.has(task)) {
                 task.priority = Number.NEGATIVE_INFINITY;
-                this.insert(task);
+                this.#queue.fix(task);
                 this.#metrics?.taskCancelledOrExpired.inc(context);
             }
             this.pump();
         };
-        context.signal().addEventListener("abort", cancel, { once: true });
-        task.removeAbortListener = () => {
-            context.signal().removeEventListener("abort", cancel);
-        };
+        task.removeAbortListener = subscribeAbort(context.signal(), cancel);
         this.insert(task);
         this.#metrics?.queueLength.inc();
         this.pump();
@@ -93,15 +92,6 @@ export class PriorityTaskPool {
         }
         if (this.#drain !== undefined) {
             await this.#drain;
-            return;
-        }
-        if (this.#state === "created") {
-            for (const task of this.#queue.splice(0)) {
-                task.removeAbortListener();
-                this.#metrics?.queueLength.dec();
-            }
-            this.#state = "stopped";
-            this.#metrics?.executorsAllocated.set(0);
             return;
         }
         this.#state = "stopping";
@@ -117,21 +107,14 @@ export class PriorityTaskPool {
         });
     }
     insert(task) {
-        const index = this.#queue.findIndex((item) => item.priority > task.priority ||
-            (item.priority === task.priority && item.sequence > task.sequence));
-        if (index === -1) {
-            this.#queue.push(task);
-        }
-        else {
-            this.#queue.splice(index, 0, task);
-        }
+        this.#queue.push(task);
     }
     pump() {
         if (this.#state !== "running" && this.#state !== "stopping") {
             return;
         }
         while (this.#active < this.#executorsCount && this.#queue.length > 0) {
-            const task = this.#queue.shift();
+            const task = this.#queue.pop();
             if (task === undefined) {
                 break;
             }
@@ -152,13 +135,13 @@ export class PriorityTaskPool {
             completion = task.execute();
         }
         catch (error) {
-            this.#onError(error);
+            reportPoolError(this.#onError, error);
             this.taskFinished(task.context, started);
             return;
         }
         void Promise.resolve(completion)
             .catch((error) => {
-            this.#onError(error);
+            reportPoolError(this.#onError, error);
         })
             .finally(() => {
             this.taskFinished(task.context, started);
@@ -169,6 +152,7 @@ export class PriorityTaskPool {
         this.#metrics?.tasksTotal.inc(context);
         this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
         this.#active -= 1;
+        this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
         this.pump();
     }
     finishDrainIfIdle() {
@@ -180,11 +164,5 @@ export class PriorityTaskPool {
         this.#resolveDrain?.();
         this.#resolveDrain = undefined;
     }
-}
-function normalizeExecutorsCount(executorsCount) {
-    if (!Number.isInteger(executorsCount) || executorsCount < 1) {
-        throw new RangeError("executorsCount must be a positive integer");
-    }
-    return executorsCount;
 }
 //# sourceMappingURL=priority-task-pool.js.map
