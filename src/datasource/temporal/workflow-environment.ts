@@ -291,12 +291,15 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   public makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T> {
     const caller = this.#callerFactory.create(source, consumer);
     const metadata = callerMetadata(caller);
+    const grouping = this.runtimeConfig().streamById(consumer.id);
     const traceAttributes =
       this.#tracing === undefined
         ? undefined
         : [
             stringAttribute("from", source.name),
             stringAttribute("to", consumer.name),
+            stringAttribute("pipeline", grouping?.pipeline ?? ""),
+            stringAttribute("component", grouping?.component ?? ""),
             ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
             ...(metadata?.taskPoolName === undefined
               ? []
@@ -312,12 +315,15 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
 
   public makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void {
     const key = graphLinkKey(source.id, consumer.id);
+    const grouping = this.runtimeConfig().streamById(consumer.id);
     const counter = this.#metrics.enabled()
       ? this.#metrics
           .scope("stream", { service: this.serviceConfig().name })
           .counter("messages_total", "Total number of messages processed by stream link", {
             from: source.name,
-            to: consumer.name
+            to: consumer.name,
+            pipeline: grouping?.pipeline ?? "",
+            component: grouping?.component ?? ""
           })
       : undefined;
     return (context): void => {

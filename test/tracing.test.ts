@@ -123,8 +123,11 @@ await test("sampled stream delivery records Go-compatible call and operator span
       attributes: Object.fromEntries(attributes.map(({ key, value }) => [key, value]))
     })),
     [
-      { name: "stream.map", attributes: { stream: "Map Order" } },
-      { name: "stream.call", attributes: { from: "Input", to: "Map Order" } }
+      { name: "stream.map", attributes: { stream: "Map Order", pipeline: "main", component: "" } },
+      {
+        name: "stream.call",
+        attributes: { from: "Input", to: "Map Order", pipeline: "main", component: "" }
+      }
     ]
   );
 });
@@ -275,14 +278,29 @@ await test("sampled stream links record their resolved pooled call semantics", a
         Object.fromEntries(attributes.map(({ key, value }) => [key, value]))
       ),
     [
-      { from: "Task Input", to: "Task Map", type: "taskpool", taskpoolname: "Tasks" },
+      {
+        from: "Task Input",
+        to: "Task Map",
+        pipeline: "main",
+        component: "",
+        type: "taskpool",
+        taskpoolname: "Tasks"
+      },
       {
         from: "Priority Input",
         to: "Priority Map",
+        pipeline: "main",
+        component: "",
         type: "prioritytaskpool",
         taskpoolname: "Priorities"
       },
-      { from: "Parallel Input", to: "Parallel Map", type: "parallel" }
+      {
+        from: "Parallel Input",
+        to: "Parallel Map",
+        pipeline: "main",
+        component: "",
+        type: "parallel"
+      }
     ]
   );
 });

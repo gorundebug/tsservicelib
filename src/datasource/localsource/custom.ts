@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
   DataConnectorType,
@@ -251,6 +252,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
   readonly #handler: EndpointHandler<HandlerState, T, R, E>;
   readonly #tasks = new RuntimeTaskRegistry();
   readonly #waiters: (() => void)[] = [];
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   #pending: RotatingMap<string, CustomResult<HandlerState, T, R, E>> | undefined;
   #active = 0;
@@ -279,6 +281,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public start(context: Context): Promise<void> {
@@ -337,10 +340,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
     );
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "local.input", [
-        stringAttribute("stream", this.stream().name),
-        stringAttribute("endpoint", this.endpoint().name)
-      ]);
+      const started = this.#tracer.start(context, "local.input", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -363,7 +363,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       return;
@@ -380,7 +380,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
         this.endpoint().onPendingAdd(context, streamId);
       } catch (error: unknown) {
         const failure = errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
         await this.#handler.endRequest(context, this.#streamContext, failure, state);
         this.endpoint().onRequestEnd(context, startedAt, failure);
         return;
@@ -414,7 +414,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
       this.endpoint().onPendingRemove(context, streamId);
     }
     if (failure !== undefined) {
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       if (context.cancelled()) {
         span?.addEvent("context_cancelled", [stringAttribute("error", failure.message)]);
       }
@@ -423,7 +423,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
     } catch (error: unknown) {
       failure ??= errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
     } finally {
       this.endpoint().onRequestEnd(context, startedAt, failure);
     }

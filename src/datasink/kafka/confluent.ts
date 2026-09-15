@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 
 import type { KafkaJS } from "@confluentinc/kafka-javascript";
@@ -470,6 +471,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
   readonly #stream: TypedSinkStream<T, R>;
   readonly #handler: EndpointHandler<HandlerState, T, R>;
   readonly #partitioner: Partitioner<T> | undefined;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -486,6 +488,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -507,10 +510,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
     if (!(endpoint instanceof KafkaSinkEndpoint) || !endpoint.active()) return;
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "kafka.output", [
-        stringAttribute("stream", this.#stream.name),
-        stringAttribute("endpoint", endpoint.name)
-      ]);
+      const started = this.#tracer.start(context, "kafka.output", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -538,7 +538,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
       handlerContext = started.context;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       endpoint.onBeginRequestFailed(context, failure);
       return;
@@ -569,14 +569,14 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
       span?.addEvent("consume_message");
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("consume_message.error", [stringAttribute("error", failure.message)]);
     } finally {
       try {
         await this.#handler.endRequest(handlerContext, this.#stream, failure, state);
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         endpoint.onRequestEnd(handlerContext, requestStarted, failure);
       }

@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { Server, ServerCredentials } from "@grpc/grpc-js";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, spanError, str, stringAttribute } from "../../runtime/index.js";
@@ -149,7 +150,8 @@ class UnarySender {
             if (!this.#rejectDuplicate)
                 return;
             const error = new Error("unary gRPC response already sent");
-            spanError(this.#span, error);
+            if (this.#span !== undefined)
+                spanError(this.#span, error);
             this.#span?.addEvent("send.error", [stringAttribute("error", error.message)]);
             throw error;
         }
@@ -170,7 +172,8 @@ class StreamingSender {
     send(_context, value) {
         if (!this.#active) {
             const error = new Error("stream is closed");
-            spanError(this.#span, error);
+            if (this.#span !== undefined)
+                spanError(this.#span, error);
             this.#span?.addEvent("send.error", [stringAttribute("error", error.message)]);
             return Promise.reject(error);
         }
@@ -181,7 +184,8 @@ class StreamingSender {
                     resolve();
                 }
                 else {
-                    spanError(this.#span, error);
+                    if (this.#span !== undefined)
+                        spanError(this.#span, error);
                     this.#span?.addEvent("send.error", [stringAttribute("error", error.message)]);
                     reject(error);
                 }
@@ -269,6 +273,7 @@ class GrpcStreamingSourceConsumer extends DataSourceEndpointConsumer {
     handler;
     streamContext;
     pending = new Map();
+    traceAttributes;
     tracer;
     constructor(endpoint, stream, handler) {
         super(endpoint, stream);
@@ -281,6 +286,7 @@ class GrpcStreamingSourceConsumer extends DataSourceEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     hasResult() {
         return this.stream().resultStream() !== undefined;
@@ -289,10 +295,7 @@ class GrpcStreamingSourceConsumer extends DataSourceEndpointConsumer {
         let context = applyDataSourceEndpointTracing(contextFromCall(call), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.tracer !== undefined && context.samplingEnabled()) {
-            const started = this.tracer.start(context, "grpc.input", [
-                stringAttribute("stream", this.stream().name),
-                stringAttribute("endpoint", this.endpoint().name)
-            ]);
+            const started = this.tracer.start(context, "grpc.input", this.traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -318,6 +321,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
     #handler;
     #streamContext;
     #pending = new Map();
+    #traceAttributes;
     #tracer;
     constructor(endpoint, stream, handler) {
         super(endpoint, stream);
@@ -328,6 +332,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     handle() {
         return (call, callback) => {
@@ -347,10 +352,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
         let context = applyDataSourceEndpointTracing(contextFromCall(call), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "grpc.input", [
-                stringAttribute("stream", this.stream().name),
-                stringAttribute("endpoint", this.endpoint().name)
-            ]);
+            const started = this.#tracer.start(context, "grpc.input", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -363,7 +365,8 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             callback(failure);
@@ -440,7 +443,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
                 this.#pending.delete(streamId);
                 this.endpoint().onPendingRemove(context, streamId);
             }
-            if (failure !== undefined)
+            if (span !== undefined && failure !== undefined)
                 spanError(span, failure);
             try {
                 const ending = this.#handler.endRequest(context, this.#streamContext, failure, state);
@@ -449,7 +452,8 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             try {
                 this.endpoint().onRequestEnd(context, startedAt, failure);
@@ -501,7 +505,8 @@ class GrpcClientStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             callback(failure);
@@ -576,14 +581,15 @@ class GrpcClientStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
                     failure = undefined;
                 this.removePending(context, streamId);
             }
-            if (failure !== undefined)
+            if (span !== undefined && failure !== undefined)
                 spanError(span, failure);
             try {
                 await this.handler.endRequest(context, this.streamContext, failure, state);
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             try {
                 this.endpoint().onRequestEnd(context, startedAt, failure);
@@ -619,7 +625,8 @@ class GrpcServerStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             await sender.close();
@@ -678,14 +685,15 @@ class GrpcServerStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
                     failure = undefined;
                 this.removePending(context, streamId);
             }
-            if (failure !== undefined)
+            if (span !== undefined && failure !== undefined)
                 spanError(span, failure);
             try {
                 await this.handler.endRequest(context, this.streamContext, failure, state);
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             await sender.close();
             try {
@@ -722,7 +730,8 @@ class GrpcBidiStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             await sender.close();
@@ -793,14 +802,15 @@ class GrpcBidiStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
                     failure = undefined;
                 this.removePending(context, streamId);
             }
-            if (failure !== undefined)
+            if (span !== undefined && failure !== undefined)
                 spanError(span, failure);
             try {
                 await this.handler.endRequest(context, this.streamContext, failure, state);
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             await sender.close();
             try {

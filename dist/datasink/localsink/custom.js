@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { DataConnectorType, DataSinkEndpoint, DataSinkEndpointConsumer, FunctionCollector, OutputDataSink, Context, errorFromUnknown, spanError, stringAttribute } from "../../runtime/index.js";
 class CustomSinkEndpoint extends DataSinkEndpoint {
     #binding;
@@ -57,6 +58,7 @@ class CustomEndpointConsumer {
     #stream;
     #handler;
     #resultStream;
+    #traceAttributes;
     #tracer;
     #sinkCallback;
     constructor(endpoint, stream, handler) {
@@ -68,6 +70,7 @@ class CustomEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     endpoint() {
         return this.#base.endpoint();
@@ -87,10 +90,7 @@ class CustomEndpointConsumer {
         const endpoint = this.#base.endpoint();
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "local.output", [
-                stringAttribute("stream", this.#stream.name),
-                stringAttribute("endpoint", endpoint.name)
-            ]);
+            const started = this.#tracer.start(context, "local.output", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -116,7 +116,8 @@ class CustomEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             endpoint.onBeginRequestFailed(context, failure);
             return;
         }
@@ -128,7 +129,8 @@ class CustomEndpointConsumer {
         }
         catch (error) {
             failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("consume_message.error", [stringAttribute("error", failure.message)]);
         }
         finally {
@@ -137,7 +139,8 @@ class CustomEndpointConsumer {
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             finally {
                 endpoint.onRequestEnd(handlerContext, requestStarted, failure);

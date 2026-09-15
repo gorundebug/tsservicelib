@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Client,
   credentials,
@@ -102,7 +103,7 @@ class StreamSender<ReqT> implements Sender<ReqT> {
   public send(_context: MessageContext, request: ReqT): Promise<void> {
     if (!this.#active) {
       const error = new Error("gRPC request stream is closed");
-      spanError(this.#span, error);
+      if (this.#span !== undefined) spanError(this.#span, error);
       this.#span?.addEvent("send.error", [stringAttribute("error", error.message)]);
       return Promise.reject(error);
     }
@@ -114,7 +115,7 @@ class StreamSender<ReqT> implements Sender<ReqT> {
               this.#span?.addEvent("send");
               resolve();
             } else {
-              spanError(this.#span, error);
+              if (this.#span !== undefined) spanError(this.#span, error);
               this.#span?.addEvent("send.error", [stringAttribute("error", error.message)]);
               reject(error);
             }
@@ -364,6 +365,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
   readonly #streamContext: SinkStreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #method: DescMethod;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -385,6 +387,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -394,10 +397,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
   public async consume(context: MessageContext, value: T): Promise<void> {
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "grpc.output", [
-        stringAttribute("stream", this.#base.stream().name),
-        stringAttribute("endpoint", this.endpoint().name)
-      ]);
+      const started = this.#tracer.start(context, "grpc.output", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -410,7 +410,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
       handlerContext = started.context;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       span?.end();
@@ -450,7 +450,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
       span?.addEvent("handle_response");
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
     } finally {
       try {
@@ -463,7 +463,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> implements Co
         if (ending !== undefined) await ending;
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         try {
           this.endpoint().onRequestEnd(handlerContext, startedAt, failure);
@@ -487,6 +487,7 @@ class GrpcServerStreamingEndpointConsumer<
   readonly #streamContext: SinkStreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #method: DescMethod;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -503,6 +504,7 @@ class GrpcServerStreamingEndpointConsumer<
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -510,9 +512,11 @@ class GrpcServerStreamingEndpointConsumer<
   }
 
   public async consume(context: MessageContext, value: T): Promise<void> {
-    const traced = startOutputSpan(context, this.#base, this.#tracer);
-    context = traced.context;
-    const { span } = traced;
+    const traced = this.#tracer !== undefined && context.samplingEnabled()
+      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+      : undefined;
+    context = traced?.context ?? context;
+    const span = traced?.span;
     let state: HandlerState;
     try {
       const started = await this.#handler.beginRequest(context, this.#streamContext);
@@ -520,7 +524,7 @@ class GrpcServerStreamingEndpointConsumer<
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       span?.end();
@@ -559,14 +563,14 @@ class GrpcServerStreamingEndpointConsumer<
       span?.addEvent("eof", [int64Attribute("messages_received", BigInt(messageCount))]);
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
     } finally {
       try {
         await this.#handler.endRequest(context, this.#streamContext, failure, state);
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         try {
           this.endpoint().onRequestEnd(context, startedAt, failure);
@@ -599,6 +603,7 @@ class GrpcClientStreamingEndpointConsumer<
   readonly #streamContext: SinkStreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #method: DescMethod;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   readonly #pending = new Map<string, Promise<ClientStreamingSession<HandlerState, ReqT>>>();
 
@@ -616,6 +621,7 @@ class GrpcClientStreamingEndpointConsumer<
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -649,7 +655,7 @@ class GrpcClientStreamingEndpointConsumer<
         session.span?.addEvent("consume_message");
       } catch (error: unknown) {
         const failure = errorFromUnknown(error);
-        spanError(session.span, failure);
+        if (session.span !== undefined) spanError(session.span, failure);
         session.span?.addEvent("consume_message.error", [
           stringAttribute("error", failure.message)
         ]);
@@ -679,9 +685,11 @@ class GrpcClientStreamingEndpointConsumer<
       this.#pending.delete(streamId);
       throw failure;
     }
-    const traced = startOutputSpan(context, this.#base, this.#tracer);
-    context = traced.context;
-    const { span } = traced;
+    const traced = this.#tracer !== undefined && context.samplingEnabled()
+      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+      : undefined;
+    context = traced?.context ?? context;
+    const span = traced?.span;
     const startedAt = this.endpoint().onRequestStart(context);
     span?.addEvent("begin_request");
     const phase = "grpc_call";
@@ -710,7 +718,7 @@ class GrpcClientStreamingEndpointConsumer<
       return session;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
       this.#pending.delete(streamId);
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
@@ -746,7 +754,7 @@ class GrpcClientStreamingEndpointConsumer<
       span?.addEvent("handle_response");
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
     } finally {
       this.#pending.delete(streamId);
@@ -759,7 +767,7 @@ class GrpcClientStreamingEndpointConsumer<
         );
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         try {
           this.endpoint().onRequestEnd(session.context, startedAt, failure);
@@ -776,6 +784,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
   readonly #streamContext: SinkStreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #method: DescMethod;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   readonly #pending = new Map<string, Promise<ClientStreamingSession<HandlerState, ReqT>>>();
 
@@ -793,6 +802,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -826,7 +836,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
         session.span?.addEvent("consume_message");
       } catch (error: unknown) {
         const failure = errorFromUnknown(error);
-        spanError(session.span, failure);
+        if (session.span !== undefined) spanError(session.span, failure);
         session.span?.addEvent("consume_message.error", [
           stringAttribute("error", failure.message)
         ]);
@@ -856,9 +866,11 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       this.#pending.delete(streamId);
       throw failure;
     }
-    const traced = startOutputSpan(context, this.#base, this.#tracer);
-    context = traced.context;
-    const { span } = traced;
+    const traced = this.#tracer !== undefined && context.samplingEnabled()
+      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+      : undefined;
+    context = traced?.context ?? context;
+    const span = traced?.span;
     const startedAt = this.endpoint().onRequestStart(context);
     span?.addEvent("begin_request");
     const phase = "grpc_call";
@@ -884,7 +896,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       return session;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
       this.#pending.delete(streamId);
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
@@ -914,7 +926,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       span?.addEvent("done_received");
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       call.cancel();
     } finally {
       this.#pending.delete(streamId);
@@ -927,7 +939,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
         );
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         try {
           this.endpoint().onRequestEnd(session.context, startedAt, failure);
@@ -1055,18 +1067,6 @@ function makeSinkContext<T, R, E>(
     new FunctionCollector((context, value: R) => stream.consumeResult(context, value)),
     new FunctionCollector((context, value: E) => stream.errorStream().consume(context, value))
   );
-}
-
-function startOutputSpan<T, R, E>(
-  context: MessageContext,
-  base: DataSinkEndpointConsumerWithResult<T, R, E>,
-  tracer: Tracer | undefined
-): { readonly context: MessageContext; readonly span: Span | undefined } {
-  if (tracer === undefined || !context.samplingEnabled()) return { context, span: undefined };
-  return tracer.start(context, "grpc.output", [
-    stringAttribute("stream", base.stream().name),
-    stringAttribute("endpoint", base.endpoint().name)
-  ]);
 }
 
 function requireGrpcJsDataSink(endpoint: SinkEndpoint): GrpcJsDataSink {

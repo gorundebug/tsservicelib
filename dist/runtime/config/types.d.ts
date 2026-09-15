@@ -31,6 +31,7 @@ export declare function transformationName(type: TransformationType): Transforma
 export interface StreamConfig extends NamedIdentity {
     readonly type: TransformationType;
     readonly pipeline: string;
+    readonly component?: string | undefined;
     readonly idService: number;
     readonly idSource: number;
     readonly idSources: readonly number[];
@@ -349,6 +350,7 @@ export interface FunctionConfigDocument {
 }
 interface StreamConfigDocumentBase extends ConfigDocumentIdentity {
     readonly pipeline: string;
+    readonly component?: string | undefined;
     readonly idService: number;
     readonly idSource?: number | undefined;
     readonly idSources?: readonly number[] | undefined;

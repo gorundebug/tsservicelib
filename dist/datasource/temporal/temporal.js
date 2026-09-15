@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, ScheduleBackend, bindDurableCallSpan, errorFromUnknown, makeScheduleTrigger, makeStreamContext, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
 import { makeTemporalConnector } from "./connector.js";
 class TemporalDataSource extends InputDataSource {
@@ -32,6 +33,7 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
     #handler;
     #streamContext;
     #pending = new Map();
+    #traceAttributes;
     #tracer;
     constructor(endpoint, stream, connector, decode, handler) {
         super(endpoint, stream);
@@ -44,6 +46,7 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
         if (stream.resultStream() !== undefined) {
             stream.setResultConsumer({
                 consume: (context, value) => {
@@ -73,10 +76,7 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
         let span;
         let durableSpan = false;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const startedSpan = this.#tracer.start(context, "temporal.input", [
-                stringAttribute("stream", this.#stream.name),
-                stringAttribute("endpoint", this.#endpoint.name)
-            ]);
+            const startedSpan = this.#tracer.start(context, "temporal.input", this.#traceAttributes);
             context = startedSpan.context;
             span = startedSpan.span;
             durableSpan = bindDurableCallSpan(context, span);
@@ -107,7 +107,8 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
         }
         catch (error) {
             failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             throw failure;
         }
         finally {

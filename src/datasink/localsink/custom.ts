@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   DataConnectorType,
   DataSinkEndpoint,
@@ -121,6 +122,7 @@ class CustomEndpointConsumer<HandlerState, T, R>
   readonly #stream: TypedSinkStream<T, R>;
   readonly #handler: EndpointHandler<HandlerState, T, R>;
   readonly #resultStream: Collector<R>;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   #sinkCallback: SinkCallback<T> | undefined;
 
@@ -139,6 +141,7 @@ class CustomEndpointConsumer<HandlerState, T, R>
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -163,10 +166,7 @@ class CustomEndpointConsumer<HandlerState, T, R>
     const endpoint = this.#base.endpoint();
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "local.output", [
-        stringAttribute("stream", this.#stream.name),
-        stringAttribute("endpoint", endpoint.name)
-      ]);
+      const started = this.#tracer.start(context, "local.output", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -197,7 +197,7 @@ class CustomEndpointConsumer<HandlerState, T, R>
       span?.addEvent("begin_request");
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       endpoint.onBeginRequestFailed(context, failure);
       return;
     }
@@ -215,14 +215,14 @@ class CustomEndpointConsumer<HandlerState, T, R>
       span?.addEvent("consume_message");
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("consume_message.error", [stringAttribute("error", failure.message)]);
     } finally {
       try {
         await this.#handler.endRequest(handlerContext, this.#stream, failure, handlerState);
       } catch (error: unknown) {
         failure ??= errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
       } finally {
         endpoint.onRequestEnd(handlerContext, requestStarted, failure);
       }

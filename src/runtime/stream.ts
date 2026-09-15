@@ -1,7 +1,7 @@
 import type { MessageContext } from "./context.js";
 import { transformationName, type StreamConfig } from "./config/types.js";
 import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
-import { stringAttribute, type StartedSpan, type Tracer } from "./environment/tracing/tracing.js";
+import { stringAttribute, type Attribute, type StartedSpan, type Tracer } from "./environment/tracing/tracing.js";
 import type { StreamSerde } from "./serde/serde.js";
 
 export type Completion = void | Promise<void>;
@@ -65,6 +65,7 @@ export class ServiceStream implements Stream {
   readonly #id: number;
   readonly #environment: RuntimeEnvironment;
   readonly #name: string;
+  readonly #traceAttributes: readonly Attribute[] | undefined;
   readonly #tracer: Tracer | undefined;
   public readonly transformationName: string;
 
@@ -73,6 +74,11 @@ export class ServiceStream implements Stream {
     this.#environment = environment;
     this.#tracer = environment.tracing()?.tracer(environment.serviceConfig().name);
     this.#name = config.name;
+    this.#traceAttributes = this.#tracer === undefined ? undefined : Object.freeze([
+      Object.freeze(stringAttribute("stream", config.name)),
+      Object.freeze(stringAttribute("pipeline", config.pipeline)),
+      Object.freeze(stringAttribute("component", config.component ?? ""))
+    ]);
     this.transformationName = transformationName(config.type);
   }
 
@@ -104,7 +110,7 @@ export class ServiceStream implements Stream {
     if (!this.tracingEnabled(context)) {
       return undefined;
     }
-    return this.#tracer?.start(context, operation, [stringAttribute("stream", this.name)]);
+    return this.#tracer?.start(context, operation, this.#traceAttributes);
   }
 
   protected traceCompletion(
@@ -112,6 +118,9 @@ export class ServiceStream implements Stream {
     operation: string,
     consume: (spanContext: MessageContext) => Completion
   ): Completion {
+    if (!this.tracingEnabled(context)) {
+      return consume(context);
+    }
     const started = this.startSpan(context, operation);
     if (started === undefined) {
       return consume(context);

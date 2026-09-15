@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { Agent as HttpAgent, request as httpRequest } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
@@ -255,6 +256,7 @@ class NodeHttpSinkEndpointConsumer {
     #streamContext;
     #handler;
     #client;
+    #traceAttributes;
     #tracer;
     #tasks = new RuntimeTaskRegistry();
     #started = false;
@@ -268,6 +270,7 @@ class NodeHttpSinkEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     endpoint() {
         return this.#base.endpoint();
@@ -301,10 +304,7 @@ class NodeHttpSinkEndpointConsumer {
     async consumeOnce(context, value) {
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "http.output", [
-                stringAttribute("stream", this.#base.stream().name),
-                stringAttribute("endpoint", this.endpoint().name)
-            ]);
+            const started = this.#tracer.start(context, "http.output", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -317,7 +317,8 @@ class NodeHttpSinkEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             span?.end();
@@ -354,7 +355,8 @@ class NodeHttpSinkEndpointConsumer {
         }
         catch (error) {
             requestError = errorFromUnknown(error);
-            spanError(span, requestError);
+            if (span !== undefined)
+                spanError(span, requestError);
             span?.addEvent(errorEvent, [stringAttribute("error", requestError.message)]);
         }
         finally {

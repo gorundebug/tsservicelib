@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Agent as HttpAgent,
   request as httpRequest,
@@ -392,6 +393,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #client: Client;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   readonly #tasks = new RuntimeTaskRegistry();
   #started = false;
@@ -411,6 +413,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -455,10 +458,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   private async consumeOnce(context: MessageContext, value: T): Promise<void> {
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "http.output", [
-        stringAttribute("stream", this.#base.stream().name),
-        stringAttribute("endpoint", this.endpoint().name)
-      ]);
+      const started = this.#tracer.start(context, "http.output", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -470,7 +470,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       handlerState = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       span?.end();
@@ -523,7 +523,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       span?.addEvent("handle_response");
     } catch (error: unknown) {
       requestError = errorFromUnknown(error);
-      spanError(span, requestError);
+      if (span !== undefined) spanError(span, requestError);
       span?.addEvent(errorEvent, [stringAttribute("error", requestError.message)]);
     } finally {
       if (response !== undefined) {

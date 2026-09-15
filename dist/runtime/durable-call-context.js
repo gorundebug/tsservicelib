@@ -5,6 +5,12 @@ export const DurableCallEvent = {
     Error: "error",
     LateHeartbeat: "late_heartbeat"
 };
+const spanEventNames = {
+    heartbeat: "temporal.activity.heartbeat",
+    success: "temporal.activity.success",
+    error: "temporal.activity.error",
+    late_heartbeat: "temporal.activity.late_heartbeat"
+};
 export class DurableCallContextError extends Error {
 }
 export class DurableCallHeartbeatAfterCompletionError extends DurableCallContextError {
@@ -86,12 +92,11 @@ export class DurableCallContext {
         }
     }
     report(event, error) {
-        const attributes = [];
-        if (error !== undefined)
-            attributes.push(stringAttribute("error", error.message));
-        this.#span?.addEvent(`temporal.activity.${event}`, attributes);
-        if (this.#span !== undefined && event === DurableCallEvent.Error) {
-            spanError(this.#span, error ?? new Error(event));
+        if (this.#span !== undefined) {
+            this.#span.addEvent(spanEventNames[event], error === undefined ? undefined : [stringAttribute("error", error.message)]);
+            if (event === DurableCallEvent.Error) {
+                spanError(this.#span, error ?? new Error(event));
+            }
         }
         this.#diagnostics?.(event, error);
     }

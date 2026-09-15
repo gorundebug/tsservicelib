@@ -1,0 +1,1 @@
+{"version":3,"file":"endpoint-tracing.d.ts","sourceRoot":"","sources":["../../src/runtime/endpoint-tracing.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,aAAa,CAAC;AAC1C,OAAO,EAAmB,KAAK,SAAS,EAAE,MAAM,kCAAkC,CAAC;AAEnF,2FAA2F;AAC3F,wBAAgB,2BAA2B,CAAC,MAAM,EAAE,MAAM,EAAE,YAAY,EAAE,MAAM,GAAG,SAAS,SAAS,EAAE,CAQtG"}

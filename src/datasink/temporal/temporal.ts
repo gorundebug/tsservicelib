@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   DataConnectorType,
   DataSinkEndpoint,
@@ -111,6 +112,7 @@ class DirectTemporalEndpointHandler<T> implements TemporalEndpointHandler<
 }
 
 class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpointConsumer {
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -125,6 +127,7 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, sinkEndpoint.name);
   }
 
   public endpoint(): SinkEndpoint {
@@ -138,10 +141,7 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
   private async consumeTracked(context: MessageContext, value: T): Promise<void> {
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const startedSpan = this.#tracer.start(context, "temporal.output", [
-        stringAttribute("stream", this.stream.name),
-        stringAttribute("endpoint", this.sinkEndpoint.name)
-      ]);
+      const startedSpan = this.#tracer.start(context, "temporal.output", this.#traceAttributes);
       context = startedSpan.context;
       span = startedSpan.span;
     }
@@ -181,7 +181,7 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
       }
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       throw failure;
     } finally {
       if (began) await this.handler.endRequest(context, this.stream, failure, state);

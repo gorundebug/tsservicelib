@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, RotatingMap, RuntimeTaskRegistry, TRACE_SAMPLING_HEADER, boolAttribute, err, errorFromUnknown, makeStreamContext, newStreamId, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
@@ -347,6 +348,7 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
     #tasks = new RuntimeTaskRegistry();
     #pending;
     #waiters = [];
+    #traceAttributes;
     #tracer;
     #active = 0;
     #started = false;
@@ -362,6 +364,7 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     start() {
         if (this.#started)
@@ -428,10 +431,7 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
         context = applyDataSourceEndpointTracing(context.withMetadata(metadata), this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "kafka.input", [
-                stringAttribute("stream", this.stream().name),
-                stringAttribute("endpoint", this.endpoint().name)
-            ]);
+            const started = this.#tracer.start(context, "kafka.input", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -451,7 +451,8 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             return;
@@ -473,7 +474,8 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
             }
             catch (error) {
                 const failure = errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
                 await this.#handler.endRequest(context, this.#streamContext, failure, state);
                 this.endpoint().onRequestEnd(context, startedAt, failure);
                 return;
@@ -509,14 +511,15 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
             this.pending().pop(streamId);
             this.endpoint().onPendingRemove(context, streamId);
         }
-        if (failure !== undefined)
+        if (span !== undefined && failure !== undefined)
             spanError(span, failure);
         try {
             await this.#handler.endRequest(context, this.#streamContext, failure, state);
         }
         catch (error) {
             failure ??= errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
         }
         finally {
             this.endpoint().onRequestEnd(context, startedAt, failure);

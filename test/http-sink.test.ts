@@ -16,6 +16,7 @@ import {
 import { SinkStreamWithResult } from "@gorundebug/tsservicelib/operators";
 import {
   type CanonicalConfig,
+  type Attribute,
   ConsumedStream,
   Context,
   type DataSink,
@@ -31,6 +32,7 @@ import {
   type SinkStreamConfig,
   type StreamConfig,
   type Tracing,
+  type Tracer,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
 import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
@@ -56,6 +58,7 @@ const sinkConfig: SinkStreamConfig = {
   properties: {},
   type: "Sink",
   pipeline: "main",
+  component: "Reserve Inventory",
   idService: 1,
   idSource: 1,
   idSources: [],
@@ -592,6 +595,23 @@ await test("Node HTTP sink records canonical endpoint metrics", async () => {
   }
 });
 
+class AttributeReuseTracing extends TestTracing {
+  readonly transportAttributes: (readonly Attribute[])[] = [];
+
+  public override tracer(name: string): Tracer {
+    const target = super.tracer(name);
+    return {
+      start: (context, operation, attributes) => {
+        if (operation === "http.output") {
+          assert.ok(attributes);
+          this.transportAttributes.push(attributes);
+        }
+        return target.start(context, operation, attributes);
+      }
+    };
+  }
+}
+
 await test("Node HTTP sink creates spans only for sampled messages", async () => {
   const server = createServer((request, response) => {
     void requestText(request).then((body) => {
@@ -600,7 +620,7 @@ await test("Node HTTP sink creates spans only for sampled messages", async () =>
     });
   });
   await listen(server);
-  const tracing = new TestTracing();
+  const tracing = new AttributeReuseTracing();
   const handler = new TestHandler(serverUrl(server));
   const harness = makeSinkHarness(handler, new NodeHttpClient(), undefined, tracing);
   await harness.dataSink.start(Context.background());
@@ -623,7 +643,14 @@ await test("Node HTTP sink creates spans only for sampled messages", async () =>
     );
     assert.equal(traceAttribute(span.attributes, "stream"), "inventoryCall");
     assert.equal(traceAttribute(span.attributes, "endpoint"), "processOrderItem");
+    assert.equal(traceAttribute(span.attributes, "pipeline"), "main");
+    assert.equal(traceAttribute(span.attributes, "component"), "Reserve Inventory");
     assert.equal(traceAttribute(span.events[2]?.attributes ?? [], "status_code"), 200n);
+    await harness.source.emit(new MessageContext().withSampling(true), "traced-again");
+    assert.equal(tracing.transportAttributes.length, 2);
+    assert.strictEqual(tracing.transportAttributes[0], tracing.transportAttributes[1]);
+    assert.ok(Object.isFrozen(tracing.transportAttributes[0]));
+    assert.ok(tracing.transportAttributes[0]?.every(Object.isFrozen));
   } finally {
     await harness.dataSink.stop(Context.background());
     await close(server);

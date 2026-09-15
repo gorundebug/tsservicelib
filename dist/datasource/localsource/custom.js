@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, RotatingMap, RuntimeTaskRegistry, err, errorFromUnknown, makeStreamContext, newStreamId, spanError, str, stringAttribute } from "../../runtime/index.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
 class CustomResult {
@@ -153,6 +154,7 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
     #handler;
     #tasks = new RuntimeTaskRegistry();
     #waiters = [];
+    #traceAttributes;
     #tracer;
     #pending;
     #active = 0;
@@ -171,6 +173,7 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     start(context) {
         if (this.#started) {
@@ -221,10 +224,7 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
         context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "local.input", [
-                stringAttribute("stream", this.stream().name),
-                stringAttribute("endpoint", this.endpoint().name)
-            ]);
+            const started = this.#tracer.start(context, "local.input", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -244,7 +244,8 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             this.endpoint().onBeginRequestFailed(context, failure);
             return;
@@ -262,7 +263,8 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
             }
             catch (error) {
                 const failure = errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
                 await this.#handler.endRequest(context, this.#streamContext, failure, state);
                 this.endpoint().onRequestEnd(context, startedAt, failure);
                 return;
@@ -298,7 +300,8 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
             this.endpoint().onPendingRemove(context, streamId);
         }
         if (failure !== undefined) {
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             if (context.cancelled()) {
                 span?.addEvent("context_cancelled", [stringAttribute("error", failure.message)]);
             }
@@ -308,7 +311,8 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
         }
         catch (error) {
             failure ??= errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
         }
         finally {
             this.endpoint().onRequestEnd(context, startedAt, failure);

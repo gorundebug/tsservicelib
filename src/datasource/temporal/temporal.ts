@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
   DataConnectorType,
@@ -107,6 +108,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
   readonly #handler: TemporalEndpointHandler<State, Input, T, R, E>;
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #pending = new Map<string, PendingResult<R>>();
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -131,6 +133,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     if (stream.resultStream() !== undefined) {
       stream.setResultConsumer({
         consume: (context, value) => {
@@ -170,10 +173,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
     let span: Span | undefined;
     let durableSpan = false;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const startedSpan = this.#tracer.start(context, "temporal.input", [
-        stringAttribute("stream", this.#stream.name),
-        stringAttribute("endpoint", this.#endpoint.name)
-      ]);
+      const startedSpan = this.#tracer.start(context, "temporal.input", this.#traceAttributes);
       context = startedSpan.context;
       span = startedSpan.span;
       durableSpan = bindDurableCallSpan(context, span);
@@ -207,7 +207,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       return { payload: resultStream.serde().serialize(value) };
     } catch (error: unknown) {
       failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       throw failure;
     } finally {
       if (pending !== undefined) {

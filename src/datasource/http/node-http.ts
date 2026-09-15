@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import {
@@ -383,6 +384,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>;
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #hasResult: boolean;
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   readonly #tasks = new RuntimeTaskRegistry();
   #pending: RotatingMap<string, HttpResult<HandlerState, ReqT, ResR, T, R, E>> | undefined;
@@ -407,6 +409,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     if (this.#hasResult) {
       stream.setResultConsumer({
         consume: (context, value) => this.consumeResult(context, value)
@@ -491,8 +494,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "http.input", [
-        stringAttribute("stream", this.stream().name),
-        stringAttribute("endpoint", this.endpoint().name),
+        ...this.#traceAttributes,
         stringAttribute("method", request.method ?? ""),
         stringAttribute("path", requestPath(request))
       ]);
@@ -506,7 +508,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       try {
@@ -565,7 +567,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
         this.endpoint().onPendingRemove(context, streamId);
       }
       if (requestError !== undefined) {
-        spanError(span, requestError);
+        if (span !== undefined) spanError(span, requestError);
         if (context.cancelled()) {
           span?.addEvent("context_cancelled", [stringAttribute("error", requestError.message)]);
         }

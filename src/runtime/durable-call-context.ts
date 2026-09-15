@@ -14,6 +14,12 @@ export const DurableCallEvent = {
 } as const;
 
 export type DurableCallEvent = (typeof DurableCallEvent)[keyof typeof DurableCallEvent];
+const spanEventNames: Readonly<Record<DurableCallEvent, string>> = {
+  heartbeat: "temporal.activity.heartbeat",
+  success: "temporal.activity.success",
+  error: "temporal.activity.error",
+  late_heartbeat: "temporal.activity.late_heartbeat"
+};
 export type DurableCallDiagnostics = (event: DurableCallEvent, error?: Error) => void;
 export type DurableCallHeartbeatRecorder = (message: unknown) => void;
 export type DurableCallTimer = (delayMs: number) => Promise<void>;
@@ -108,11 +114,14 @@ export class DurableCallContext {
   }
 
   private report(event: DurableCallEvent, error?: Error): void {
-    const attributes: ReturnType<typeof stringAttribute>[] = [];
-    if (error !== undefined) attributes.push(stringAttribute("error", error.message));
-    this.#span?.addEvent(`temporal.activity.${event}`, attributes);
-    if (this.#span !== undefined && event === DurableCallEvent.Error) {
-      spanError(this.#span, error ?? new Error(event));
+    if (this.#span !== undefined) {
+      this.#span.addEvent(
+        spanEventNames[event],
+        error === undefined ? undefined : [stringAttribute("error", error.message)]
+      );
+      if (event === DurableCallEvent.Error) {
+        spanError(this.#span, error ?? new Error(event));
+      }
     }
     this.#diagnostics?.(event, error);
   }

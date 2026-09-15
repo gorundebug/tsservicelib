@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 import { DataSinkEndpoint, DataSinkEndpointConsumer, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
@@ -305,6 +306,7 @@ class KafkaEndpointConsumer {
     #stream;
     #handler;
     #partitioner;
+    #traceAttributes;
     #tracer;
     constructor(endpoint, stream, handler, partitioner) {
         this.#base = new DataSinkEndpointConsumer(endpoint, stream);
@@ -315,6 +317,7 @@ class KafkaEndpointConsumer {
             .runtimeEnvironment()
             .tracing()
             ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     endpoint() {
         return this.#base.endpoint();
@@ -333,10 +336,7 @@ class KafkaEndpointConsumer {
             return;
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
-            const started = this.#tracer.start(context, "kafka.output", [
-                stringAttribute("stream", this.#stream.name),
-                stringAttribute("endpoint", endpoint.name)
-            ]);
+            const started = this.#tracer.start(context, "kafka.output", this.#traceAttributes);
             context = started.context;
             span = started.span;
         }
@@ -360,7 +360,8 @@ class KafkaEndpointConsumer {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
             endpoint.onBeginRequestFailed(context, failure);
             return;
@@ -381,7 +382,8 @@ class KafkaEndpointConsumer {
         }
         catch (error) {
             failure = errorFromUnknown(error);
-            spanError(span, failure);
+            if (span !== undefined)
+                spanError(span, failure);
             span?.addEvent("consume_message.error", [stringAttribute("error", failure.message)]);
         }
         finally {
@@ -390,7 +392,8 @@ class KafkaEndpointConsumer {
             }
             catch (error) {
                 failure ??= errorFromUnknown(error);
-                spanError(span, failure);
+                if (span !== undefined)
+                    spanError(span, failure);
             }
             finally {
                 endpoint.onRequestEnd(handlerContext, requestStarted, failure);

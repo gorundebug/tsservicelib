@@ -52,6 +52,7 @@ interface RecordValue extends Record<string, unknown> {
   readonly functionModule?: unknown;
   readonly type?: unknown;
   readonly pipeline?: unknown;
+  readonly component?: unknown;
   readonly idService?: unknown;
   readonly idSource?: unknown;
   readonly idSources?: unknown;
@@ -390,6 +391,7 @@ const streamKeys = new Set([
   ...identityKeys,
   "type",
   "pipeline",
+  "component",
   "idService",
   "idSource",
   "idSources",
@@ -432,6 +434,7 @@ function parseStream(source: RecordValue, path: string): AnyStreamConfig {
     ...identity(source, path),
     type,
     pipeline: stringValue(source.pipeline, `${path}.pipeline`),
+    component: optionalString(source.component, `${path}.component`),
     idService: integer(source.idService, `${path}.idService`),
     idSource: optionalInteger(source.idSource, `${path}.idSource`) ?? 0,
     idSources: integerArray(source.idSources, `${path}.idSources`),
@@ -743,7 +746,8 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
       maxConcurrentActivities:
         optionalInteger(source.maxConcurrentActivities, `${path}.maxConcurrentActivities`) ?? 0,
       maxConcurrentWorkflowTasks:
-        optionalInteger(source.maxConcurrentWorkflowTasks, `${path}.maxConcurrentWorkflowTasks`) ?? 0,
+        optionalInteger(source.maxConcurrentWorkflowTasks, `${path}.maxConcurrentWorkflowTasks`) ??
+        0,
       schedule: optionalString(source.schedule, `${path}.schedule`) ?? "",
       scheduleId: optionalString(source.scheduleId, `${path}.scheduleId`) ?? "",
       timezone: optionalString(source.timezone, `${path}.timezone`) ?? "UTC",

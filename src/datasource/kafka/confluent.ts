@@ -1,3 +1,4 @@
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 
 import type { KafkaJS } from "@confluentinc/kafka-javascript";
@@ -533,6 +534,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
   readonly #tasks = new RuntimeTaskRegistry();
   #pending: RotatingMap<string, KafkaResult<HandlerState, T, R, E>> | undefined;
   readonly #waiters: (() => void)[] = [];
+  readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
   #active = 0;
   #started = false;
@@ -558,6 +560,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       .runtimeEnvironment()
       .tracing()
       ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
   public start(): Promise<void> {
@@ -636,10 +639,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     );
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
-      const started = this.#tracer.start(context, "kafka.input", [
-        stringAttribute("stream", this.stream().name),
-        stringAttribute("endpoint", this.endpoint().name)
-      ]);
+      const started = this.#tracer.start(context, "kafka.input", this.#traceAttributes);
       context = started.context;
       span = started.span;
     }
@@ -663,7 +663,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
       return;
@@ -684,7 +684,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
         this.endpoint().onPendingAdd(context, streamId);
       } catch (error: unknown) {
         const failure = errorFromUnknown(error);
-        spanError(span, failure);
+        if (span !== undefined) spanError(span, failure);
         await this.#handler.endRequest(context, this.#streamContext, failure, state);
         this.endpoint().onRequestEnd(context, startedAt, failure);
         return;
@@ -721,12 +721,12 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       this.pending().pop(streamId);
       this.endpoint().onPendingRemove(context, streamId);
     }
-    if (failure !== undefined) spanError(span, failure);
+    if (span !== undefined && failure !== undefined) spanError(span, failure);
     try {
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
     } catch (error: unknown) {
       failure ??= errorFromUnknown(error);
-      spanError(span, failure);
+      if (span !== undefined) spanError(span, failure);
     } finally {
       this.endpoint().onRequestEnd(context, startedAt, failure);
     }

@@ -23,6 +23,7 @@ export class ServiceStream {
     #id;
     #environment;
     #name;
+    #traceAttributes;
     #tracer;
     transformationName;
     constructor(config, environment) {
@@ -30,6 +31,11 @@ export class ServiceStream {
         this.#environment = environment;
         this.#tracer = environment.tracing()?.tracer(environment.serviceConfig().name);
         this.#name = config.name;
+        this.#traceAttributes = this.#tracer === undefined ? undefined : Object.freeze([
+            Object.freeze(stringAttribute("stream", config.name)),
+            Object.freeze(stringAttribute("pipeline", config.pipeline)),
+            Object.freeze(stringAttribute("component", config.component ?? ""))
+        ]);
         this.transformationName = transformationName(config.type);
     }
     get id() {
@@ -55,9 +61,12 @@ export class ServiceStream {
         if (!this.tracingEnabled(context)) {
             return undefined;
         }
-        return this.#tracer?.start(context, operation, [stringAttribute("stream", this.name)]);
+        return this.#tracer?.start(context, operation, this.#traceAttributes);
     }
     traceCompletion(context, operation, consume) {
+        if (!this.tracingEnabled(context)) {
+            return consume(context);
+        }
         const started = this.startSpan(context, operation);
         if (started === undefined) {
             return consume(context);

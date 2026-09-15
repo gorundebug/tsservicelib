@@ -15,7 +15,9 @@ export class DelayStream extends ConsumedStream {
         return this.#function;
     }
     async consume(context, value) {
-        const started = this.startSpan(context, "stream.delay");
+        const started = this.tracingEnabled(context)
+            ? this.startSpan(context, "stream.delay")
+            : undefined;
         const spanContext = started?.context ?? context;
         let duration;
         try {
@@ -40,7 +42,8 @@ export class DelayStream extends ConsumedStream {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(started?.span, failure);
+            if (started !== undefined)
+                spanError(started.span, failure);
             try {
                 await this.#function.delayError(spanContext, this, value, failure, this);
             }
@@ -76,7 +79,8 @@ export class DelayStream extends ConsumedStream {
         }
         catch (error) {
             const failure = errorFromUnknown(error);
-            spanError(started?.span, failure);
+            if (started !== undefined)
+                spanError(started.span, failure);
             try {
                 await this.#function.delayError(spanContext, this, value, failure, this);
             }

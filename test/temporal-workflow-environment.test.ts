@@ -111,7 +111,9 @@ await test("Workflow environment executes the ordinary graph through configured 
     metrics.counterValue("stream_messages_total", {
       service: "workflow-service",
       from: "source",
-      to: "target"
+      to: "target",
+      pipeline: targetConfig.pipeline,
+      component: targetConfig.component ?? ""
     }),
     1
   );
