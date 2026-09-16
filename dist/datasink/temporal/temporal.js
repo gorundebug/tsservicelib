@@ -148,14 +148,16 @@ function makeSinkConsumer(stream, handler, withResult) {
     }
     const connector = makeTemporalConnector(endpointConfig.idDataConnector, environment);
     const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment);
-    if (dataSink.endpoint(endpointConfig.id) !== undefined) {
-        throw new Error(`Temporal endpoint ${endpointConfig.name} already exists`);
+    const existing = dataSink.endpoint(endpointConfig.id);
+    if (existing !== undefined && !(existing instanceof DataSinkEndpoint)) {
+        throw new Error(`Temporal endpoint ${endpointConfig.name} has an invalid runtime type`);
     }
-    const endpoint = new DataSinkEndpoint(dataSink, endpointConfig.id);
+    const endpoint = existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id);
     const consumer = new TemporalSinkConsumer(endpoint, dataSink, connector, stream, handler, withResult);
     connector.registerEndpointSubmission(endpointConfig.id);
     endpoint.addEndpointConsumer(consumer);
-    dataSink.addEndpoint(endpoint);
+    if (existing === undefined)
+        dataSink.addEndpoint(endpoint);
     stream.setSinkConsumer(consumer);
     return consumer;
 }

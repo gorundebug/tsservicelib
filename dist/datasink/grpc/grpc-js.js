@@ -733,12 +733,14 @@ export function makeGrpcNoStreamingEndpointConsumer(stream, service, method, han
     const environment = stream.runtimeEnvironment();
     const endpointConfig = requireGrpcEndpointConfig(environment.runtimeConfig().endpointById(stream.endpointId()));
     const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, service);
-    if (dataSink.endpoint(endpointConfig.id) !== undefined)
-        throw new Error(`endpoint ${endpointConfig.name} already exists`);
-    const endpoint = new DataSinkEndpoint(dataSink, endpointConfig.id);
+    const existing = dataSink.endpoint(endpointConfig.id);
+    if (existing !== undefined && !(existing instanceof DataSinkEndpoint))
+        throw new Error(`endpoint ${endpointConfig.name} is not a gRPC sink endpoint`);
+    const endpoint = existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id);
     const consumer = new GrpcUnaryEndpointConsumer(endpoint, stream, method, handler);
     endpoint.addEndpointConsumer(consumer);
-    dataSink.addEndpoint(endpoint);
+    if (existing === undefined)
+        dataSink.addEndpoint(endpoint);
     stream.setSinkConsumer(consumer);
     return consumer;
 }
@@ -770,13 +772,15 @@ function createSinkEndpoint(stream, service) {
     const environment = stream.runtimeEnvironment();
     const endpointConfig = requireGrpcEndpointConfig(environment.runtimeConfig().endpointById(stream.endpointId()));
     const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, service);
-    if (dataSink.endpoint(endpointConfig.id) !== undefined)
-        throw new Error(`endpoint ${endpointConfig.name} already exists`);
-    return [dataSink, new DataSinkEndpoint(dataSink, endpointConfig.id)];
+    const existing = dataSink.endpoint(endpointConfig.id);
+    if (existing !== undefined && !(existing instanceof DataSinkEndpoint))
+        throw new Error(`endpoint ${endpointConfig.name} is not a gRPC sink endpoint`);
+    return [dataSink, existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id)];
 }
 function bindSinkEndpoint(dataSink, endpoint, stream, consumer) {
     endpoint.addEndpointConsumer(consumer);
-    dataSink.addEndpoint(endpoint);
+    if (dataSink.endpoint(endpoint.id) === undefined)
+        dataSink.addEndpoint(endpoint);
     stream.setSinkConsumer(consumer);
 }
 function makeSinkContext(stream) {

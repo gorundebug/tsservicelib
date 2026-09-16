@@ -188,7 +188,50 @@ await test("custom sink reports handler failure to EndRequest and callback", asy
   assert.deepEqual(harness.results.values, []);
 });
 
-await test("custom sink rejects duplicate endpoint binding", () => {
-  const harness = makeHarness();
-  assert.throws(() => makeCustomEndpointConsumer(harness.sink, harness.handler), /already exists/);
+await test("custom sink shares one endpoint between independent sink streams", async () => {
+  const secondSinkConfig: SinkStreamConfig = {
+    ...sinkConfig,
+    id: 4,
+    name: "secondCustomSink",
+    idSource: 5
+  };
+  const secondSourceConfig: StreamConfig = {
+    ...sourceConfig,
+    id: 5,
+    name: "secondSource"
+  };
+  const environment = makeTestEnvironment(
+    [sourceConfig, sinkConfig, resultConfig, secondSinkConfig, secondSourceConfig],
+    { dataConnectors: [connectorConfig], endpoints: [endpointConfig] }
+  );
+  environment.serdeRegistry().registerStreamErrorType(sinkConfig.id, errorSerdeType);
+  environment.serdeRegistry().registerStreamErrorType(secondSinkConfig.id, errorSerdeType);
+  const source = new ConsumedStream(sourceConfig, environment, environment.serde(stringSerdeType));
+  const secondSource = new ConsumedStream(
+    secondSourceConfig,
+    environment,
+    environment.serde(stringSerdeType)
+  );
+  const first = makeSinkStream(sinkConfig, source);
+  const second = makeSinkStream(secondSinkConfig, secondSource);
+  const firstHandler = new Handler();
+  const secondHandler = new Handler();
+
+  makeCustomEndpointConsumer(first, firstHandler);
+  makeCustomEndpointConsumer(second, secondHandler);
+
+  const dataSink = environment.dataSinkById(connectorConfig.id);
+  assert.ok(dataSink);
+  const endpoint = dataSink.endpoint(endpointConfig.id);
+  assert.ok(endpoint);
+  assert.equal(dataSink.endpoints().length, 1);
+  assert.equal(endpoint.endpointConsumers().length, 2);
+
+  await dataSink.start(Context.background());
+  await first.consume(new MessageContext(), "first");
+  await second.consume(new MessageContext(), "second");
+  await dataSink.stop(Context.background());
+
+  assert.deepEqual(firstHandler.events, ["begin", "consume:stream-first:first", "end"]);
+  assert.deepEqual(secondHandler.events, ["begin", "consume:stream-second:second", "end"]);
 });

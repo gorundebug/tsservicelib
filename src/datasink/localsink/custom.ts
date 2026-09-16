@@ -56,22 +56,19 @@ interface CustomEndpointConsumerContract<T> extends Consumer<T> {
 }
 
 class CustomSinkEndpoint<T> extends DataSinkEndpoint {
-  #binding: CustomEndpointConsumerContract<T> | undefined;
+  readonly #bindings: CustomEndpointConsumerContract<T>[] = [];
 
   public bind(binding: CustomEndpointConsumerContract<T>): void {
-    if (this.#binding !== undefined) {
-      throw new Error(`consumer already assigned to custom endpoint ${this.name}`);
-    }
-    this.#binding = binding;
+    this.#bindings.push(binding);
     this.addEndpointConsumer(binding);
   }
 
   public async start(context: Context): Promise<void> {
-    await this.#binding?.start(context);
+    for (const binding of this.#bindings) await binding.start(context);
   }
 
   public async stop(context: Context): Promise<void> {
-    await this.#binding?.stop(context);
+    await Promise.all(this.#bindings.map(async (binding) => binding.stop(context)));
   }
 }
 
@@ -255,13 +252,17 @@ export function makeCustomEndpointConsumer<HandlerState, T, R>(
     throw new Error(`data sink ${connectorConfig.name} is not custom`);
   }
   if (existing === undefined) environment.addDataSink(dataSink);
-  if (dataSink.endpoint(endpointConfig.id) !== undefined) {
-    throw new Error(`endpoint ${endpointConfig.name} already exists`);
+  const existingEndpoint = dataSink.endpoint(endpointConfig.id);
+  if (existingEndpoint !== undefined && !(existingEndpoint instanceof CustomSinkEndpoint)) {
+    throw new Error(`endpoint ${endpointConfig.name} is not a custom sink endpoint`);
   }
-  const endpoint = new CustomSinkEndpoint<T>(dataSink, endpointConfig.id);
+  const endpoint =
+    existingEndpoint === undefined
+      ? new CustomSinkEndpoint<T>(dataSink, endpointConfig.id)
+      : (existingEndpoint as CustomSinkEndpoint<T>);
   const consumer = new CustomEndpointConsumer(endpoint, stream, handler);
   endpoint.bind(consumer);
-  dataSink.addEndpoint(endpoint);
+  if (existingEndpoint === undefined) dataSink.addEndpoint(endpoint);
   stream.setSinkConsumer(consumer);
   return consumer;
 }

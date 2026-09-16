@@ -512,9 +512,10 @@ class GrpcServerStreamingEndpointConsumer<
   }
 
   public async consume(context: MessageContext, value: T): Promise<void> {
-    const traced = this.#tracer !== undefined && context.samplingEnabled()
-      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
-      : undefined;
+    const traced =
+      this.#tracer !== undefined && context.samplingEnabled()
+        ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+        : undefined;
     context = traced?.context ?? context;
     const span = traced?.span;
     let state: HandlerState;
@@ -685,9 +686,10 @@ class GrpcClientStreamingEndpointConsumer<
       this.#pending.delete(streamId);
       throw failure;
     }
-    const traced = this.#tracer !== undefined && context.samplingEnabled()
-      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
-      : undefined;
+    const traced =
+      this.#tracer !== undefined && context.samplingEnabled()
+        ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+        : undefined;
     context = traced?.context ?? context;
     const span = traced?.span;
     const startedAt = this.endpoint().onRequestStart(context);
@@ -866,9 +868,10 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       this.#pending.delete(streamId);
       throw failure;
     }
-    const traced = this.#tracer !== undefined && context.samplingEnabled()
-      ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
-      : undefined;
+    const traced =
+      this.#tracer !== undefined && context.samplingEnabled()
+        ? this.#tracer.start(context, "grpc.output", this.#traceAttributes)
+        : undefined;
     context = traced?.context ?? context;
     const span = traced?.span;
     const startedAt = this.endpoint().onRequestStart(context);
@@ -981,12 +984,13 @@ export function makeGrpcNoStreamingEndpointConsumer<HandlerState, ReqT, ResR, T,
     environment.runtimeConfig().endpointById(stream.endpointId())
   );
   const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, service);
-  if (dataSink.endpoint(endpointConfig.id) !== undefined)
-    throw new Error(`endpoint ${endpointConfig.name} already exists`);
-  const endpoint = new DataSinkEndpoint(dataSink, endpointConfig.id);
+  const existing = dataSink.endpoint(endpointConfig.id);
+  if (existing !== undefined && !(existing instanceof DataSinkEndpoint))
+    throw new Error(`endpoint ${endpointConfig.name} is not a gRPC sink endpoint`);
+  const endpoint = existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id);
   const consumer = new GrpcUnaryEndpointConsumer(endpoint, stream, method, handler);
   endpoint.addEndpointConsumer(consumer);
-  dataSink.addEndpoint(endpoint);
+  if (existing === undefined) dataSink.addEndpoint(endpoint);
   stream.setSinkConsumer(consumer);
   return consumer;
 }
@@ -1042,9 +1046,10 @@ function createSinkEndpoint<T, R, E>(
     environment.runtimeConfig().endpointById(stream.endpointId())
   );
   const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, service);
-  if (dataSink.endpoint(endpointConfig.id) !== undefined)
-    throw new Error(`endpoint ${endpointConfig.name} already exists`);
-  return [dataSink, new DataSinkEndpoint(dataSink, endpointConfig.id)];
+  const existing = dataSink.endpoint(endpointConfig.id);
+  if (existing !== undefined && !(existing instanceof DataSinkEndpoint))
+    throw new Error(`endpoint ${endpointConfig.name} is not a gRPC sink endpoint`);
+  return [dataSink, existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id)];
 }
 
 function bindSinkEndpoint<T, R, E>(
@@ -1054,7 +1059,7 @@ function bindSinkEndpoint<T, R, E>(
   consumer: Consumer<T> & { endpoint(): SinkEndpoint }
 ): void {
   endpoint.addEndpointConsumer(consumer);
-  dataSink.addEndpoint(endpoint);
+  if (dataSink.endpoint(endpoint.id) === undefined) dataSink.addEndpoint(endpoint);
   stream.setSinkConsumer(consumer);
 }
 

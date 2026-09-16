@@ -1,19 +1,17 @@
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { DataConnectorType, DataSinkEndpoint, DataSinkEndpointConsumer, FunctionCollector, OutputDataSink, Context, errorFromUnknown, spanError, stringAttribute } from "../../runtime/index.js";
 class CustomSinkEndpoint extends DataSinkEndpoint {
-    #binding;
+    #bindings = [];
     bind(binding) {
-        if (this.#binding !== undefined) {
-            throw new Error(`consumer already assigned to custom endpoint ${this.name}`);
-        }
-        this.#binding = binding;
+        this.#bindings.push(binding);
         this.addEndpointConsumer(binding);
     }
     async start(context) {
-        await this.#binding?.start(context);
+        for (const binding of this.#bindings)
+            await binding.start(context);
     }
     async stop(context) {
-        await this.#binding?.stop(context);
+        await Promise.all(this.#bindings.map(async (binding) => binding.stop(context)));
     }
 }
 export class CustomDataSink extends OutputDataSink {
@@ -171,13 +169,17 @@ export function makeCustomEndpointConsumer(stream, handler) {
     }
     if (existing === undefined)
         environment.addDataSink(dataSink);
-    if (dataSink.endpoint(endpointConfig.id) !== undefined) {
-        throw new Error(`endpoint ${endpointConfig.name} already exists`);
+    const existingEndpoint = dataSink.endpoint(endpointConfig.id);
+    if (existingEndpoint !== undefined && !(existingEndpoint instanceof CustomSinkEndpoint)) {
+        throw new Error(`endpoint ${endpointConfig.name} is not a custom sink endpoint`);
     }
-    const endpoint = new CustomSinkEndpoint(dataSink, endpointConfig.id);
+    const endpoint = existingEndpoint === undefined
+        ? new CustomSinkEndpoint(dataSink, endpointConfig.id)
+        : existingEndpoint;
     const consumer = new CustomEndpointConsumer(endpoint, stream, handler);
     endpoint.bind(consumer);
-    dataSink.addEndpoint(endpoint);
+    if (existingEndpoint === undefined)
+        dataSink.addEndpoint(endpoint);
     stream.setSinkConsumer(consumer);
     return consumer;
 }

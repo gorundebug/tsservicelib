@@ -228,7 +228,7 @@ class KafkaSinkEndpoint extends DataSinkEndpoint {
   readonly createTopic: boolean;
   #active = false;
   #partitionCount = 1;
-  #binding: KafkaSinkEndpointConsumerContract | undefined;
+  readonly #bindings: KafkaSinkEndpointConsumerContract[] = [];
 
   public constructor(dataSink: KafkaDataSink, endpointId: number) {
     super(dataSink, endpointId);
@@ -263,10 +263,7 @@ class KafkaSinkEndpoint extends DataSinkEndpoint {
   }
 
   public bind(binding: KafkaSinkEndpointConsumerContract): void {
-    if (this.#binding !== undefined) {
-      throw new Error(`consumer already assigned to Kafka endpoint ${this.name}`);
-    }
-    this.#binding = binding;
+    this.#bindings.push(binding);
     this.addEndpointConsumer(binding);
   }
 
@@ -275,13 +272,13 @@ class KafkaSinkEndpoint extends DataSinkEndpoint {
       this.#active = false;
       return;
     }
-    await this.#binding?.start(context);
+    for (const binding of this.#bindings) await binding.start(context);
     this.#active = true;
   }
 
   public async stop(context: Context): Promise<void> {
     this.#active = false;
-    await this.#binding?.stop(context);
+    await Promise.all(this.#bindings.map(async (binding) => binding.stop(context)));
   }
 }
 
@@ -612,13 +609,14 @@ export function makeKafkaEndpointConsumer<HandlerState, T, R>(
     ? requirePartitioner(handler, endpointConfig.name)
     : undefined;
   const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, factory);
-  if (dataSink.endpoint(endpointConfig.id) !== undefined) {
-    throw new Error(`endpoint ${endpointConfig.name} already exists`);
+  const existing = dataSink.endpoint(endpointConfig.id);
+  if (existing !== undefined && !(existing instanceof KafkaSinkEndpoint)) {
+    throw new Error(`endpoint ${endpointConfig.name} is not a Kafka sink endpoint`);
   }
-  const endpoint = new KafkaSinkEndpoint(dataSink, endpointConfig.id);
+  const endpoint = existing ?? new KafkaSinkEndpoint(dataSink, endpointConfig.id);
   const consumer = new KafkaEndpointConsumer(endpoint, stream, handler, partitioner);
   endpoint.bind(consumer);
-  dataSink.addEndpoint(endpoint);
+  if (existing === undefined) dataSink.addEndpoint(endpoint);
   stream.setSinkConsumer(consumer);
   return consumer;
 }

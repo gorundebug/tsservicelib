@@ -185,19 +185,17 @@ export class StreamContext extends SinkStreamContext {
     }
 }
 class NodeHttpSinkEndpoint extends DataSinkEndpoint {
-    #consumer;
+    #consumers = [];
     bindConsumer(consumer) {
-        if (this.#consumer !== undefined) {
-            throw new Error(`consumer already assigned to HTTP sink endpoint ${this.name}`);
-        }
-        this.#consumer = consumer;
+        this.#consumers.push(consumer);
         this.addEndpointConsumer(consumer);
     }
-    start(context) {
-        return this.#consumer?.start(context) ?? Promise.resolve();
+    async start(context) {
+        for (const consumer of this.#consumers)
+            await consumer.start(context);
     }
-    stop(context) {
-        return this.#consumer?.stop(context) ?? Promise.resolve();
+    async stop(context) {
+        await Promise.all(this.#consumers.map(async (consumer) => consumer.stop(context)));
     }
 }
 export class NodeHttpDataSink extends OutputDataSink {
@@ -386,13 +384,15 @@ export function makeNodeHttpEndpointConsumer(stream, client, handler) {
     const environment = stream.runtimeEnvironment();
     const endpointConfig = requireHttpEndpointConfig(environment.runtimeConfig().endpointById(stream.endpointId()));
     const dataSink = getOrCreateDataSink(endpointConfig.idDataConnector, environment, client);
-    if (dataSink.endpoint(endpointConfig.id) !== undefined) {
-        throw new Error(`endpoint ${endpointConfig.name} already exists`);
+    const existing = dataSink.endpoint(endpointConfig.id);
+    if (existing !== undefined && !(existing instanceof NodeHttpSinkEndpoint)) {
+        throw new Error(`endpoint ${endpointConfig.name} is not a Node HTTP sink endpoint`);
     }
-    const endpoint = new NodeHttpSinkEndpoint(dataSink, endpointConfig.id);
+    const endpoint = existing ?? new NodeHttpSinkEndpoint(dataSink, endpointConfig.id);
     const consumer = new NodeHttpSinkEndpointConsumer(endpoint, stream, client, handler);
     endpoint.bindConsumer(consumer);
-    dataSink.addEndpoint(endpoint);
+    if (existing === undefined)
+        dataSink.addEndpoint(endpoint);
     stream.setSinkConsumer(consumer);
     return consumer;
 }
