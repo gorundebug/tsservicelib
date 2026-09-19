@@ -1,6 +1,8 @@
-import type { CaseStreamConfig, CycleLinkStreamConfig, DelayStreamConfig, FilterStreamConfig, FlatMapIterableStreamConfig, FlatMapStreamConfig, InputStreamConfig, JoinStreamConfig, KeyByStreamConfig, MapStreamConfig, MergeStreamConfig, MultiJoinStreamConfig, ProcessStreamConfig, SinkStreamConfig, SplitStreamConfig, StreamConfig, WhenStreamConfig } from "./types.js";
+import type { CaseStreamConfig, CycleLinkStreamConfig, DelayStreamConfig, FilterStreamConfig, FlatMapIterableStreamConfig, FlatMapStreamConfig, InputStreamConfig, SubStreamConfig, JoinStreamConfig, KeyByStreamConfig, MapStreamConfig, MergeStreamConfig, MultiJoinStreamConfig, ProcessStreamConfig, SinkStreamConfig, SplitStreamConfig, StreamConfig, WhenStreamConfig } from "./types.js";
 export declare function isInputStreamConfig(value: StreamConfig): value is InputStreamConfig;
 export declare function requireInputStreamConfig(value: StreamConfig | undefined): InputStreamConfig;
+export declare function isSubStreamConfig(value: StreamConfig): value is SubStreamConfig;
+export declare function requireSubStreamConfig(value: StreamConfig | undefined): SubStreamConfig;
 export declare function isMapStreamConfig(value: StreamConfig): value is MapStreamConfig;
 export declare function requireMapStreamConfig(value: StreamConfig | undefined): MapStreamConfig;
 export declare function isFilterStreamConfig(value: StreamConfig): value is FilterStreamConfig;

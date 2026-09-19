@@ -11,6 +11,11 @@ interface ContextState {
 export interface DurableCallExecutionContext {
     readonly messageId: string;
 }
+/** Identity-based, typed key for process-local invocation state. */
+export declare class MessageContextKey<T> {
+    readonly defaultValue: T;
+    constructor(defaultValue: T);
+}
 /** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
 export declare function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal;
 export declare class Context {
@@ -54,6 +59,9 @@ export declare class MessageContext extends Context {
     withPriority(priority: number): MessageContext;
     openTelemetryContext(): OpenTelemetryContext | undefined;
     withOpenTelemetryContext(context: OpenTelemetryContext): MessageContext;
+    /** Local values survive derived contexts but are never serialized to transports. */
+    withLocalValue<T>(key: MessageContextKey<T>, value: T): MessageContext;
+    localValue<T>(key: MessageContextKey<T>): T;
     transportMetadata(): ReadonlyMap<string, string>;
     /** @internal Attaches processing-side Activity state without serializing it. */
     withDurableCallContext(durable: DurableCallExecutionContext): MessageContext;

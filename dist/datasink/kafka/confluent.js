@@ -5,8 +5,7 @@ import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-
 const require = createRequire(import.meta.url);
 let confluentKafka;
 function kafkaJS() {
-    confluentKafka ??=
-        require("@confluentinc/kafka-javascript");
+    confluentKafka ??= require("@confluentinc/kafka-javascript");
     return confluentKafka.KafkaJS;
 }
 export class ConfluentKafkaClientFactory {

@@ -5,6 +5,7 @@ export * from "./filter.js";
 export * from "./flat-map.js";
 export * from "./flat-map-iterable.js";
 export * from "./input.js";
+export * from "./substream.js";
 export * from "./join.js";
 export * from "./link.js";
 export * from "./functions.js";

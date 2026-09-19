@@ -14,6 +14,7 @@ interface ContextState {
 }
 
 interface MessageContextState extends ContextState {
+  readonly localValues: LocalContextValue | undefined;
   readonly durableCallContext: DurableCallExecutionContext | undefined;
   readonly metadata: ReadonlyMap<string, string> | undefined;
   readonly openTelemetryContext: OpenTelemetryContext | undefined;
@@ -26,6 +27,17 @@ export interface DurableCallExecutionContext {
 }
 
 const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
+
+/** Identity-based, typed key for process-local invocation state. */
+export class MessageContextKey<T> {
+  public constructor(public readonly defaultValue: T) {}
+}
+
+interface LocalContextValue {
+  readonly key: object;
+  readonly value: unknown;
+  readonly parent: LocalContextValue | undefined;
+}
 
 /** Monotonic on Node.js and deterministic inside a Temporal Workflow isolate. */
 function contextNow(): number {
@@ -190,6 +202,7 @@ export class MessageContext extends Context {
     this.#messageState = {
       ...this.state(),
       durableCallContext: undefined,
+      localValues: undefined,
       metadata: undefined,
       openTelemetryContext: undefined,
       priority: undefined
@@ -310,6 +323,23 @@ export class MessageContext extends Context {
 
   public withOpenTelemetryContext(context: OpenTelemetryContext): MessageContext {
     return this.clone({ openTelemetryContext: context });
+  }
+
+  /** Local values survive derived contexts but are never serialized to transports. */
+  public withLocalValue<T>(key: MessageContextKey<T>, value: T): MessageContext {
+    return this.clone({ localValues: { key, value, parent: this.#messageState.localValues } });
+  }
+
+  public localValue<T>(key: MessageContextKey<T>): T {
+    for (
+      let binding = this.#messageState.localValues;
+      binding !== undefined;
+      binding = binding.parent
+    ) {
+      // The value is stored with this exact typed key by withLocalValue.
+      if (binding.key === key) return binding.value as T;
+    }
+    return key.defaultValue;
   }
 
   public transportMetadata(): ReadonlyMap<string, string> {

@@ -6,7 +6,6 @@ import {
   errorFromUnknown,
   newStreamId,
   spanError,
-  stringAttribute,
   type Consumer,
   type Context,
   type OutputEndpointConsumer,

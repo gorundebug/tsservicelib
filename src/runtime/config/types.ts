@@ -37,6 +37,7 @@ export type TransformationType =
   | "FlatMap"
   | "FlatMapIterable"
   | "Input"
+  | "SubStream"
   | "Join"
   | "KeyBy"
   | "Map"
@@ -56,6 +57,7 @@ export type TransformationName =
   | "flatMap"
   | "flatMapIterable"
   | "input"
+  | "substream"
   | "join"
   | "keyBy"
   | "map"
@@ -75,6 +77,7 @@ const transformationNames: Readonly<Record<TransformationType, TransformationNam
   FlatMap: "flatMap",
   FlatMapIterable: "flatMapIterable",
   Input: "input",
+  SubStream: "substream",
   Join: "join",
   KeyBy: "keyBy",
   Map: "map",
@@ -142,6 +145,11 @@ export interface InputStreamConfig extends StreamConfig {
   readonly type: "Input";
   readonly valueType: string;
   readonly idEndpoint: number;
+}
+
+export interface SubStreamConfig extends StreamConfig {
+  readonly type: "SubStream";
+  readonly valueType: string;
 }
 
 export const JoinType = {
@@ -216,6 +224,7 @@ export interface CycleLinkStreamConfig extends StreamConfig {
 
 export type AnyStreamConfig =
   | InputStreamConfig
+  | SubStreamConfig
   | MapStreamConfig
   | FilterStreamConfig
   | JoinStreamConfig
@@ -505,6 +514,11 @@ interface StreamConfigDocumentBase extends ConfigDocumentIdentity {
   readonly idSources?: readonly number[] | undefined;
   readonly xPos: number;
   readonly yPos: number;
+}
+
+export interface SubStreamConfigDocument extends StreamConfigDocumentBase {
+  readonly type: 18 | "SubStream";
+  readonly valueType: string;
 }
 
 export interface InputStreamConfigDocument extends StreamConfigDocumentBase {

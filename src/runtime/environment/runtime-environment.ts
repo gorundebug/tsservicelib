@@ -45,6 +45,8 @@ export type JoinStorageFactory = <K>(
 ) => JoinStorage<K> | undefined;
 
 export interface RuntimeEnvironment {
+  /** Optional deterministic wait adapter; does not wait for graph quiescence. */
+  waitSubStreamResult?(result: Promise<void>): Promise<void>;
   runtimeConfig(): RuntimeConfig;
   serviceConfig(): ServiceConfig;
   registerStream(stream: Stream): void;

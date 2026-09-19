@@ -7,6 +7,7 @@ import type {
   FlatMapIterableStreamConfig,
   FlatMapStreamConfig,
   InputStreamConfig,
+  SubStreamConfig,
   JoinStreamConfig,
   KeyByStreamConfig,
   MapStreamConfig,
@@ -51,6 +52,14 @@ export function isInputStreamConfig(value: StreamConfig): value is InputStreamCo
 
 export function requireInputStreamConfig(value: StreamConfig | undefined): InputStreamConfig {
   return requireStream(value, "Input", isInputStreamConfig);
+}
+
+export function isSubStreamConfig(value: StreamConfig): value is SubStreamConfig {
+  return value.type === "SubStream" && hasString(value, "valueType");
+}
+
+export function requireSubStreamConfig(value: StreamConfig | undefined): SubStreamConfig {
+  return requireStream(value, "SubStream", isSubStreamConfig);
 }
 
 export function isMapStreamConfig(value: StreamConfig): value is MapStreamConfig {

@@ -185,7 +185,8 @@ const transformations = {
     14: "CycleLink",
     15: "Error",
     16: "Delay",
-    17: "When"
+    17: "When",
+    18: "SubStream"
 };
 function transformation(value, path) {
     if (typeof value === "number") {
@@ -290,6 +291,7 @@ function parseStream(source, path) {
                 type,
                 duration: integer(source.duration, `${path}.duration`)
             };
+        case "SubStream":
         case "FlatMapIterable":
         case "When":
             return { ...common, type, valueType: stringValue(source.valueType, `${path}.valueType`) };

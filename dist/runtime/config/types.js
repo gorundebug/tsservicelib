@@ -7,6 +7,7 @@ const transformationNames = {
     FlatMap: "flatMap",
     FlatMapIterable: "flatMapIterable",
     Input: "input",
+    SubStream: "substream",
     Join: "join",
     KeyBy: "keyBy",
     Map: "map",

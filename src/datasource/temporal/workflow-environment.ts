@@ -65,6 +65,7 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
   readonly #tracing: Tracing | undefined;
   readonly #callerFactory: RuntimeCallerFactory;
   readonly #failureSignal = Promise.withResolvers<boolean>();
+  readonly #substreamWaiters = new Set<() => void>();
   #failure: Error | undefined;
   #started = false;
 
@@ -371,6 +372,21 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     this.throwIfFailed();
   }
 
+  public async waitSubStreamResult(result: Promise<void>): Promise<void> {
+    this.throwIfFailed();
+    const failure = Promise.withResolvers<undefined>();
+    const notifyFailure = (): void => {
+      failure.resolve(undefined);
+    };
+    this.#substreamWaiters.add(notifyFailure);
+    try {
+      await Promise.race([result, failure.promise]);
+      this.throwIfFailed();
+    } finally {
+      this.#substreamWaiters.delete(notifyFailure);
+    }
+  }
+
   public async waitForCompletion<T>(result?: Promise<T>): Promise<T | undefined> {
     if (result === undefined) {
       await this.waitForQuiescence();
@@ -441,7 +457,7 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
         ...[...this.#priorityTaskPools.values()].map(async (pool) => pool.waitIdle()),
         this.#tasks.drain()
       ]);
-      await Promise.resolve();
+      await Promise.resolve(undefined);
       if (
         this.#tasks.activeCount() === 0 &&
         ![...this.#taskPools.values()].some(
@@ -459,6 +475,8 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     if (this.#failure !== undefined) return;
     this.#failure = value instanceof Error ? value : new Error(String(value));
     this.#failureSignal.resolve(true);
+    for (const wake of this.#substreamWaiters) wake();
+    this.#substreamWaiters.clear();
   }
 }
 

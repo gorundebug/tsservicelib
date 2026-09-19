@@ -1,7 +1,12 @@
 import type { MessageContext } from "./context.js";
 import { transformationName, type StreamConfig } from "./config/types.js";
 import type { RuntimeEnvironment } from "./environment/runtime-environment.js";
-import { stringAttribute, type Attribute, type StartedSpan, type Tracer } from "./environment/tracing/tracing.js";
+import {
+  stringAttribute,
+  type Attribute,
+  type StartedSpan,
+  type Tracer
+} from "./environment/tracing/tracing.js";
 import type { StreamSerde } from "./serde/serde.js";
 
 export type Completion = void | Promise<void>;
@@ -16,6 +21,24 @@ export interface Stream {
 
 export interface Consumer<T> {
   consume(context: MessageContext, value: T): Completion;
+}
+
+export interface SubStreamCollector<R> {
+  out(context: MessageContext, value: R): boolean | Promise<boolean>;
+}
+
+export class SubStreamCollectorFunc<R> implements SubStreamCollector<R> {
+  public constructor(
+    private readonly collect: (context: MessageContext, value: R) => boolean | Promise<boolean>
+  ) {}
+
+  public out(context: MessageContext, value: R): boolean | Promise<boolean> {
+    return this.collect(context, value);
+  }
+}
+
+export interface SubStream<T, R> {
+  consume(context: MessageContext, value: T, collector: SubStreamCollector<R>): Promise<void>;
 }
 
 export interface Caller<T> extends Consumer<T> {
@@ -74,11 +97,14 @@ export class ServiceStream implements Stream {
     this.#environment = environment;
     this.#tracer = environment.tracing()?.tracer(environment.serviceConfig().name);
     this.#name = config.name;
-    this.#traceAttributes = this.#tracer === undefined ? undefined : Object.freeze([
-      Object.freeze(stringAttribute("stream", config.name)),
-      Object.freeze(stringAttribute("pipeline", config.pipeline)),
-      Object.freeze(stringAttribute("component", config.component ?? ""))
-    ]);
+    this.#traceAttributes =
+      this.#tracer === undefined
+        ? undefined
+        : Object.freeze([
+            Object.freeze(stringAttribute("stream", config.name)),
+            Object.freeze(stringAttribute("pipeline", config.pipeline)),
+            Object.freeze(stringAttribute("component", config.component ?? ""))
+          ]);
     this.transformationName = transformationName(config.type);
   }
 

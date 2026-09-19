@@ -20,6 +20,12 @@ export function isInputStreamConfig(value) {
 export function requireInputStreamConfig(value) {
     return requireStream(value, "Input", isInputStreamConfig);
 }
+export function isSubStreamConfig(value) {
+    return value.type === "SubStream" && hasString(value, "valueType");
+}
+export function requireSubStreamConfig(value) {
+    return requireStream(value, "SubStream", isSubStreamConfig);
+}
 export function isMapStreamConfig(value) {
     return value.type === "Map" && hasString(value, "valueType");
 }

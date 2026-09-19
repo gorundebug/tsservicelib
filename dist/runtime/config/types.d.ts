@@ -25,8 +25,8 @@ export interface ServiceConfig extends NamedIdentity {
     readonly shutdownTimeout: number;
     readonly statusHandler: string;
 }
-export type TransformationType = "Case" | "CycleLink" | "Delay" | "Error" | "Filter" | "FlatMap" | "FlatMapIterable" | "Input" | "Join" | "KeyBy" | "Map" | "Merge" | "MultiJoin" | "Process" | "Sink" | "Split" | "When";
-export type TransformationName = "case" | "cycleLink" | "delay" | "error" | "filter" | "flatMap" | "flatMapIterable" | "input" | "join" | "keyBy" | "map" | "merge" | "multiJoin" | "process" | "sink" | "split" | "when";
+export type TransformationType = "Case" | "CycleLink" | "Delay" | "Error" | "Filter" | "FlatMap" | "FlatMapIterable" | "Input" | "SubStream" | "Join" | "KeyBy" | "Map" | "Merge" | "MultiJoin" | "Process" | "Sink" | "Split" | "When";
+export type TransformationName = "case" | "cycleLink" | "delay" | "error" | "filter" | "flatMap" | "flatMapIterable" | "input" | "substream" | "join" | "keyBy" | "map" | "merge" | "multiJoin" | "process" | "sink" | "split" | "when";
 export declare function transformationName(type: TransformationType): TransformationName;
 export interface StreamConfig extends NamedIdentity {
     readonly type: TransformationType;
@@ -72,6 +72,10 @@ export interface InputStreamConfig extends StreamConfig {
     readonly type: "Input";
     readonly valueType: string;
     readonly idEndpoint: number;
+}
+export interface SubStreamConfig extends StreamConfig {
+    readonly type: "SubStream";
+    readonly valueType: string;
 }
 export declare const JoinType: {
     readonly Undefined: 0;
@@ -130,7 +134,7 @@ export interface SplitStreamConfig extends StreamConfig {
 export interface CycleLinkStreamConfig extends StreamConfig {
     readonly type: "CycleLink";
 }
-export type AnyStreamConfig = InputStreamConfig | MapStreamConfig | FilterStreamConfig | JoinStreamConfig | MultiJoinStreamConfig | ProcessStreamConfig | FlatMapStreamConfig | FlatMapIterableStreamConfig | KeyByStreamConfig | MergeStreamConfig | SplitStreamConfig | CaseStreamConfig | SinkStreamConfig | CycleLinkStreamConfig | DelayStreamConfig | WhenStreamConfig;
+export type AnyStreamConfig = InputStreamConfig | SubStreamConfig | MapStreamConfig | FilterStreamConfig | JoinStreamConfig | MultiJoinStreamConfig | ProcessStreamConfig | FlatMapStreamConfig | FlatMapIterableStreamConfig | KeyByStreamConfig | MergeStreamConfig | SplitStreamConfig | CaseStreamConfig | SinkStreamConfig | CycleLinkStreamConfig | DelayStreamConfig | WhenStreamConfig;
 export interface DataConnectorConfig extends NamedIdentity {
     readonly type: DataConnectorType;
     readonly implementation: string;
@@ -356,6 +360,10 @@ interface StreamConfigDocumentBase extends ConfigDocumentIdentity {
     readonly idSources?: readonly number[] | undefined;
     readonly xPos: number;
     readonly yPos: number;
+}
+export interface SubStreamConfigDocument extends StreamConfigDocumentBase {
+    readonly type: 18 | "SubStream";
+    readonly valueType: string;
 }
 export interface InputStreamConfigDocument extends StreamConfigDocumentBase {
     readonly type: 1 | "Input";

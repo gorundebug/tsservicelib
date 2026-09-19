@@ -34,6 +34,7 @@ export class TemporalWorkflowEnvironment {
     #tracing;
     #callerFactory;
     #failureSignal = Promise.withResolvers();
+    #substreamWaiters = new Set();
     #failure;
     #started = false;
     constructor(config, serviceId, serdeRegistry, telemetry = {}) {
@@ -284,6 +285,21 @@ export class TemporalWorkflowEnvironment {
         this.#started = false;
         this.throwIfFailed();
     }
+    async waitSubStreamResult(result) {
+        this.throwIfFailed();
+        const failure = Promise.withResolvers();
+        const notifyFailure = () => {
+            failure.resolve(undefined);
+        };
+        this.#substreamWaiters.add(notifyFailure);
+        try {
+            await Promise.race([result, failure.promise]);
+            this.throwIfFailed();
+        }
+        finally {
+            this.#substreamWaiters.delete(notifyFailure);
+        }
+    }
     async waitForCompletion(result) {
         if (result === undefined) {
             await this.waitForQuiescence();
@@ -341,7 +357,7 @@ export class TemporalWorkflowEnvironment {
                 ...[...this.#priorityTaskPools.values()].map(async (pool) => pool.waitIdle()),
                 this.#tasks.drain()
             ]);
-            await Promise.resolve();
+            await Promise.resolve(undefined);
             if (this.#tasks.activeCount() === 0 &&
                 ![...this.#taskPools.values()].some((pool) => pool.activeCount() > 0 || pool.queueLength() > 0) &&
                 ![...this.#priorityTaskPools.values()].some((pool) => pool.activeCount() > 0 || pool.queueLength() > 0))
@@ -353,6 +369,9 @@ export class TemporalWorkflowEnvironment {
             return;
         this.#failure = value instanceof Error ? value : new Error(String(value));
         this.#failureSignal.resolve(true);
+        for (const wake of this.#substreamWaiters)
+            wake();
+        this.#substreamWaiters.clear();
     }
 }
 class WorkflowInstrumentedCaller {

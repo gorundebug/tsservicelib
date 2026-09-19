@@ -4,6 +4,13 @@ export function newStreamId() {
     return globalThis.crypto.randomUUID();
 }
 const EMPTY_METADATA = new Map();
+/** Identity-based, typed key for process-local invocation state. */
+export class MessageContextKey {
+    defaultValue;
+    constructor(defaultValue) {
+        this.defaultValue = defaultValue;
+    }
+}
 /** Monotonic on Node.js and deterministic inside a Temporal Workflow isolate. */
 function contextNow() {
     const performanceValue = Reflect.get(globalThis, "performance");
@@ -150,6 +157,7 @@ export class MessageContext extends Context {
         this.#messageState = {
             ...this.state(),
             durableCallContext: undefined,
+            localValues: undefined,
             metadata: undefined,
             openTelemetryContext: undefined,
             priority: undefined
@@ -249,6 +257,18 @@ export class MessageContext extends Context {
     }
     withOpenTelemetryContext(context) {
         return this.clone({ openTelemetryContext: context });
+    }
+    /** Local values survive derived contexts but are never serialized to transports. */
+    withLocalValue(key, value) {
+        return this.clone({ localValues: { key, value, parent: this.#messageState.localValues } });
+    }
+    localValue(key) {
+        for (let binding = this.#messageState.localValues; binding !== undefined; binding = binding.parent) {
+            // The value is stored with this exact typed key by withLocalValue.
+            if (binding.key === key)
+                return binding.value;
+        }
+        return key.defaultValue;
     }
     transportMetadata() {
         const result = new Map();

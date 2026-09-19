@@ -1,5 +1,5 @@
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
-import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, newStreamId, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataConnectorType, DataSinkEndpoint, OutputDataSink, errorFromUnknown, newStreamId, spanError } from "../../runtime/index.js";
 import { makeTemporalConnector } from "../../datasource/temporal/connector.js";
 class TemporalDataSink extends OutputDataSink {
     #active = new Set();

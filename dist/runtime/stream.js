@@ -1,5 +1,14 @@
 import { transformationName } from "./config/types.js";
 import { stringAttribute } from "./environment/tracing/tracing.js";
+export class SubStreamCollectorFunc {
+    collect;
+    constructor(collect) {
+        this.collect = collect;
+    }
+    out(context, value) {
+        return this.collect(context, value);
+    }
+}
 /**
  * Direct delivery preserves FunctionCall semantics. The async bit is graph
  * metadata and never turns this call into detached work.
@@ -31,11 +40,14 @@ export class ServiceStream {
         this.#environment = environment;
         this.#tracer = environment.tracing()?.tracer(environment.serviceConfig().name);
         this.#name = config.name;
-        this.#traceAttributes = this.#tracer === undefined ? undefined : Object.freeze([
-            Object.freeze(stringAttribute("stream", config.name)),
-            Object.freeze(stringAttribute("pipeline", config.pipeline)),
-            Object.freeze(stringAttribute("component", config.component ?? ""))
-        ]);
+        this.#traceAttributes =
+            this.#tracer === undefined
+                ? undefined
+                : Object.freeze([
+                    Object.freeze(stringAttribute("stream", config.name)),
+                    Object.freeze(stringAttribute("pipeline", config.pipeline)),
+                    Object.freeze(stringAttribute("component", config.component ?? ""))
+                ]);
         this.transformationName = transformationName(config.type);
     }
     get id() {

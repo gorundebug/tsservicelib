@@ -7,8 +7,7 @@ const RECONNECT_DELAY_MS = 100;
 const require = createRequire(import.meta.url);
 let confluentKafka;
 function kafkaJS() {
-    confluentKafka ??=
-        require("@confluentinc/kafka-javascript");
+    confluentKafka ??= require("@confluentinc/kafka-javascript");
     return confluentKafka.KafkaJS;
 }
 export class ConsumerMessage {

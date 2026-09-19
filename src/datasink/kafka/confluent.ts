@@ -2,6 +2,7 @@ import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 
 import type { KafkaJS } from "@confluentinc/kafka-javascript";
+import type * as ConfluentKafka from "@confluentinc/kafka-javascript";
 
 import {
   DataSinkEndpoint,
@@ -30,11 +31,10 @@ import {
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 
 const require = createRequire(import.meta.url);
-let confluentKafka: typeof import("@confluentinc/kafka-javascript") | undefined;
+let confluentKafka: typeof ConfluentKafka | undefined;
 
 function kafkaJS(): typeof KafkaJS {
-  confluentKafka ??=
-    require("@confluentinc/kafka-javascript") as typeof import("@confluentinc/kafka-javascript");
+  confluentKafka ??= require("@confluentinc/kafka-javascript") as typeof ConfluentKafka;
   return confluentKafka.KafkaJS;
 }
 

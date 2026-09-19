@@ -14,6 +14,17 @@ export interface Stream {
 export interface Consumer<T> {
     consume(context: MessageContext, value: T): Completion;
 }
+export interface SubStreamCollector<R> {
+    out(context: MessageContext, value: R): boolean | Promise<boolean>;
+}
+export declare class SubStreamCollectorFunc<R> implements SubStreamCollector<R> {
+    private readonly collect;
+    constructor(collect: (context: MessageContext, value: R) => boolean | Promise<boolean>);
+    out(context: MessageContext, value: R): boolean | Promise<boolean>;
+}
+export interface SubStream<T, R> {
+    consume(context: MessageContext, value: T, collector: SubStreamCollector<R>): Promise<void>;
+}
 export interface Caller<T> extends Consumer<T> {
     isAsync(): boolean;
 }

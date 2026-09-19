@@ -94,7 +94,7 @@ await test("config parser preserves optional component without hiding it in prop
     types: {}
   });
   assert.equal(config.streams[0]?.component, "Customer Pricing");
-  assert.equal(config.streams[0]?.properties["component"], undefined);
+  assert.equal(config.streams[0].properties["component"], undefined);
   assert.throws(
     () => parseCanonicalConfig({ streams: { price: { ...stream, component: 42 } } }),
     /component.*string/

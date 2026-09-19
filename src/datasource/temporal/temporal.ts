@@ -13,7 +13,6 @@ import {
   makeStreamContext,
   newStreamId,
   spanError,
-  stringAttribute,
   type Completion,
   type Context,
   type Consumer,
