@@ -2,6 +2,7 @@ import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Server,
   ServerCredentials,
+  status,
   type handleBidiStreamingCall,
   type handleClientStreamingCall,
   type handleServerStreamingCall,
@@ -109,9 +110,39 @@ export interface EndpointHandler<HandlerState, ReqT, ResR, T, R, E> {
   ): Completion;
 }
 
+// A service owns one listening address; connectors own disjoint RPC methods.
+const grpcServers = new WeakMap<RuntimeEnvironment, GrpcServerHost>();
+
+class GrpcServerHost {
+  public readonly server = new Server();
+  public readonly sources = new Set<GrpcJsDataSource>();
+  public readonly ready: Promise<void>;
+  public closing = false;
+
+  public constructor(environment: RuntimeEnvironment) {
+    const config = environment.serviceConfig();
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.server.bindAsync(
+        `${config.grpcHost}:${String(config.grpcPort)}`,
+        ServerCredentials.createInsecure(),
+        (error) => {
+          if (error === null) resolve();
+          else reject(error);
+        }
+      );
+    });
+  }
+}
+
 export class GrpcJsDataSource extends InputDataSource {
   readonly #services = new Map<DescService, Map<string, UntypedHandleCall>>();
-  #server: Server | undefined;
+  readonly #paths = new Set<string>();
+  readonly #calls = new Set<() => void>();
+  #host: GrpcServerHost | undefined;
+  #starting: Promise<void> | undefined;
+  #stopping: Promise<void> | undefined;
+  #admitting = false;
+  #idle: (() => void) | undefined;
 
   public constructor(connectorId: number, environment: RuntimeEnvironment) {
     super(connectorId, environment);
@@ -119,6 +150,8 @@ export class GrpcJsDataSource extends InputDataSource {
   }
 
   public add(service: DescService, method: DescMethod, handler: UntypedHandleCall): void {
+    if (this.#host !== undefined || this.#starting !== undefined || this.#stopping !== undefined)
+      throw new Error(`gRPC data source ${this.name} is running`);
     let methods = this.#services.get(service);
     if (methods === undefined) {
       methods = new Map();
@@ -130,24 +163,141 @@ export class GrpcJsDataSource extends InputDataSource {
 
   public async start(context: Context): Promise<void> {
     void context;
-    if (this.#server !== undefined)
+    if (this.#host !== undefined || this.#starting !== undefined || this.#stopping !== undefined)
       throw new Error(`gRPC data source ${this.name} already started`);
-    const server = new Server();
-    for (const [service, handlers] of this.#services) {
-      server.addService(serviceDefinition(service), Object.fromEntries(handlers));
+    this.#starting = this.startListening();
+    try {
+      await this.#starting;
+    } finally {
+      this.#starting = undefined;
     }
-    const config = this.runtimeEnvironment().serviceConfig();
-    await new Promise<void>((resolve, reject) => {
-      server.bindAsync(
-        `${config.grpcHost}:${String(config.grpcPort)}`,
-        ServerCredentials.createInsecure(),
-        (error) => {
-          if (error === null) resolve();
-          else reject(error);
+  }
+
+  private async startListening(): Promise<void> {
+    const environment = this.runtimeEnvironment();
+    let host = grpcServers.get(environment);
+    if (host === undefined) {
+      host = new GrpcServerHost(environment);
+      grpcServers.set(environment, host);
+    }
+    if (host.closing) throw new Error("gRPC service listener is stopping");
+    this.#host = host;
+    host.sources.add(this);
+    try {
+      for (const [service, handlers] of this.#services) {
+        const definitions = serviceDefinition(service);
+        for (const [name, handler] of handlers) {
+          const definition = definitions[name];
+          if (definition === undefined) throw new Error(`gRPC method ${name} is not declared`);
+          // Register only this connector's methods, not default handlers for its peers.
+          host.server.addService(
+            { [name]: definition },
+            { [name]: this.trackHandler(handler, definition.responseStream) }
+          );
+          this.#paths.add(definition.path);
         }
+      }
+      this.#admitting = true;
+      await host.ready;
+    } catch (error: unknown) {
+      this.#admitting = false;
+      for (const path of this.#paths) host.server.unregister(path);
+      this.#paths.clear();
+      host.sources.delete(this);
+      this.#host = undefined;
+      await host.ready.catch(() => undefined);
+      if (host.sources.size === 0) {
+        host.server.forceShutdown();
+        grpcServers.delete(environment);
+      }
+      throw error;
+    }
+  }
+
+  private trackHandler(handler: UntypedHandleCall, streaming: boolean): UntypedHandleCall {
+    if (streaming) {
+      const wrapped: handleServerStreamingCall<unknown, unknown> = (call) => {
+        const reject = (error: Error): void => {
+          call.destroy(error);
+        };
+        if (!this.#admitting) {
+          reject(
+            Object.assign(new Error("gRPC connector is stopping"), { code: status.UNAVAILABLE })
+          );
+          return;
+        }
+        this.trackCall(
+          call,
+          () => {
+            call.emit("cancelled");
+            reject(Object.assign(new Error("gRPC call cancelled"), { code: status.CANCELLED }));
+          },
+          true
+        );
+        try {
+          (handler as handleServerStreamingCall<unknown, unknown>)(call);
+        } catch (error: unknown) {
+          reject(errorFromUnknown(error));
+        }
+      };
+      return wrapped;
+    }
+    const wrapped: handleUnaryCall<unknown, unknown> = (call, callback) => {
+      if (!this.#admitting) {
+        callback(
+          Object.assign(new Error("gRPC connector is stopping"), { code: status.UNAVAILABLE })
+        );
+        return;
+      }
+      let completed = false;
+      let release = (): void => undefined;
+      const complete: typeof callback = (...args) => {
+        if (completed) return;
+        completed = true;
+        try {
+          callback(...args);
+        } finally {
+          release();
+        }
+      };
+      release = this.trackCall(
+        call,
+        () => {
+          call.emit("cancelled");
+          complete(Object.assign(new Error("gRPC call cancelled"), { code: status.CANCELLED }));
+        },
+        false
       );
-    });
-    this.#server = server;
+      try {
+        (handler as handleUnaryCall<unknown, unknown>)(call, complete);
+      } catch (error: unknown) {
+        complete(errorFromUnknown(error));
+      }
+    };
+    return wrapped;
+  }
+
+  private trackCall(
+    call: Pick<ServerUnaryCall<unknown, unknown>, "once" | "removeListener">,
+    cancel: () => void,
+    streaming: boolean
+  ): () => void {
+    this.#calls.add(cancel);
+    const release = (): void => {
+      this.#calls.delete(cancel);
+      call.removeListener("cancelled", release);
+      if (streaming) {
+        call.removeListener("finish", release);
+        call.removeListener("error", release);
+      }
+      if (this.#calls.size === 0) this.#idle?.();
+    };
+    call.once("cancelled", release);
+    if (streaming) {
+      call.once("finish", release);
+      call.once("error", release);
+    }
+    return release;
   }
 
   public async stop(context: Context): Promise<void> {
@@ -155,9 +305,43 @@ export class GrpcJsDataSource extends InputDataSource {
   }
 
   public async stopAdmission(context: Context): Promise<void> {
-    const server = this.#server;
-    this.#server = undefined;
-    if (server === undefined) return;
+    this.#stopping ??= this.stopListening(context);
+    try {
+      await this.#stopping;
+    } finally {
+      this.#stopping = undefined;
+    }
+  }
+
+  private async stopListening(context: Context): Promise<void> {
+    await this.#starting?.catch(() => undefined);
+    const host = this.#host;
+    if (host === undefined) return;
+    this.#admitting = false;
+    for (const path of this.#paths) host.server.unregister(path);
+    this.#paths.clear();
+    if (this.#calls.size !== 0) {
+      await new Promise<void>((resolve) => {
+        const timeout = context.remainingMs();
+        const timer =
+          timeout === undefined
+            ? undefined
+            : setTimeout(() => {
+                for (const cancel of [...this.#calls]) cancel();
+                resolve();
+              }, timeout);
+        this.#idle = () => {
+          if (timer !== undefined) clearTimeout(timer);
+          resolve();
+        };
+      });
+      this.#idle = undefined;
+    }
+    this.#host = undefined;
+    host.sources.delete(this);
+    if (host.sources.size !== 0) return;
+    host.closing = true;
+    const server = host.server;
     await new Promise<void>((resolve) => {
       const timeout = context.remainingMs();
       const timer =
@@ -172,6 +356,7 @@ export class GrpcJsDataSource extends InputDataSource {
         resolve();
       });
     });
+    grpcServers.delete(this.runtimeEnvironment());
   }
 }
 

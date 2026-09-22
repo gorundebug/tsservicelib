@@ -1,3 +1,5 @@
+import { HTTPMethodType } from "./types.js";
+
 import type {
   DataConnectorConfig,
   EndpointConfig,
@@ -38,7 +40,7 @@ export function isHttpEndpointConfig(
   return (
     value !== undefined &&
     "httpMethodType" in value &&
-    (value.httpMethodType === "GET" || value.httpMethodType === "POST") &&
+    Object.values(HTTPMethodType).some(method => method !== "" && method === value.httpMethodType) &&
     "path" in value &&
     typeof value.path === "string"
   );

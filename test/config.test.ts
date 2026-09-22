@@ -197,6 +197,50 @@ await test("runtime config rejects mismatched endpoint transports, pools and ran
   );
 });
 
+await test("runtime config resolves error stream references without separate configs", () => {
+  const base = canonicalConfig();
+  const template = base.streams[0];
+  assert.ok(template);
+  for (const type of ["Input", "Process", "Sink"] as const) {
+    const config: CanonicalConfig = {
+      ...base,
+      streams: [
+        { ...template, type },
+        { ...template, id: 11, name: "recover", type: "Map", idSource: -10 },
+        { ...template, id: 12, name: "merge", type: "Merge", idSources: [-10, 11] }
+      ],
+      links: [
+        {
+          from: -10,
+          to: 11,
+          callSemantics: { functionCall: { async: true } },
+          properties: {}
+        }
+      ]
+    };
+    const runtime = new RuntimeConfig(config);
+    assert.equal(runtime.streamById(-10), undefined);
+    assert.deepEqual(runtime.link(-10, 11)?.callSemantics, { functionCall: { async: true } });
+    assert.equal(runtime.link(10, 11), undefined);
+    assert.throws(
+      () => new RuntimeConfig({ ...config, streams: config.streams.slice(1) }),
+      /references missing source stream id -10/
+    );
+    assert.throws(
+      () => new RuntimeConfig({ ...config, streams: [{ ...template, type: "Map" }] }),
+      /references missing stream/
+    );
+    assert.throws(
+      () =>
+        new RuntimeConfig({
+          ...config,
+          links: [{ from: -404, to: 11, properties: {} }]
+        }),
+      /references missing stream/
+    );
+  }
+});
+
 await test("reload retains the last valid snapshot and publishes a valid one once", async () => {
   const initial = new RuntimeConfig(canonicalConfig());
   const store = new RuntimeConfigStore(initial);

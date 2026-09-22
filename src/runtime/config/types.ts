@@ -323,7 +323,14 @@ export interface EndpointConfig extends NamedIdentity {
 export const HTTPMethodType = {
   Undefined: "",
   GET: "GET",
-  POST: "POST"
+  POST: "POST",
+  PUT: "PUT",
+  PATCH: "PATCH",
+  DELETE: "DELETE",
+  HEAD: "HEAD",
+  OPTIONS: "OPTIONS",
+  TRACE: "TRACE",
+  CONNECT: "CONNECT"
 } as const;
 
 export type HTTPMethodType = (typeof HTTPMethodType)[keyof typeof HTTPMethodType];

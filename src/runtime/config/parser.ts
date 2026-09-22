@@ -5,6 +5,7 @@ import type {
   CallSemanticsGroup,
   CanonicalConfig,
   DataConnectorType,
+  HTTPMethodType,
   LinkConfig,
   JoinStorageType,
   JoinType,
@@ -709,7 +710,7 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
       ...common,
       ...functions,
       httpMethodType: stringValue(source.httpMethodType, `${path}.httpMethodType`) as
-        "GET" | "POST",
+        HTTPMethodType,
       path: stringValue(source.path, `${path}.path`)
     };
   if (source.grpcMethodType !== undefined)

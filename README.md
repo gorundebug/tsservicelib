@@ -35,6 +35,7 @@ Transport and other I/O waits use asynchronous Node APIs, so they do not block
 the event loop. CPU-bound or synchronously blocking application work must be
 isolated by the application or deployment without changing the framework's
 single-graph contract.
+
 ## Service-local SubStream
 
 SubStream makes a reusable graph callable from business code inside its owning
@@ -53,7 +54,7 @@ await service.getLookupSubStream().consume(
   new SubStreamCollectorFunc<string>((callerContext, result) => {
     results.push(result);
     return true; // Enough results; false continues collecting.
-  }),
+  })
 );
 ```
 
