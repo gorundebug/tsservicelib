@@ -164,7 +164,7 @@ export class PriorityTaskPool implements Lifecycle {
   }
 
   private run(task: PriorityTask): void {
-    const started = performance.now();
+    const started = this.#metrics === undefined ? undefined : performance.now();
     this.#metrics?.executorsBusy.inc();
     let completion: ReturnType<PoolTask>;
     try {
@@ -183,10 +183,12 @@ export class PriorityTaskPool implements Lifecycle {
       });
   }
 
-  private taskFinished(context: Context, started: number): void {
+  private taskFinished(context: Context, started: number | undefined): void {
     this.#metrics?.executorsBusy.dec();
     this.#metrics?.tasksTotal.inc(context);
-    this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+    if (started !== undefined) {
+      this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+    }
     this.#active -= 1;
     this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
     this.pump();

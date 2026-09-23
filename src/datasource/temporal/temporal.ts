@@ -108,6 +108,7 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #pending = new Map<string, PendingResult<R>>();
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
+  readonly #tracingEnabled: boolean;
   readonly #tracer: Tracer | undefined;
 
   public constructor(
@@ -128,10 +129,9 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       new FunctionCollector((context, value: T) => stream.consume(context, value)),
       new FunctionCollector((context, value: E) => stream.errorStream().consume(context, value))
     );
-    this.#tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.#tracingEnabled = tracing !== undefined;
+    this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     if (stream.resultStream() !== undefined) {
       stream.setResultConsumer({
@@ -156,11 +156,13 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
     let context = parent
       .withStreamId(envelope.streamId || newStreamId())
       .withPriority(envelope.priority);
-    context = applyDataSourceEndpointTracing(
-      context,
-      this.#stream.runtimeEnvironment(),
-      this.#endpoint.id
-    );
+    if (this.#tracingEnabled) {
+      context = applyDataSourceEndpointTracing(
+        context,
+        this.#stream.runtimeEnvironment(),
+        this.#endpoint.id
+      );
+    }
     if (cancellationSignal !== undefined) {
       context = context.withExternalCancellation(cancellationSignal);
     }

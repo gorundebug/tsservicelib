@@ -27,6 +27,14 @@ export interface DurableCallExecutionContext {
 }
 
 const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
+const STREAM_TRANSPORT_HEADERS = [STREAM_ID_HEADER] as const;
+const TRACING_TRANSPORT_HEADERS = [
+  STREAM_ID_HEADER,
+  TRACE_SAMPLING_HEADER,
+  "traceparent",
+  "tracestate",
+  "baggage"
+] as const;
 
 /** Identity-based, typed key for process-local invocation state. */
 export class MessageContextKey<T> {
@@ -342,15 +350,10 @@ export class MessageContext extends Context {
     return key.defaultValue;
   }
 
-  public transportMetadata(): ReadonlyMap<string, string> {
+  public transportMetadata(tracingEnabled = true): ReadonlyMap<string, string> {
     const result = new Map<string, string>();
-    for (const name of [
-      STREAM_ID_HEADER,
-      TRACE_SAMPLING_HEADER,
-      "traceparent",
-      "tracestate",
-      "baggage"
-    ]) {
+    const names = tracingEnabled ? TRACING_TRANSPORT_HEADERS : STREAM_TRANSPORT_HEADERS;
+    for (const name of names) {
       const value = this.#messageState.metadata?.get(name);
       if (value !== undefined) {
         result.set(name, value);

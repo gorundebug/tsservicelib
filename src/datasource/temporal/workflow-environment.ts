@@ -13,6 +13,8 @@ import type { DataSource } from "../../runtime/data-source.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
 import type { Logger } from "../../runtime/environment/log.js";
 import type { Metrics } from "../../runtime/environment/metrics/metrics.js";
+import { noopMetrics } from "../../runtime/environment/metrics/noop.js";
+import { CountedCaller } from "../../runtime/counted-caller.js";
 import type {
   RuntimeBuildable,
   RuntimeEnvironment,
@@ -77,14 +79,16 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
       readonly logger?: Logger;
       readonly metrics?: Metrics;
       readonly tracing?: Tracing;
+      readonly noopMetrics?: boolean;
+      readonly noopTracing?: boolean;
     } = {}
   ) {
     this.#config = new RuntimeConfig(config);
     this.#serviceId = serviceId;
     this.#serdeRegistry = serdeRegistry;
     this.#logger = telemetry.logger ?? workflowLogger;
-    this.#metrics = telemetry.metrics ?? new WorkflowMetrics();
-    this.#tracing = telemetry.tracing ?? new WorkflowTracing();
+    this.#metrics = telemetry.noopMetrics ? noopMetrics : (telemetry.metrics ?? new WorkflowMetrics());
+    this.#tracing = telemetry.noopTracing ? undefined : (telemetry.tracing ?? new WorkflowTracing());
     this.#tasks = new RuntimeTaskRegistry((error) => {
       this.recordFailure(error);
     });
@@ -291,25 +295,26 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
 
   public makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T> {
     const caller = this.#callerFactory.create(source, consumer);
+    const recordCall = this.makeLinkRecorder(source, consumer);
+    if (this.#tracing === undefined || !this.#tracing.enabled()) {
+      return new CountedCaller(caller, recordCall);
+    }
     const metadata = callerMetadata(caller);
     const grouping = this.runtimeConfig().streamById(consumer.id);
-    const traceAttributes =
-      this.#tracing === undefined
-        ? undefined
-        : [
-            stringAttribute("from", source.name),
-            stringAttribute("to", consumer.name),
-            stringAttribute("pipeline", grouping?.pipeline ?? ""),
-            stringAttribute("component", grouping?.component ?? ""),
-            ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
-            ...(metadata?.taskPoolName === undefined
-              ? []
-              : [stringAttribute("taskpoolname", metadata.taskPoolName)])
-          ];
+    const traceAttributes = [
+      stringAttribute("from", source.name),
+      stringAttribute("to", consumer.name),
+      stringAttribute("pipeline", grouping?.pipeline ?? ""),
+      stringAttribute("component", grouping?.component ?? ""),
+      ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+      ...(metadata?.taskPoolName === undefined
+        ? []
+        : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+    ];
     return new WorkflowInstrumentedCaller(
       caller,
-      this.makeLinkRecorder(source, consumer),
-      this.#tracing?.tracer(this.serviceConfig().name),
+      recordCall,
+      this.#tracing.tracer(this.serviceConfig().name),
       traceAttributes
     );
   }
@@ -327,9 +332,14 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
             component: grouping?.component ?? ""
           })
       : undefined;
+    if (counter === undefined) {
+      return (_context): void => {
+        this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
+      };
+    }
     return (context): void => {
       this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
-      counter?.inc(context);
+      counter.inc(context);
     };
   }
 
@@ -484,8 +494,8 @@ class WorkflowInstrumentedCaller<T> implements Caller<T> {
   public constructor(
     private readonly caller: Caller<T>,
     private readonly recordCall: (context: MessageContext) => void,
-    private readonly tracer: Tracer | undefined,
-    private readonly traceAttributes: readonly Attribute[] | undefined
+    private readonly tracer: Tracer,
+    private readonly traceAttributes: readonly Attribute[]
   ) {}
 
   public isAsync(): boolean {
@@ -494,7 +504,7 @@ class WorkflowInstrumentedCaller<T> implements Caller<T> {
 
   public consume(context: MessageContext, value: T): void | Promise<void> {
     this.recordCall(context);
-    if (this.tracer === undefined || !context.samplingEnabled()) {
+    if (!context.samplingEnabled()) {
       return this.caller.consume(context, value);
     }
     const started = this.tracer.start(context, "stream.call", this.traceAttributes);

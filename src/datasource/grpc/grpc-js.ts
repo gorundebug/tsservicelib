@@ -112,6 +112,14 @@ export interface EndpointHandler<HandlerState, ReqT, ResR, T, R, E> {
 
 // A service owns one listening address; connectors own disjoint RPC methods.
 const grpcServers = new WeakMap<RuntimeEnvironment, GrpcServerHost>();
+const CONTEXT_METADATA_KEYS = [
+  STREAM_ID_HEADER,
+  TRACE_SAMPLING_HEADER,
+  "traceparent",
+  "tracestate",
+  "baggage"
+] as const;
+const STREAM_ID_ONLY_KEYS = [STREAM_ID_HEADER] as const;
 
 class GrpcServerHost {
   public readonly server = new Server();
@@ -614,6 +622,7 @@ abstract class GrpcStreamingSourceConsumer<HandlerState, ReqT, ResR, T, R, E>
   protected readonly pending = new Map<string, PendingRequest<HandlerState, T, ResR, R, E>>();
   protected readonly traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   protected readonly tracer: Tracer | undefined;
+  protected readonly tracingEnabled: boolean;
 
   public constructor(
     endpoint: DataSourceEndpoint,
@@ -631,10 +640,9 @@ abstract class GrpcStreamingSourceConsumer<HandlerState, ReqT, ResR, T, R, E>
     if (stream.resultStream() !== undefined) {
       stream.setResultConsumer({ consume: (context, value) => this.consumeResult(context, value) });
     }
-    this.tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.tracingEnabled = tracing !== undefined;
+    this.tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
@@ -646,11 +654,14 @@ abstract class GrpcStreamingSourceConsumer<HandlerState, ReqT, ResR, T, R, E>
     context: MessageContext;
     span: Span | undefined;
   } {
-    let context = applyDataSourceEndpointTracing(
-      contextFromCall(call),
-      this.stream().runtimeEnvironment(),
-      this.endpoint().id
-    );
+    let context = contextFromCall(call, this.tracingEnabled);
+    if (this.tracingEnabled) {
+      context = applyDataSourceEndpointTracing(
+        context,
+        this.stream().runtimeEnvironment(),
+        this.endpoint().id
+      );
+    }
     let span: Span | undefined;
     if (this.tracer !== undefined && context.samplingEnabled()) {
       const started = this.tracer.start(context, "grpc.input", this.traceAttributes);
@@ -698,6 +709,7 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #pending = new Map<string, PendingRequest<HandlerState, T, ResR, R, E>>();
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
+  readonly #tracingEnabled: boolean;
 
   public constructor(
     endpoint: DataSourceEndpoint,
@@ -713,10 +725,9 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       new FunctionCollector((context, value: E) => stream.errorStream().consume(context, value))
     );
     stream.setResultConsumer({ consume: (context, value) => this.consumeResult(context, value) });
-    this.#tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.#tracingEnabled = tracing !== undefined;
+    this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
@@ -738,11 +749,14 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     call: ServerUnaryCall<ReqT, ResR>,
     callback: (error: Error | null, value?: ResR) => void
   ): Promise<void> {
-    let context = applyDataSourceEndpointTracing(
-      contextFromCall(call),
-      this.stream().runtimeEnvironment(),
-      this.endpoint().id
-    );
+    let context = contextFromCall(call, this.#tracingEnabled);
+    if (this.#tracingEnabled) {
+      context = applyDataSourceEndpointTracing(
+        context,
+        this.stream().runtimeEnvironment(),
+        this.endpoint().id
+      );
+    }
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "grpc.input", this.#traceAttributes);
@@ -1356,15 +1370,9 @@ function getOrCreateDataSource(
   return source;
 }
 
-function contextFromMetadata(metadata: Metadata): MessageContext {
+function contextFromMetadata(metadata: Metadata, tracingEnabled: boolean): MessageContext {
   const values = new Map<string, string>();
-  for (const key of [
-    STREAM_ID_HEADER,
-    TRACE_SAMPLING_HEADER,
-    "traceparent",
-    "tracestate",
-    "baggage"
-  ]) {
+  for (const key of tracingEnabled ? CONTEXT_METADATA_KEYS : STREAM_ID_ONLY_KEYS) {
     const value = metadata.get(key)[0];
     if (value !== undefined) {
       values.set(key, typeof value === "string" ? value : value.toString("utf8"));
@@ -1374,12 +1382,13 @@ function contextFromMetadata(metadata: Metadata): MessageContext {
   return new MessageContext().withMetadata(values);
 }
 
-function contextFromCall(call: GrpcServerCallContext): MessageContext {
+function contextFromCall(call: GrpcServerCallContext, tracingEnabled: boolean): MessageContext {
   const controller = new AbortController();
   call.once("cancelled", () => {
     controller.abort(new Error("gRPC call cancelled"));
   });
-  let context = contextFromMetadata(call.metadata).withExternalCancellation(controller.signal);
+  let context = contextFromMetadata(call.metadata, tracingEnabled)
+    .withExternalCancellation(controller.signal);
   const deadline = call.getDeadline();
   const deadlineTimestamp = deadline instanceof Date ? deadline.getTime() : deadline;
   if (Number.isFinite(deadlineTimestamp)) {

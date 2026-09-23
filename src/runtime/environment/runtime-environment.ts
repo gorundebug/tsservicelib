@@ -2,6 +2,7 @@ import type { CanonicalConfig, JoinStorageType, ServiceConfig } from "../config/
 import type { RuntimeConfig, RuntimeConfigStore } from "../config/index.js";
 import type { MessageContext } from "../context.js";
 import { callerMetadata } from "../caller-metadata.js";
+import { CountedCaller } from "../counted-caller.js";
 import type { DataSink } from "../data-sink.js";
 import type { DataSource } from "../data-source.js";
 import type { ManagedDataConnector } from "../data-connector.js";
@@ -348,28 +349,28 @@ export class ServiceEnvironment<
 
   public makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T> {
     const caller = this.#callerFactory.create(source, consumer);
+    const recordCall = this.makeLinkRecorder(source, consumer);
+    if (this.#tracing === undefined) {
+      return new CountedCaller(caller, recordCall);
+    }
     const metadata = callerMetadata(caller);
     const grouping = this.runtimeConfig().streamById(consumer.id);
-    const traceAttributes =
-      this.#tracing === undefined
-        ? undefined
-        : [
-            stringAttribute("from", source.name),
-            stringAttribute("to", consumer.name),
-            stringAttribute("pipeline", grouping?.pipeline ?? ""),
-            stringAttribute("component", grouping?.component ?? ""),
-            ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
-            ...(metadata?.taskPoolName === undefined
-              ? []
-              : [stringAttribute("taskpoolname", metadata.taskPoolName)])
-          ];
-    const instrumented = new InstrumentedCaller(
+    const traceAttributes = [
+      stringAttribute("from", source.name),
+      stringAttribute("to", consumer.name),
+      stringAttribute("pipeline", grouping?.pipeline ?? ""),
+      stringAttribute("component", grouping?.component ?? ""),
+      ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+      ...(metadata?.taskPoolName === undefined
+        ? []
+        : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+    ];
+    return new InstrumentedCaller(
       caller,
-      this.makeLinkRecorder(source, consumer),
-      this.#tracing?.tracer(this.serviceConfig().name),
+      recordCall,
+      this.#tracing.tracer(this.serviceConfig().name),
       traceAttributes
     );
-    return instrumented;
   }
 
   public makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void {
@@ -387,9 +388,14 @@ export class ServiceEnvironment<
             component: grouping?.component ?? ""
           })
       : undefined;
+    if (counter === undefined) {
+      return (_context: MessageContext): void => {
+        statistics.count += 1;
+      };
+    }
     return (context: MessageContext): void => {
       statistics.count += 1;
-      counter?.inc(context);
+      counter.inc(context);
     };
   }
 
@@ -438,8 +444,8 @@ class InstrumentedCaller<T> implements Caller<T> {
   public constructor(
     private readonly caller: Caller<T>,
     private readonly recordCall: (context: MessageContext) => void,
-    private readonly tracer: Tracer | undefined,
-    private readonly traceAttributes: readonly Attribute[] | undefined
+    private readonly tracer: Tracer,
+    private readonly traceAttributes: readonly Attribute[]
   ) {}
 
   public isAsync(): boolean {
@@ -448,7 +454,7 @@ class InstrumentedCaller<T> implements Caller<T> {
 
   public consume(context: MessageContext, value: T): void | Promise<void> {
     this.recordCall(context);
-    if (this.tracer === undefined || !context.samplingEnabled()) {
+    if (!context.samplingEnabled()) {
       return this.caller.consume(context, value);
     }
     const started = this.tracer.start(context, "stream.call", this.traceAttributes);

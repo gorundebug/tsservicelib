@@ -39,6 +39,7 @@ export function applyDataSourceEndpointTracing(
   environment: RuntimeEnvironment,
   endpointId: number
 ): MessageContext {
+  if (environment.tracing() === undefined) return context;
   return environment.runtimeConfig().endpointById(endpointId)?.tracingEnabled === true
     ? context.withSampling(true)
     : context;

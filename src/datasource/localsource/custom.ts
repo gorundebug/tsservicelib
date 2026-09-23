@@ -253,6 +253,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
   readonly #tasks = new RuntimeTaskRegistry();
   readonly #waiters: (() => void)[] = [];
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
+  readonly #tracingEnabled: boolean;
   readonly #tracer: Tracer | undefined;
   #pending: RotatingMap<string, CustomResult<HandlerState, T, R, E>> | undefined;
   #active = 0;
@@ -277,10 +278,9 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
         consume: (context, value) => this.consumeResult(context, value)
       });
     }
-    this.#tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.#tracingEnabled = tracing !== undefined;
+    this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
@@ -333,11 +333,13 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
   }
 
   private async handleAdmitted(context: MessageContext, value: T): Promise<void> {
-    context = applyDataSourceEndpointTracing(
-      context,
-      this.stream().runtimeEnvironment(),
-      this.endpoint().id
-    );
+    if (this.#tracingEnabled) {
+      context = applyDataSourceEndpointTracing(
+        context,
+        this.stream().runtimeEnvironment(),
+        this.endpoint().id
+      );
+    }
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "local.input", this.#traceAttributes);

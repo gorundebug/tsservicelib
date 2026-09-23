@@ -173,6 +173,7 @@ const unaryResultContext: ResultContext = { done: () => undefined };
 export class GrpcJsDataSink extends OutputDataSink {
   readonly #service: DescService;
   readonly #clients: readonly Client[];
+  readonly #tracingEnabled: boolean;
   #nextClient = 0;
   readonly #codecs = new WeakMap<
     DescMethod,
@@ -192,6 +193,7 @@ export class GrpcJsDataSink extends OutputDataSink {
       throw new Error(`gRPC data connector ${config.name} has no address`);
     const address = config.address;
     this.#service = service;
+    this.#tracingEnabled = environment.tracing() !== undefined;
     this.#clients = Array.from(
       { length: config.connectionsCount },
       () =>
@@ -252,7 +254,7 @@ export class GrpcJsDataSink extends OutputDataSink {
   }
 
   public unary<ResR>(context: MessageContext, method: DescMethod, request: unknown): Promise<ResR> {
-    const metadata = metadataFromContext(context);
+    const metadata = metadataFromContext(context, this.#tracingEnabled);
     const remainingMs = context.remainingMs();
     return new Promise((resolve, reject) => {
       const codec = this.codec(method);
@@ -290,7 +292,7 @@ export class GrpcJsDataSink extends OutputDataSink {
       codec.encode,
       codec.decode as (bytes: Buffer) => ResR,
       request,
-      metadataFromContext(context),
+      metadataFromContext(context, this.#tracingEnabled),
       callOptions(context)
     );
     bindCancellation(context, call);
@@ -308,7 +310,7 @@ export class GrpcJsDataSink extends OutputDataSink {
         codec.path,
         codec.encode,
         codec.decode as (bytes: Buffer) => ResR,
-        metadataFromContext(context),
+        metadataFromContext(context, this.#tracingEnabled),
         callOptions(context),
         (error, value) => {
           if (error !== null) reject(error);
@@ -332,7 +334,7 @@ export class GrpcJsDataSink extends OutputDataSink {
       codec.path,
       codec.encode,
       codec.decode as (bytes: Buffer) => ResR,
-      metadataFromContext(context),
+      metadataFromContext(context, this.#tracingEnabled),
       callOptions(context)
     );
     bindCancellation(context, call);
@@ -1098,9 +1100,9 @@ function getOrCreateDataSink(
   return sink;
 }
 
-function metadataFromContext(context: MessageContext): Metadata {
+function metadataFromContext(context: MessageContext, tracingEnabled: boolean): Metadata {
   const metadata = new Metadata();
-  for (const [key, value] of context.transportMetadata()) metadata.set(key, value);
+  for (const [key, value] of context.transportMetadata(tracingEnabled)) metadata.set(key, value);
   return metadata;
 }
 

@@ -290,6 +290,7 @@ interface KafkaSinkEndpointConsumerContract extends Consumer<unknown> {
 
 export class KafkaDataSink extends OutputDataSink {
   readonly #factory: KafkaClientFactory;
+  readonly #tracingEnabled: boolean;
   readonly #deliveries = new RuntimeTaskRegistry();
   #producer: KafkaProducer | undefined;
   #producerRecovery: Promise<void> | undefined;
@@ -303,6 +304,7 @@ export class KafkaDataSink extends OutputDataSink {
     super(connectorId, environment);
     requireKafkaDataConnectorConfig(this.config());
     this.#factory = factory;
+    this.#tracingEnabled = environment.tracing() !== undefined;
   }
 
   public factory(): KafkaClientFactory {
@@ -411,7 +413,7 @@ export class KafkaDataSink extends OutputDataSink {
           key,
           value,
           selectedPartition,
-          context.transportMetadata()
+          context.transportMetadata(this.#tracingEnabled)
         );
       } catch (error: unknown) {
         failure = errorFromUnknown(error);

@@ -158,7 +158,7 @@ class WorkflowPoolCore {
   }
 
   private async run(task: WorkflowTask): Promise<void> {
-    const started = Date.now();
+    const started = this.#metrics === undefined ? undefined : Date.now();
     this.#metrics?.executorsBusy.inc();
     try {
       await task.execute();
@@ -167,7 +167,9 @@ class WorkflowPoolCore {
     } finally {
       this.#metrics?.executorsBusy.dec();
       this.#metrics?.tasksTotal.inc(task.context);
-      this.#metrics?.executionDuration.observe(task.context, (Date.now() - started) / 1_000);
+      if (started !== undefined) {
+        this.#metrics?.executionDuration.observe(task.context, (Date.now() - started) / 1_000);
+      }
       this.#active -= 1;
       this.pump();
     }

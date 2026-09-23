@@ -25,6 +25,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
   readonly #config: JoinStorageConfig;
   readonly #current = new Map<K, Item>();
   readonly #previous = new Map<K, Item>();
+  readonly #metricsEnabled: boolean;
   readonly #count: Int64Gauge;
   readonly #evictionsTotal: Int64Counter;
   #highWaterMark = 0;
@@ -35,7 +36,9 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
 
   public constructor(environment: RuntimeEnvironment, config: JoinStorageConfig) {
     this.#config = config;
-    const scope = environment.metrics().scope("hashmap_join_storage", {
+    const metrics = environment.metrics();
+    this.#metricsEnabled = metrics.enabled();
+    const scope = metrics.scope("hashmap_join_storage", {
       service: environment.serviceConfig().name,
       name: config.name()
     });
@@ -44,7 +47,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
       "evictions_total",
       "Total number of items evicted from join storage by TTL"
     );
-    this.#count.set(0);
+    if (this.#metricsEnabled) this.#count.set(0);
   }
 
   public size(): number {
@@ -72,7 +75,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     await Promise.allSettled([...items].map((item) => item.tail));
     this.#current.clear();
     this.#previous.clear();
-    this.#count.set(0);
+    if (this.#metricsEnabled) this.#count.set(0);
   }
 
   public async joinValue(
@@ -151,7 +154,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     };
     const replaced = this.#current.get(key);
     this.#current.set(key, item);
-    if (replaced === undefined) this.#count.inc();
+    if (this.#metricsEnabled && replaced === undefined) this.#count.inc();
     if (ttl > 0) this.armDeadline(context, key, item, ttl);
     return item;
   }
@@ -217,8 +220,10 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     const storage = location === "current" ? this.#current : this.#previous;
     if (storage.get(key) !== item) return;
     storage.delete(key);
-    this.#count.dec();
-    if (evictionContext !== undefined) this.#evictionsTotal.inc(evictionContext);
+    if (this.#metricsEnabled) {
+      this.#count.dec();
+      if (evictionContext !== undefined) this.#evictionsTotal.inc(evictionContext);
+    }
   }
 
   private armRotation(): void {
@@ -252,7 +257,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     this.#previous.clear();
     for (const [key, item] of this.#current) this.#previous.set(key, item);
     this.#current.clear();
-    if (evicted > 0) {
+    if (this.#metricsEnabled && evicted > 0) {
       this.#count.sub(evicted);
       this.#evictionsTotal.add(this.#rotationContext ?? Context.background(), evicted);
     }

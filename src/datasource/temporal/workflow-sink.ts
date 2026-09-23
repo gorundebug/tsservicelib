@@ -42,6 +42,8 @@ function makeWorkflowSinkConsumer<T, R, E>(
   if (connector === undefined) {
     throw new Error(`Temporal connector ${String(endpoint.idDataConnector)} not found`);
   }
+  const metricsEnabled = environment.metrics().enabled();
+  const tracingEnabled = environment.tracing() !== undefined;
   const consumer: Consumer<T> = {
     consume: async (context, value) => {
       const parentId = context.streamId() ?? workflowInfo().workflowId;
@@ -65,6 +67,8 @@ function makeWorkflowSinkConsumer<T, R, E>(
         endpoint,
         connector.name,
         environment.runtimeConfig().config(),
+        metricsEnabled,
+        tracingEnabled,
         envelope
       );
       if (withResult) {
@@ -84,11 +88,14 @@ async function executeEndpoint(
   endpoint: TemporalEndpointConfig,
   connectorName: string,
   runtimeConfig: CanonicalConfig,
+  metricsEnabled: boolean,
+  tracingEnabled: boolean,
   envelope: EndpointWireEnvelope
 ): Promise<EndpointWireResult> {
   const request: EndpointWorkflowRequest = {
     executionType: endpoint.temporalExecutionType,
     runtimeConfig,
+    telemetry: { noopMetrics: !metricsEnabled, noopTracing: !tracingEnabled },
     activityType: temporalEndpointActivityType(connectorName, endpoint.name),
     activityStartToCloseTimeout: endpoint.activityStartToCloseTimeout,
     activityHeartbeatTimeout: endpoint.activityHeartbeatTimeout,

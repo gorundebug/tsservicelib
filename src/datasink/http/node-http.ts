@@ -392,6 +392,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #client: Client;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
+  readonly #tracingEnabled: boolean;
   readonly #tasks = new RuntimeTaskRegistry();
   #started = false;
   #stopped = false;
@@ -406,10 +407,9 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     this.#streamContext = new StreamContext(stream);
     this.#client = client;
     this.#handler = handler;
-    this.#tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.#tracingEnabled = tracing !== undefined;
+    this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
@@ -504,7 +504,7 @@ class NodeHttpSinkEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       for (const [name, value] of request.headers) {
         outgoingRequest.headers.set(name, value);
       }
-      for (const [name, metadata] of requestContext.transportMetadata()) {
+      for (const [name, metadata] of requestContext.transportMetadata(this.#tracingEnabled)) {
         outgoingRequest.headers.set(name, metadata);
       }
       errorEvent = "http_call.error";

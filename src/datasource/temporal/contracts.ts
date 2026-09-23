@@ -80,6 +80,10 @@ export interface EndpointWireResult {
 export interface EndpointWorkflowRequest {
   readonly executionType: TemporalExecutionType;
   readonly runtimeConfig: CanonicalConfig;
+  readonly telemetry?: {
+    readonly noopMetrics: boolean;
+    readonly noopTracing: boolean;
+  };
   readonly activityType: string;
   readonly activityStartToCloseTimeout: number;
   readonly activityHeartbeatTimeout: number;

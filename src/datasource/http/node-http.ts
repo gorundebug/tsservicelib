@@ -37,6 +37,14 @@ import {
 export type { HTTPHandler } from "../../runtime/index.js";
 
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
+const CONTEXT_METADATA_HEADERS = [
+  STREAM_ID_HEADER,
+  TRACE_SAMPLING_HEADER,
+  "traceparent",
+  "tracestate",
+  "baggage"
+] as const;
+const STREAM_ID_ONLY_HEADERS = [STREAM_ID_HEADER] as const;
 
 export interface HandlerData {
   readonly request: IncomingMessage;
@@ -191,6 +199,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
   public readonly path: string;
   #consumer: NodeHttpEndpointConsumerContract | undefined;
   readonly #requestHandler: HTTPHandler;
+  readonly #tracingEnabled: boolean;
 
   public constructor(dataSource: NodeHttpDataSource, config: HttpEndpointConfig) {
     super(dataSource, config.id);
@@ -202,6 +211,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
     }
     this.method = config.httpMethodType;
     this.path = config.path;
+    this.#tracingEnabled = this.runtimeEnvironment().tracing() !== undefined;
     this.#requestHandler = (request, response) => {
       void this.serve(request, response).catch((error: unknown) => {
         if (!response.headersSent) {
@@ -240,7 +250,10 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
 
   private async serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== this.method) {
-      this.onInvalidHttpMethod(contextFromRequest(request), request.method ?? "");
+      this.onInvalidHttpMethod(
+        contextFromRequest(request, undefined, this.#tracingEnabled),
+        request.method ?? ""
+      );
       response.setHeader("allow", this.method);
       response.statusCode = 405;
       response.end();
@@ -386,6 +399,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #hasResult: boolean;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
+  readonly #tracingEnabled: boolean;
   readonly #tasks = new RuntimeTaskRegistry();
   #pending: RotatingMap<string, HttpResult<HandlerState, ReqT, ResR, T, R, E>> | undefined;
   #started = false;
@@ -405,10 +419,9 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       new FunctionCollector((context, value: T) => this.consume(context, value)),
       new FunctionCollector((context, value: E) => stream.errorStream().consume(context, value))
     );
-    this.#tracer = stream
-      .runtimeEnvironment()
-      .tracing()
-      ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+    const tracing = stream.runtimeEnvironment().tracing();
+    this.#tracingEnabled = tracing !== undefined;
+    this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     if (this.#hasResult) {
       stream.setResultConsumer({
@@ -485,11 +498,14 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     cancellation: { readonly signal: AbortSignal; complete(): void },
     lifecycleSignal: AbortSignal
   ): Promise<void> {
-    let context = applyDataSourceEndpointTracing(
-      contextFromRequest(request, lifecycleSignal),
-      this.stream().runtimeEnvironment(),
-      this.endpoint().id
-    );
+    let context = contextFromRequest(request, lifecycleSignal, this.#tracingEnabled);
+    if (this.#tracingEnabled) {
+      context = applyDataSourceEndpointTracing(
+        context,
+        this.stream().runtimeEnvironment(),
+        this.endpoint().id
+      );
+    }
     const data: HandlerData = { request, response };
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
@@ -680,22 +696,22 @@ function getOrCreateDataSource(
   return dataSource;
 }
 
-function contextFromRequest(request: IncomingMessage, signal?: AbortSignal): MessageContext {
-  const metadata = new Map<string, string>();
-  for (const name of [
-    STREAM_ID_HEADER,
-    TRACE_SAMPLING_HEADER,
-    "traceparent",
-    "tracestate",
-    "baggage"
-  ]) {
+function contextFromRequest(
+  request: IncomingMessage,
+  signal: AbortSignal | undefined,
+  tracingEnabled: boolean
+): MessageContext {
+  let metadata: Map<string, string> | undefined;
+  for (const name of tracingEnabled ? CONTEXT_METADATA_HEADERS : STREAM_ID_ONLY_HEADERS) {
     const value = request.headers[name];
     const first = Array.isArray(value) ? value[0] : value;
     if (first !== undefined) {
+      metadata ??= new Map<string, string>();
       metadata.set(name, first);
     }
   }
-  return new MessageContext(signal).withMetadata(metadata);
+  const context = new MessageContext(signal);
+  return metadata === undefined ? context : context.withMetadata(metadata);
 }
 
 function requestPath(request: IncomingMessage): string {

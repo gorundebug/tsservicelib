@@ -146,7 +146,7 @@ export class DelayPool implements Lifecycle {
     task.removeAbortListener();
     // In particular, abort listeners must never invoke user code inline.
     queueMicrotask(() => {
-      const started = performance.now();
+      const started = this.#metrics === undefined ? undefined : performance.now();
       let completion: Completion;
       try {
         completion = task.execute();
@@ -210,13 +210,15 @@ export class DelayPool implements Lifecycle {
   private completeTask(
     task: DelayTask,
     context: Context,
-    started: number,
+    started: number | undefined,
     cancelled: boolean
   ): void {
     this.#tasks.delete(task);
     this.#metrics?.waitQueueLength.dec();
     this.#metrics?.tasksTotal.inc(context);
-    this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+    if (started !== undefined) {
+      this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+    }
     if (cancelled) this.#metrics?.taskCancelled.inc(context);
     this.finishDrainIfIdle();
   }
