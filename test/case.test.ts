@@ -116,6 +116,10 @@ await test("case builds one selector and routes the exact value to its typed whe
     failedConfig,
     caseStream
   );
+  assert.equal(caseStream.serde(), source.serde());
+  assert.equal(created.serde(), environment.serdeByName("created"));
+  assert.equal(failed.serde(), environment.serdeByName("failed"));
+  assert.notEqual(created.serde(), source.serde());
   const createdSink = new RecordingStream<Extract<Event, { kind: "created" }>>(
     createdSinkConfig,
     environment
@@ -155,9 +159,10 @@ await test("case rejects consumption before build and selector indices outside b
   const environment = makeTestEnvironment([sourceConfig, caseConfig, when]);
   const eventType = registerTestSerdeType(environment, "created", isEvent);
   const source = new ConsumedStream(sourceConfig, environment, environment.serde(eventType));
+  let selectedIndex = 5;
   const caseStream = makeCaseStream(caseConfig, source, {
     buildSwitch(): (value: Event) => number {
-      return () => 5;
+      return () => selectedIndex;
     }
   });
   makeWhenStream(when, caseStream);
@@ -166,9 +171,12 @@ await test("case rejects consumption before build and selector indices outside b
     void source.emit(new MessageContext(), { kind: "created", id: 1 });
   }, /not built/);
   caseStream.build();
-  assert.throws(() => {
-    void source.emit(new MessageContext(), { kind: "created", id: 1 });
-  }, /only 1 branches exist/);
+  for (const index of [-1, 1, 5, Number.MAX_SAFE_INTEGER, 0.5, Number.NaN]) {
+    selectedIndex = index;
+    assert.throws(() => {
+      void source.emit(new MessageContext(), { kind: "created", id: 1 });
+    }, /only 1 branches exist/);
+  }
 });
 
 await test("default case switch uses registered runtime types with Go-compatible last match", () => {

@@ -75,6 +75,10 @@ await test("split validates branches once and dispatches async branches first st
   const directLink = split.addStream();
   const asyncFirstLink = split.addStream();
   const asyncSecondLink = split.addStream();
+  assert.equal(split.serde(), source.serde());
+  for (const link of [directLink, asyncFirstLink, asyncSecondLink]) {
+    assert.equal(link.serde(), source.serde());
+  }
   assert.equal(directLink.name, "fanOutSplitLink0");
   assert.equal(asyncFirstLink.name, "fanOutSplitLink1");
   const events: string[] = [];
