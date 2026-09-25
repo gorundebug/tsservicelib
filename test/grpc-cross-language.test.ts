@@ -57,7 +57,8 @@ class InteropHandler implements EndpointHandler<HandlerState, Echo, Echo, Echo, 
     context: MessageContext
   ): Promise<{ readonly context: MessageContext; readonly state: HandlerState }> {
     assert.equal(context.streamId(), "go-official-client-stream");
-    assert.equal(context.metadata().get("baggage"), "interop=go-official-client");
+    // This fixture has no tracing engine; baggage is not extracted into MessageContext.
+    assert.equal(context.metadata().has("baggage"), false);
     assert.equal(context.metadata().has("x-interop-header"), false);
     return Promise.resolve({ context, state: { last: undefined, sender: undefined } });
   }
