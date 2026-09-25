@@ -1,3 +1,4 @@
+import { reportUnhandledTaskError } from "../errors.js";
 import { FifoQueue } from "./fifo-queue.js";
 import {
   bindPoolTask,
@@ -33,7 +34,7 @@ export class TaskPool implements Lifecycle {
   public constructor(options: TaskPoolOptions) {
     this.#name = options.name;
     this.#executorsCount = normalizeExecutorsCount(options.executorsCount);
-    this.#onError = options.onError ?? (() => undefined);
+    this.#onError = options.onError ?? reportUnhandledTaskError;
     this.#logger = options.logger;
     this.#metrics = makeTaskPoolMetrics("task", options);
   }
@@ -156,13 +157,13 @@ export class TaskPool implements Lifecycle {
     try {
       completion = task.execute();
     } catch (error: unknown) {
-      reportPoolError(this.#onError, error);
+      reportPoolError(this.#onError, error, task.context.signal());
       this.taskFinished(task.context, started);
       return;
     }
     void Promise.resolve(completion)
       .catch((error: unknown) => {
-        reportPoolError(this.#onError, error);
+        reportPoolError(this.#onError, error, task.context.signal());
       })
       .finally(() => {
         this.taskFinished(task.context, started);

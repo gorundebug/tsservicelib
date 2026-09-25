@@ -36,6 +36,38 @@ the event loop. CPU-bound or synchronously blocking application work must be
 isolated by the application or deployment without changing the framework's
 single-graph contract.
 
+## Background errors and shutdown
+
+Default process pools and detached tasks without an explicit error handler forward
+unexpected callback throws and rejected promises to Node's uncaught-error policy.
+`ServiceApp` logs such failures and forwards them even if logging fails. Generated
+executables stop and exit with a nonzero status rather than silently continuing.
+An explicitly supplied `onError` handler owns error handling; Temporal records
+failures in the workflow environment instead of applying the process policy.
+
+An awaited `RuntimeTaskRegistry.admit()` failure remains a rejected promise for
+its caller. Rejection with the actual cancellation reason (or `AbortError` after
+signal cancellation) is ordinary cancellation, not an unhandled task failure.
+Unrelated failures after cancellation are not suppressed. Typed business failures
+sent through collectors or error branches are data, not uncaught exceptions.
+
+Like Go, a pool's stop deadline reports slow shutdown but does not abandon its
+accepted callbacks. The generated executable applies one shutdown budget across
+the stop hook and runtime, and exits explicitly after shutdown or budget expiry.
+Synchronous code that blocks the Node event loop also blocks in-process timers;
+an external supervisor is required to enforce a hard deadline in that situation.
+
+## gRPC request lifetime
+
+All four source RPC modes reserve each active `streamId` until `EndRequest`
+finishes, including requests without a result stream. Duplicate active IDs are
+rejected per endpoint; independent IDs proceed, and completed IDs can be reused.
+An active result callback finishes before `EndRequest`; retired callbacks reject
+late delivery and release their stored callback references.
+
+For unary sources, `ResultContext.done()` does not complete the RPC: the response
+comes from `Sender.send()`. Streaming modes retain their own Done semantics.
+
 ## Service-local SubStream
 
 SubStream makes a reusable graph callable from business code inside its owning
@@ -78,3 +110,23 @@ makers receive the generated SubStream provider. Use runtime workflow-aware
 delay/scheduling, deterministic business code and Activities for external I/O.
 Replay reconstructs invocation state; a local non-workflow invocation is not
 durable across a process restart merely because its body calls a Temporal Sink.
+
+### Join expiry and callback failures
+
+Join callbacks for one key are serialized; different keys remain independent.
+An explicit context deadline controls expiry, including cancellation of that context.
+Without a context deadline, the configured TTL controls expiry: cancelling the message
+context alone does not shorten it. A pending expiry checks TTL renewal after an active
+callback completes, and a callback cannot republish a group replaced while it was waiting.
+
+An unexpected exception or rejection from a detached expiry callback follows the runtime's
+unhandled background failure policy rather than being silently discarded. Genuine task
+cancellation is distinguished from an unrelated failure. Typed business-error values are
+ordinary graph data, not unhandled exceptions.
+
+Stopping Join storage ends periodic rotation, not the lifetime of individual groups.
+Accepted expiry callbacks remain scheduled. Like Go's rotation lock, stop waits for
+in-flight TTL-bearing `joinValue` calls, but not zero-TTL calls or an expiry callback
+already executing. New TTL-bearing calls wait behind that maintenance stop and may
+continue afterward; admission of new graph requests belongs to the surrounding runtime.
+The outer service shutdown deadline still bounds process lifetime.

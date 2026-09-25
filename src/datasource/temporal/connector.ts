@@ -262,7 +262,9 @@ export class TemporalConnector implements ManagedDataConnector {
           activities,
           workflowsPath: this.#workflowsPath,
           interceptors: {
-            activity: [(activityContext) => temporalActivityInterceptors(activityContext, tracingEnabled)],
+            activity: [
+              (activityContext) => temporalActivityInterceptors(activityContext, tracingEnabled)
+            ],
             workflowModules: temporalWorkflowInterceptorModules()
           },
           ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
@@ -353,19 +355,21 @@ export class TemporalConnector implements ManagedDataConnector {
         ? registration.workflowType
         : ENDPOINT_WORKFLOW_TYPE;
     const owner = endpointOwner(this.name, config.name);
-    const handle = await runWithTemporalSubmissionContext(context, () =>
-      this.client().workflow.start(workflowType, {
-        args: [request],
-        workflowId: temporalEndpointWorkflowId(this.name, config.name, envelope.messageId),
-        taskQueue: config.taskQueue,
-        ...(config.workflowExecutionTimeout > 0
-          ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
-          : {}),
-        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-        workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
-        memo: ownershipMemo(owner, envelope.messageId),
-        priority: { priorityKey: request.priority }
-      }),
+    const handle = await runWithTemporalSubmissionContext(
+      context,
+      () =>
+        this.client().workflow.start(workflowType, {
+          args: [request],
+          workflowId: temporalEndpointWorkflowId(this.name, config.name, envelope.messageId),
+          taskQueue: config.taskQueue,
+          ...(config.workflowExecutionTimeout > 0
+            ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
+            : {}),
+          workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+          workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
+          memo: ownershipMemo(owner, envelope.messageId),
+          priority: { priorityKey: request.priority }
+        }),
       this.#tracingEnabled
     );
     await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId);

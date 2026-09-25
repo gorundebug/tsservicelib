@@ -709,8 +709,10 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
     return {
       ...common,
       ...functions,
-      httpMethodType: stringValue(source.httpMethodType, `${path}.httpMethodType`) as
-        HTTPMethodType,
+      httpMethodType: stringValue(
+        source.httpMethodType,
+        `${path}.httpMethodType`
+      ) as HTTPMethodType,
       path: stringValue(source.path, `${path}.path`)
     };
   if (source.grpcMethodType !== undefined)

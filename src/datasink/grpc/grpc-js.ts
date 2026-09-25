@@ -29,6 +29,7 @@ import {
   newStreamId,
   requireGrpcDataConnectorConfig,
   requireGrpcEndpointConfig,
+  settleWithinDeadline,
   spanError,
   stringAttribute,
   type Completion,
@@ -148,6 +149,15 @@ class StreamingResultContext implements ResultContext {
   public done(): void {
     if (this.#resolve === undefined) return;
     this.#span?.addEvent("done_called");
+    this.finish();
+  }
+
+  public isDone(): boolean {
+    return this.#resolve === undefined;
+  }
+
+  public finish(): void {
+    if (this.#resolve === undefined) return;
     this.#resolve();
     this.#resolve = undefined;
   }
@@ -219,24 +229,14 @@ export class GrpcJsDataSink extends OutputDataSink {
     if (this.#started) {
       this.#started = false;
       const drain = Promise.allSettled([...this.#tasks]).then(() => undefined);
-      const remainingMs = context.remainingMs();
-      if (remainingMs === undefined) {
-        await drain;
-      } else {
-        let timer: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            drain,
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, remainingMs);
-            })
-          ]);
-        } finally {
-          if (timer !== undefined) clearTimeout(timer);
+      try {
+        const [finished] = await settleWithinDeadline(context, [drain]);
+        if (finished === undefined) {
+          this.runtimeEnvironment().log().warn(context, "gRPC data sink shutdown timed out");
         }
+      } finally {
+        for (const client of this.#clients) client.close();
       }
-      for (const client of this.#clients) client.close();
-      await Promise.allSettled([...this.#tasks]);
     }
   }
 
@@ -591,7 +591,40 @@ interface ClientStreamingSession<HandlerState, ReqT> {
   readonly sender: StreamSender<ReqT>;
   readonly result: StreamingResultContext;
   readonly span: Span | undefined;
-  consumeTail: Promise<void>;
+  readonly consumers: Set<Promise<void>>;
+}
+
+class StreamingSessionSlot<HandlerState, ReqT> {
+  public readonly ready: Promise<ClientStreamingSession<HandlerState, ReqT>>;
+  #closing = false;
+  #resolve: (session: ClientStreamingSession<HandlerState, ReqT>) => void = () => undefined;
+  #reject: (error: unknown) => void = () => undefined;
+
+  public constructor() {
+    this.ready = new Promise((resolve, reject) => {
+      this.#resolve = resolve;
+      this.#reject = reject;
+    });
+    // A synchronous BeginRequest failure can close admission before any waiter attaches.
+    void this.ready.catch(() => undefined);
+  }
+
+  public resolve(session: ClientStreamingSession<HandlerState, ReqT>): void {
+    this.#resolve(session);
+  }
+
+  public reject(error: unknown): void {
+    this.close();
+    this.#reject(error);
+  }
+
+  public close(): void {
+    this.#closing = true;
+  }
+
+  public isClosing(): boolean {
+    return this.#closing;
+  }
 }
 
 class GrpcClientStreamingEndpointConsumer<
@@ -608,7 +641,7 @@ class GrpcClientStreamingEndpointConsumer<
   readonly #method: DescMethod;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
-  readonly #pending = new Map<string, Promise<ClientStreamingSession<HandlerState, ReqT>>>();
+  readonly #pending = new Map<string, StreamingSessionSlot<HandlerState, ReqT>>();
 
   public constructor(
     endpoint: DataSinkEndpoint,
@@ -634,18 +667,44 @@ class GrpcClientStreamingEndpointConsumer<
   public async consume(context: MessageContext, value: T): Promise<void> {
     const streamId = context.streamId() ?? newStreamId();
     context = context.withStreamId(streamId);
-    let sessionPromise = this.#pending.get(streamId);
-    if (sessionPromise === undefined) {
-      sessionPromise = this.createSession(context, streamId);
-      this.#pending.set(streamId, sessionPromise);
+    let pending = this.#pending.get(streamId);
+    if (pending === undefined) {
+      const opening = new StreamingSessionSlot<HandlerState, ReqT>();
+      pending = opening;
+      this.#pending.set(streamId, opening);
+      requireGrpcJsDataSink(this.endpoint()).track(
+        context,
+        this.createSession(context, streamId, opening).then(
+          (session) => {
+            opening.resolve(session);
+          },
+          (error: unknown) => {
+            opening.reject(error);
+          }
+        )
+      );
+    }
+    if (pending.isClosing()) {
+      this.endpoint().onBeginRequestFailed(
+        context,
+        new Error(`gRPC session ${streamId} is still completing`)
+      );
+      return;
     }
     let session: ClientStreamingSession<HandlerState, ReqT>;
     try {
-      session = await sessionPromise;
+      session = await pending.ready;
     } catch {
       return;
     }
-    const consume = session.consumeTail.then(async () => {
+    if (pending.isClosing() || session.result.isDone() || session.context.cancelled()) {
+      this.endpoint().onBeginRequestFailed(
+        context,
+        new Error(`gRPC session ${streamId} is still completing`)
+      );
+      return;
+    }
+    const consume = (async () => {
       try {
         await this.#handler.consumeMessage(
           session.context,
@@ -664,18 +723,21 @@ class GrpcClientStreamingEndpointConsumer<
         ]);
         throw failure;
       }
-    });
-    session.consumeTail = consume.catch(() => undefined);
+    })();
+    session.consumers.add(consume);
     try {
       await consume;
     } catch {
       session.result.done();
+    } finally {
+      session.consumers.delete(consume);
     }
   }
 
   private async createSession(
     context: MessageContext,
-    streamId: string
+    streamId: string,
+    pending: StreamingSessionSlot<HandlerState, ReqT>
   ): Promise<ClientStreamingSession<HandlerState, ReqT>> {
     let state: HandlerState;
     try {
@@ -684,6 +746,7 @@ class GrpcClientStreamingEndpointConsumer<
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
+      pending.reject(failure);
       this.endpoint().onBeginRequestFailed(context, failure);
       this.#pending.delete(streamId);
       throw failure;
@@ -713,27 +776,35 @@ class GrpcClientStreamingEndpointConsumer<
         sender,
         result,
         span,
-        consumeTail: Promise.resolve()
+        consumers: new Set()
       };
       dataSink.track(
         context,
-        this.finishSession(streamId, session, response, () => call.end(), startedAt, span)
+        this.finishSession(streamId, pending, session, response, () => call.end(), startedAt, span)
       );
       return session;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
       if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
-      this.#pending.delete(streamId);
-      await this.#handler.endRequest(context, this.#streamContext, failure, state);
-      this.endpoint().onRequestEnd(context, startedAt, failure);
-      span?.end();
+      pending.reject(failure);
+      try {
+        await this.#handler.endRequest(context, this.#streamContext, failure, state);
+      } finally {
+        try {
+          this.endpoint().onRequestEnd(context, startedAt, failure);
+        } finally {
+          span?.end();
+          this.#pending.delete(streamId);
+        }
+      }
       throw failure;
     }
   }
 
   private async finishSession(
     streamId: string,
+    pending: StreamingSessionSlot<HandlerState, ReqT>,
     session: ClientStreamingSession<HandlerState, ReqT>,
     response: Promise<ResR>,
     close: () => void,
@@ -742,18 +813,25 @@ class GrpcClientStreamingEndpointConsumer<
   ): Promise<void> {
     let failure: Error | undefined;
     let phase = "close_and_recv";
+    // Attach both outcomes immediately: a transport error can precede Done.
+    const receivedResponse = response.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error: errorFromUnknown(error) })
+    );
     try {
       await session.result.wait(session.context.signal());
-      await session.consumeTail;
+      pending.close();
       await session.sender.close(close);
-      const received = await response;
+      const received = await receivedResponse;
+      await Promise.allSettled([...session.consumers]);
+      if ("error" in received) throw received.error;
       span?.addEvent("close_and_recv");
       phase = "handle_response";
       await this.#handler.handleResponse(
         session.context,
         this.#streamContext,
         session.state,
-        received
+        received.value
       );
       span?.addEvent("handle_response");
     } catch (error: unknown) {
@@ -761,7 +839,9 @@ class GrpcClientStreamingEndpointConsumer<
       if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
     } finally {
-      this.#pending.delete(streamId);
+      pending.close();
+      session.result.finish();
+      await Promise.allSettled([...session.consumers]);
       try {
         await this.#handler.endRequest(
           session.context,
@@ -777,6 +857,7 @@ class GrpcClientStreamingEndpointConsumer<
           this.endpoint().onRequestEnd(session.context, startedAt, failure);
         } finally {
           span?.end();
+          this.#pending.delete(streamId);
         }
       }
     }
@@ -790,7 +871,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
   readonly #method: DescMethod;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
-  readonly #pending = new Map<string, Promise<ClientStreamingSession<HandlerState, ReqT>>>();
+  readonly #pending = new Map<string, StreamingSessionSlot<HandlerState, ReqT>>();
 
   public constructor(
     endpoint: DataSinkEndpoint,
@@ -816,18 +897,44 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
   public async consume(context: MessageContext, value: T): Promise<void> {
     const streamId = context.streamId() ?? newStreamId();
     context = context.withStreamId(streamId);
-    let sessionPromise = this.#pending.get(streamId);
-    if (sessionPromise === undefined) {
-      sessionPromise = this.createSession(context, streamId);
-      this.#pending.set(streamId, sessionPromise);
+    let pending = this.#pending.get(streamId);
+    if (pending === undefined) {
+      const opening = new StreamingSessionSlot<HandlerState, ReqT>();
+      pending = opening;
+      this.#pending.set(streamId, opening);
+      requireGrpcJsDataSink(this.endpoint()).track(
+        context,
+        this.createSession(context, streamId, opening).then(
+          (session) => {
+            opening.resolve(session);
+          },
+          (error: unknown) => {
+            opening.reject(error);
+          }
+        )
+      );
+    }
+    if (pending.isClosing()) {
+      this.endpoint().onBeginRequestFailed(
+        context,
+        new Error(`gRPC session ${streamId} is still completing`)
+      );
+      return;
     }
     let session: ClientStreamingSession<HandlerState, ReqT>;
     try {
-      session = await sessionPromise;
+      session = await pending.ready;
     } catch {
       return;
     }
-    const consume = session.consumeTail.then(async () => {
+    if (pending.isClosing() || session.result.isDone() || session.context.cancelled()) {
+      this.endpoint().onBeginRequestFailed(
+        context,
+        new Error(`gRPC session ${streamId} is still completing`)
+      );
+      return;
+    }
+    const consume = (async () => {
       try {
         await this.#handler.consumeMessage(
           session.context,
@@ -846,18 +953,21 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
         ]);
         throw failure;
       }
-    });
-    session.consumeTail = consume.catch(() => undefined);
+    })();
+    session.consumers.add(consume);
     try {
       await consume;
     } catch {
       session.result.done();
+    } finally {
+      session.consumers.delete(consume);
     }
   }
 
   private async createSession(
     context: MessageContext,
-    streamId: string
+    streamId: string,
+    pending: StreamingSessionSlot<HandlerState, ReqT>
   ): Promise<ClientStreamingSession<HandlerState, ReqT>> {
     let state: HandlerState;
     try {
@@ -866,6 +976,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       state = started.state;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
+      pending.reject(failure);
       this.endpoint().onBeginRequestFailed(context, failure);
       this.#pending.delete(streamId);
       throw failure;
@@ -895,24 +1006,35 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
         sender,
         result,
         span,
-        consumeTail: Promise.resolve()
+        consumers: new Set()
       };
-      dataSink.track(context, this.finishSession(streamId, session, call, startedAt, span));
+      dataSink.track(
+        context,
+        this.finishSession(streamId, pending, session, call, startedAt, span)
+      );
       return session;
     } catch (error: unknown) {
       const failure = errorFromUnknown(error);
       if (span !== undefined) spanError(span, failure);
       span?.addEvent(`${phase}.error`, [stringAttribute("error", failure.message)]);
-      this.#pending.delete(streamId);
-      await this.#handler.endRequest(context, this.#streamContext, failure, state);
-      this.endpoint().onRequestEnd(context, startedAt, failure);
-      span?.end();
+      pending.reject(failure);
+      try {
+        await this.#handler.endRequest(context, this.#streamContext, failure, state);
+      } finally {
+        try {
+          this.endpoint().onRequestEnd(context, startedAt, failure);
+        } finally {
+          span?.end();
+          this.#pending.delete(streamId);
+        }
+      }
       throw failure;
     }
   }
 
   private async finishSession(
     streamId: string,
+    pending: StreamingSessionSlot<HandlerState, ReqT>,
     session: ClientStreamingSession<HandlerState, ReqT>,
     call: ClientDuplexStream<ReqT, ResR>,
     startedAt: number | undefined,
@@ -925,7 +1047,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
         session.result.wait(session.context.signal()).then(() => "done" as const),
         receive.then(() => "responses" as const)
       ]);
-      await session.consumeTail;
+      pending.close();
       await session.sender.close(() => call.end());
       if (winner === "done") await receive;
       span?.addEvent("done_received");
@@ -934,7 +1056,9 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
       if (span !== undefined) spanError(span, failure);
       call.cancel();
     } finally {
-      this.#pending.delete(streamId);
+      pending.close();
+      session.result.finish();
+      await Promise.allSettled([receive, ...session.consumers]);
       try {
         await this.#handler.endRequest(
           session.context,
@@ -950,6 +1074,7 @@ class GrpcBidiStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E> imple
           this.endpoint().onRequestEnd(session.context, startedAt, failure);
         } finally {
           span?.end();
+          this.#pending.delete(streamId);
         }
       }
     }

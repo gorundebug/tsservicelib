@@ -87,8 +87,12 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     this.#serviceId = serviceId;
     this.#serdeRegistry = serdeRegistry;
     this.#logger = telemetry.logger ?? workflowLogger;
-    this.#metrics = telemetry.noopMetrics ? noopMetrics : (telemetry.metrics ?? new WorkflowMetrics());
-    this.#tracing = telemetry.noopTracing ? undefined : (telemetry.tracing ?? new WorkflowTracing());
+    this.#metrics = telemetry.noopMetrics
+      ? noopMetrics
+      : (telemetry.metrics ?? new WorkflowMetrics());
+    this.#tracing = telemetry.noopTracing
+      ? undefined
+      : (telemetry.tracing ?? new WorkflowTracing());
     this.#tasks = new RuntimeTaskRegistry((error) => {
       this.recordFailure(error);
     });
@@ -333,7 +337,7 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
           })
       : undefined;
     if (counter === undefined) {
-      return (_context): void => {
+      return (): void => {
         this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
       };
     }

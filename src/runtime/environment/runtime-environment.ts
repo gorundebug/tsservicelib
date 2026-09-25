@@ -389,7 +389,7 @@ export class ServiceEnvironment<
           })
       : undefined;
     if (counter === undefined) {
-      return (_context: MessageContext): void => {
+      return (): void => {
         statistics.count += 1;
       };
     }

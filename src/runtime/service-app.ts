@@ -1,3 +1,4 @@
+import { RuntimeStoppedError, reportUnhandledTaskError } from "./errors.js";
 import {
   type CallSemanticsGroup,
   type CanonicalConfig,
@@ -293,7 +294,11 @@ function makeRuntimePools(
 
 function reportAsyncFailure(logger: Logger, message: string): (error: unknown) => void {
   return (error: unknown): void => {
-    logger.error(Context.background(), message, err(errorFromUnknown(error)));
+    try {
+      logger.error(Context.background(), message, err(errorFromUnknown(error)));
+    } finally {
+      if (!(error instanceof RuntimeStoppedError)) reportUnhandledTaskError(error);
+    }
   };
 }
 

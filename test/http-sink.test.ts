@@ -683,6 +683,58 @@ await test("Node HTTP sink marks the exact failed lifecycle stage on its span", 
   }
 });
 
+await test("HTTP sink stop respects its deadline with a suspended business callback", async () => {
+  let entered: () => void = () => undefined;
+  let release: () => void = () => undefined;
+  const active = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let endCalled = false;
+  const client = new RejectingClient(new Error("no HTTP request is expected"));
+  const harness = makeSinkHarness(
+    {
+      beginRequest: (context) => ({ context, state: { kind: "request" } }),
+      async consumeMessage() {
+        entered();
+        await blocked;
+      },
+      handleResponse: () => undefined,
+      endRequest: () => {
+        endCalled = true;
+      }
+    },
+    client
+  );
+  await harness.dataSink.start(Context.background());
+  const operation = harness.source.emit(new MessageContext(), "value");
+  let stopping: Promise<void> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await active;
+    stopping = harness.dataSink.stop(Context.background().bounded(20));
+    await Promise.race([
+      stopping,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error("HTTP stop exceeded its deadline"));
+        }, 2_000);
+      })
+    ]);
+    assert.equal(endCalled, false);
+    assert.equal(client.closed, true);
+  } finally {
+    clearTimeout(timer);
+    release();
+    await operation;
+    await stopping;
+    await harness.dataSink.stop(Context.background());
+  }
+  assert.equal(endCalled, true);
+});
+
 function traceAttribute(
   attributes: readonly { readonly key: string; readonly value: unknown }[],
   key: string

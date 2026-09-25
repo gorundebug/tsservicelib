@@ -21,6 +21,7 @@ import {
   newStreamId,
   requireHttpDataConnectorConfig,
   requireHttpEndpointConfig,
+  settleWithinDeadline,
   spanError,
   stringAttribute,
   type Completion,
@@ -597,10 +598,10 @@ function contextError(context: Context, fallback: string): Error {
 }
 
 async function drainAcceptedTasks(tasks: RuntimeTaskRegistry, context: Context): Promise<void> {
-  try {
-    await tasks.drain(context.remainingMs());
-  } catch (error: unknown) {
-    tasks.cancel(context.signal().reason ?? error);
-    await tasks.drain();
+  const [result] = await settleWithinDeadline(context, [tasks.drain()]);
+  if (result === undefined) {
+    tasks.cancel(context.signal().reason ?? new Error("HTTP sink shutdown deadline exceeded"));
+  } else if (result.status === "rejected") {
+    tasks.cancel(result.reason);
   }
 }

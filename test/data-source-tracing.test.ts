@@ -8,6 +8,7 @@ import {
   type EndpointConfig
 } from "@gorundebug/tsservicelib/runtime";
 import { makeTestEnvironmentWithStore } from "./support/environment.js";
+import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
 
 const endpoint = (tracingEnabled: boolean): EndpointConfig => ({
   id: 100,
@@ -19,6 +20,7 @@ const endpoint = (tracingEnabled: boolean): EndpointConfig => ({
 
 await test("DataSource endpoint tracing policy is read from each runtime config snapshot", () => {
   const { environment, store } = makeTestEnvironmentWithStore([], {
+    tracing: new TestTracing(),
     dataConnectors: [
       {
         id: 10,

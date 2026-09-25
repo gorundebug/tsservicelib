@@ -40,7 +40,9 @@ export function isHttpEndpointConfig(
   return (
     value !== undefined &&
     "httpMethodType" in value &&
-    Object.values(HTTPMethodType).some(method => method !== "" && method === value.httpMethodType) &&
+    Object.values(HTTPMethodType).some(
+      (method) => method !== "" && method === value.httpMethodType
+    ) &&
     "path" in value &&
     typeof value.path === "string"
   );

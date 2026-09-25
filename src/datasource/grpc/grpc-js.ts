@@ -43,6 +43,7 @@ import {
   newStreamId,
   requireGrpcDataConnectorConfig,
   requireGrpcEndpointConfig,
+  settleWithinDeadline,
   spanError,
   str,
   stringAttribute,
@@ -329,41 +330,31 @@ export class GrpcJsDataSource extends InputDataSource {
     for (const path of this.#paths) host.server.unregister(path);
     this.#paths.clear();
     if (this.#calls.size !== 0) {
-      await new Promise<void>((resolve) => {
-        const timeout = context.remainingMs();
-        const timer =
-          timeout === undefined
-            ? undefined
-            : setTimeout(() => {
-                for (const cancel of [...this.#calls]) cancel();
-                resolve();
-              }, timeout);
-        this.#idle = () => {
-          if (timer !== undefined) clearTimeout(timer);
-          resolve();
-        };
-      });
-      this.#idle = undefined;
+      try {
+        const idle = new Promise<void>((resolve) => {
+          this.#idle = resolve;
+        });
+        const [drained] = await settleWithinDeadline(context, [idle]);
+        if (drained === undefined) {
+          for (const cancel of [...this.#calls]) cancel();
+        }
+      } finally {
+        this.#idle = undefined;
+      }
     }
     this.#host = undefined;
     host.sources.delete(this);
     if (host.sources.size !== 0) return;
     host.closing = true;
     const server = host.server;
-    await new Promise<void>((resolve) => {
-      const timeout = context.remainingMs();
-      const timer =
-        timeout === undefined
-          ? undefined
-          : setTimeout(() => {
-              server.forceShutdown();
-              resolve();
-            }, timeout);
-      server.tryShutdown(() => {
-        if (timer !== undefined) clearTimeout(timer);
-        resolve();
-      });
-    });
+    const [closed] = await settleWithinDeadline(context, [
+      new Promise<void>((resolve) => {
+        server.tryShutdown(() => {
+          resolve();
+        });
+      })
+    ]);
+    if (closed === undefined) server.forceShutdown();
     grpcServers.delete(this.runtimeEnvironment());
   }
 }
@@ -378,6 +369,7 @@ class RequestResult<HandlerState, T, ResR, R, E> implements ResultContext<
   readonly #callbacks = new Map<string, ResultCallback<HandlerState, T, ResR, R, E>>();
   readonly #span: Span | undefined;
   readonly #recordDone: boolean;
+  readonly #ignoreDone: boolean;
   #done: Promise<void> | undefined;
   #resolve: (() => void) | undefined;
   #completed = false;
@@ -386,14 +378,16 @@ class RequestResult<HandlerState, T, ResR, R, E> implements ResultContext<
   #retired: Promise<void> | undefined;
   #resolveRetired: (() => void) | undefined;
 
-  public constructor(span: Span | undefined, recordDone: boolean) {
+  public constructor(span: Span | undefined, recordDone: boolean, ignoreDone = false) {
     this.#span = span;
     this.#recordDone = recordDone;
+    this.#ignoreDone = ignoreDone;
   }
   public setResultCallback(
     messageId: string,
     callback: ResultCallback<HandlerState, T, ResR, R, E>
   ): void {
+    if (this.#retiring) return;
     this.#callbacks.set(messageId, callback);
   }
   public callback(messageId: string): ResultCallback<HandlerState, T, ResR, R, E> | undefined {
@@ -404,6 +398,9 @@ class RequestResult<HandlerState, T, ResR, R, E> implements ResultContext<
     return this.#callbacks.delete(messageId);
   }
   public done(): void {
+    if (!this.#ignoreDone) this.complete();
+  }
+  public complete(): void {
     if (this.#completed) return;
     this.#completed = true;
     if (this.#recordDone) this.#span?.addEvent("done_called");
@@ -443,6 +440,7 @@ class RequestResult<HandlerState, T, ResR, R, E> implements ResultContext<
       });
       await this.#retired;
     }
+    this.#callbacks.clear();
     return this.#completed;
   }
 }
@@ -678,14 +676,20 @@ abstract class GrpcStreamingSourceConsumer<HandlerState, ReqT, ResR, T, R, E>
     sender: Sender<ResR>
   ): string {
     const streamId = context.streamId() ?? newStreamId();
-    if (this.pending.has(streamId)) throw new Error("duplicate key");
+    if (this.pending.has(streamId)) {
+      const failure = new Error("duplicate key");
+      this.endpoint().onBeginRequestFailed(context, failure);
+      result.span()?.addEvent("request_rejected", [stringAttribute("error", failure.message)]);
+      throw failure;
+    }
     this.pending.set(streamId, { state, result, sender });
-    this.endpoint().onPendingAdd(context, streamId);
+    if (this.hasResult()) this.endpoint().onPendingAdd(context, streamId);
     return streamId;
   }
 
   protected removePending(context: MessageContext, streamId: string): void {
-    if (this.pending.delete(streamId)) this.endpoint().onPendingRemove(context, streamId);
+    if (this.pending.delete(streamId) && this.hasResult())
+      this.endpoint().onPendingRemove(context, streamId);
   }
 
   private consumeResult(context: MessageContext, value: R): Completion {
@@ -787,29 +791,27 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       stringAttribute("stream_id", streamId),
       boolAttribute("has_result", hasResult)
     ]);
-    const result = new RequestResult<HandlerState, T, ResR, R, E>(span, false);
+    const result = new RequestResult<HandlerState, T, ResR, R, E>(span, false, true);
     let response: ResR | undefined;
     const sender = new UnarySender<ResR>((value) => {
       response = value;
-      result.done();
+      result.complete();
     }, span);
     let failure: Error | undefined;
     let resultWaitFailed = false;
-    let phase = "consume_message";
-    if (hasResult) {
+    let phase = "admission";
+    let pending = false;
+    try {
       if (this.#pending.has(streamId)) {
-        failure = new Error("duplicate key");
-        const ending = this.#handler.endRequest(context, this.#streamContext, failure, state);
-        if (ending !== undefined) await ending;
-        this.endpoint().onRequestEnd(context, startedAt, failure);
-        callback(failure);
-        span?.end();
-        return;
+        const rejected = new Error("duplicate key");
+        this.endpoint().onBeginRequestFailed(context, rejected);
+        span?.addEvent("request_rejected", [stringAttribute("error", rejected.message)]);
+        throw rejected;
       }
       this.#pending.set(streamId, { state, result, sender });
-      this.endpoint().onPendingAdd(context, streamId);
-    }
-    try {
+      pending = true;
+      if (hasResult) this.endpoint().onPendingAdd(context, streamId);
+      phase = "consume_message";
       const consuming = this.#handler.consumeMessage(
         context,
         this.#streamContext,
@@ -842,11 +844,9 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
         span?.addEvent("context_cancelled", [stringAttribute("error", failure.message)]);
       }
     } finally {
-      if (hasResult) {
+      if (pending) {
         const resultCompleted = await result.retire();
         if (resultWaitFailed && resultCompleted) failure = undefined;
-        this.#pending.delete(streamId);
-        this.endpoint().onPendingRemove(context, streamId);
       }
       if (span !== undefined && failure !== undefined) spanError(span, failure);
       try {
@@ -859,6 +859,10 @@ class GrpcUnaryEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       try {
         this.endpoint().onRequestEnd(context, startedAt, failure);
       } finally {
+        if (pending) {
+          this.#pending.delete(streamId);
+          if (hasResult) this.endpoint().onPendingRemove(context, streamId);
+        }
         span?.end();
       }
     }
@@ -958,10 +962,8 @@ class GrpcClientStreamingEndpointConsumer<
     let resultWaitFailed = false;
     let phase = "recv";
     try {
-      if (hasResult) {
-        this.addPending(context, state, result, sender);
-        pending = true;
-      }
+      this.addPending(context, state, result, sender);
+      pending = true;
       const requests: AsyncIterable<ReqT> = call;
       let messageCount = 0;
       for await (const request of requests) {
@@ -1006,7 +1008,6 @@ class GrpcClientStreamingEndpointConsumer<
       if (pending) {
         const resultCompleted = await result.retire();
         if (resultWaitFailed && resultCompleted) failure = undefined;
-        this.removePending(context, streamId);
       }
       if (span !== undefined && failure !== undefined) spanError(span, failure);
       try {
@@ -1018,6 +1019,7 @@ class GrpcClientStreamingEndpointConsumer<
       try {
         this.endpoint().onRequestEnd(context, startedAt, failure);
       } finally {
+        if (pending) this.removePending(context, streamId);
         span?.end();
       }
     }
@@ -1080,10 +1082,8 @@ class GrpcServerStreamingEndpointConsumer<
     let resultWaitFailed = false;
     let phase = "consume_message";
     try {
-      if (hasResult) {
-        this.addPending(context, state, result, sender);
-        pending = true;
-      }
+      this.addPending(context, state, result, sender);
+      pending = true;
       await this.handler.consumeMessage(
         context,
         this.streamContext,
@@ -1117,7 +1117,6 @@ class GrpcServerStreamingEndpointConsumer<
       if (pending) {
         const resultCompleted = await result.retire();
         if (resultWaitFailed && resultCompleted) failure = undefined;
-        this.removePending(context, streamId);
       }
       if (span !== undefined && failure !== undefined) spanError(span, failure);
       try {
@@ -1130,6 +1129,7 @@ class GrpcServerStreamingEndpointConsumer<
       try {
         this.endpoint().onRequestEnd(context, startedAt, failure);
       } finally {
+        if (pending) this.removePending(context, streamId);
         span?.end();
       }
     }
@@ -1192,10 +1192,8 @@ class GrpcBidiStreamingEndpointConsumer<
     let resultWaitFailed = false;
     let phase = "recv";
     try {
-      if (hasResult) {
-        this.addPending(context, state, result, sender);
-        pending = true;
-      }
+      this.addPending(context, state, result, sender);
+      pending = true;
       // Reading the request half must not destroy the duplex response half when
       // the client half-closes it. The response stream remains active through
       // eof/result delivery, exactly like the canonical bidirectional endpoint.
@@ -1240,7 +1238,6 @@ class GrpcBidiStreamingEndpointConsumer<
       if (pending) {
         const resultCompleted = await result.retire();
         if (resultWaitFailed && resultCompleted) failure = undefined;
-        this.removePending(context, streamId);
       }
       if (span !== undefined && failure !== undefined) spanError(span, failure);
       try {
@@ -1253,6 +1250,7 @@ class GrpcBidiStreamingEndpointConsumer<
       try {
         this.endpoint().onRequestEnd(context, startedAt, failure);
       } finally {
+        if (pending) this.removePending(context, streamId);
         span?.end();
       }
     }
@@ -1387,8 +1385,9 @@ function contextFromCall(call: GrpcServerCallContext, tracingEnabled: boolean): 
   call.once("cancelled", () => {
     controller.abort(new Error("gRPC call cancelled"));
   });
-  let context = contextFromMetadata(call.metadata, tracingEnabled)
-    .withExternalCancellation(controller.signal);
+  let context = contextFromMetadata(call.metadata, tracingEnabled).withExternalCancellation(
+    controller.signal
+  );
   const deadline = call.getDeadline();
   const deadlineTimestamp = deadline instanceof Date ? deadline.getTime() : deadline;
   if (Number.isFinite(deadlineTimestamp)) {

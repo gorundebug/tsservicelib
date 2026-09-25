@@ -1,4 +1,10 @@
-import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
+import {
+  RuntimeDrainTimeoutError,
+  RuntimeStoppedError,
+  errorFromUnknown,
+  isTaskCancellation,
+  reportUnhandledTaskError
+} from "./errors.js";
 import { combineAbortSignals } from "./context.js";
 
 export type RuntimeTask<T> = (signal: AbortSignal) => Promise<T>;
@@ -7,11 +13,11 @@ export type RuntimeTaskErrorHandler = (error: Error) => void;
 export class RuntimeTaskRegistry {
   readonly #controller = new AbortController();
   readonly #tasks = new Map<number, Promise<unknown>>();
-  readonly #onError: RuntimeTaskErrorHandler;
+  readonly #onError: RuntimeTaskErrorHandler | undefined;
   #accepting = true;
   #nextId = 1;
 
-  public constructor(onError: RuntimeTaskErrorHandler = () => undefined) {
+  public constructor(onError?: RuntimeTaskErrorHandler) {
     this.#onError = onError;
   }
 
@@ -40,16 +46,17 @@ export class RuntimeTaskRegistry {
 
   public admitDetached<T>(task: RuntimeTask<T>, externalSignal?: AbortSignal): void {
     if (!this.#accepting) {
-      this.#onError(new RuntimeStoppedError());
+      this.#onError?.(new RuntimeStoppedError());
       return;
     }
-    this.startTask(task, externalSignal, () => undefined);
+    this.startTask(task, externalSignal, () => undefined, true);
   }
 
   private startTask<T>(
     task: RuntimeTask<T>,
     externalSignal: AbortSignal | undefined,
-    accepted: (promise: Promise<T>) => void
+    accepted: (promise: Promise<T>) => void,
+    detached = false
   ): void {
     const id = this.#nextId++;
     const signal =
@@ -72,7 +79,10 @@ export class RuntimeTaskRegistry {
         // reporting callback must not manufacture a second unhandled
         // rejection while the original promise remains visible to admit().
         try {
-          this.#onError(errorFromUnknown(value));
+          if (!isTaskCancellation(value, signal)) {
+            if (this.#onError !== undefined) this.#onError(errorFromUnknown(value));
+            else if (detached) reportUnhandledTaskError(value);
+          }
         } catch {
           // Error reporters are terminal sinks. There is no second canonical
           // destination to which their own failure could be routed safely.

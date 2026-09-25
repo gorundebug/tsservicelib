@@ -98,8 +98,9 @@ export function combineAbortSignals(signals: readonly AbortSignal[]): AbortSigna
   };
   const listeners = new Map<AbortSignal, () => void>();
   for (const signal of signals) {
+    if (listeners.has(signal)) continue;
     if (signal.aborted) {
-      controller.abort(signal.reason);
+      abort(signal);
       return controller.signal;
     }
     const listener = (): void => {

@@ -43,8 +43,9 @@ export function interceptors(): WorkflowInterceptors {
       } catch {
         // Direct interceptor unit tests run outside a Workflow isolate.
       }
-      workflowMessageContext = decodeContext(headers, tracingEnabled)
-        .withExternalCancellation(cancellation.signal);
+      workflowMessageContext = decodeContext(headers, tracingEnabled).withExternalCancellation(
+        cancellation.signal
+      );
       return next({ ...input, headers });
     }
   };
@@ -73,7 +74,7 @@ function workflowTracingEnabled(input: WorkflowExecuteInput): boolean {
 function withoutTracingHeaders(headers: Headers): Headers {
   const filtered = { ...headers };
   for (const name of ["traceparent", "tracestate", "baggage", "x-trace", TEMPORAL_TRACE_HEADER]) {
-    delete filtered[name];
+    Reflect.deleteProperty(filtered, name);
   }
   return filtered;
 }

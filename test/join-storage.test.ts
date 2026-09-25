@@ -7,7 +7,6 @@ import {
   HashMapJoinStorage,
   MessageContext,
   StoreAlreadyStartedError,
-  StoreNotStartedError,
   StoreStoppedError,
   type JoinStorageConfig,
   type JoinValues
@@ -48,6 +47,14 @@ function makeUnstartedStorage(
 ): HashMapJoinStorage<string> {
   const environment = makeTestEnvironment([], metrics === undefined ? {} : { metrics });
   return new HashMapJoinStorage<string>(environment, config);
+}
+
+function makeGate(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, resolve: release };
 }
 
 await test("join storage serializes callbacks per key and removes processed values", async () => {
@@ -101,13 +108,15 @@ await test("join storage deadline invokes the last callback and evicts the key",
   );
 });
 
-await test("join storage explicit cancellation expires an item exactly once", async () => {
+await test("join storage cancellation with a deadline expires an item exactly once", async () => {
   const config = new MutableConfig();
   config.ttl = 60_000;
   const metrics = new TestMetrics();
   const storage = makeStorage(config, metrics);
   const cancellation = new AbortController();
-  const context = new MessageContext().withExternalCancellation(cancellation.signal);
+  const context = new MessageContext()
+    .bounded(60_000)
+    .withExternalCancellation(cancellation.signal);
   let callbacks = 0;
   let reportExpired!: () => void;
   const expired = new Promise<void>((resolve) => {
@@ -132,6 +141,96 @@ await test("join storage explicit cancellation expires an item exactly once", as
     }),
     1
   );
+});
+
+await test("join storage cancellation without a deadline preserves the configured TTL", async () => {
+  const config = new MutableConfig();
+  config.ttl = 60_000;
+  const storage = makeStorage(config);
+  const cancellation = new AbortController();
+  const context = new MessageContext().withExternalCancellation(cancellation.signal);
+  let callbacks = 0;
+  try {
+    await storage.joinValue(context, "cancelled", 0, "value", () => {
+      callbacks += 1;
+      return false;
+    });
+    cancellation.abort();
+    await delay(0);
+    assert.equal(callbacks, 1);
+    assert.equal(storage.size(), 1);
+  } finally {
+    await storage.stop(Context.background());
+  }
+});
+
+await test("join storage never republishes an expired group replaced during its callback", async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const config = new MutableConfig();
+  config.ttl = 60_000;
+  config.renew = true;
+  const storage = makeStorage(config);
+  const started = makeGate();
+  const released = makeGate();
+  let pending: Promise<void> | undefined;
+  try {
+    await storage.joinValue(new MessageContext(), "key", 0, "old", () => false);
+    pending = storage.joinValue(new MessageContext(), "key", 1, "held", async () => {
+      started.resolve();
+      await released.promise;
+      return false;
+    });
+    await started.promise;
+    now += 120_000;
+    await storage.joinValue(new MessageContext(), "key", 0, "new", (values) => {
+      assert.deepEqual(values, [["new"]]);
+      return true;
+    });
+    assert.equal(storage.size(), 0);
+    released.resolve();
+    await pending;
+    assert.equal(storage.size(), 0);
+  } finally {
+    released.resolve();
+    await pending;
+    await storage.stop(Context.background());
+  }
+});
+
+await test("join storage queued expiration respects renewal by the active callback", async () => {
+  const config = new MutableConfig();
+  config.ttl = 30;
+  config.renew = true;
+  const storage = makeStorage(config);
+  const started = makeGate();
+  const released = makeGate();
+  let callbacks = 0;
+  let pending: Promise<void> | undefined;
+  try {
+    await storage.joinValue(new MessageContext(), "key", 0, "first", () => {
+      callbacks += 1;
+      return false;
+    });
+    config.ttl = 60_000;
+    pending = storage.joinValue(new MessageContext(), "key", 1, "second", async () => {
+      callbacks += 1;
+      started.resolve();
+      await released.promise;
+      return false;
+    });
+    await started.promise;
+    await delay(60);
+    released.resolve();
+    await pending;
+    await delay(0);
+    assert.equal(callbacks, 2);
+    assert.equal(storage.size(), 1);
+  } finally {
+    released.resolve();
+    await pending;
+    await storage.stop(Context.background());
+  }
 });
 
 await test("join storage reads renew TTL dynamically without retaining config values", async () => {
@@ -159,27 +258,23 @@ await test("join storage reads renew TTL dynamically without retaining config va
 
 await test("join storage lifecycle rejects duplicate start and start after stop", async () => {
   const storage = makeUnstartedStorage();
-  await assert.rejects(
-    storage.joinValue(new MessageContext(), "before-start", 0, 1, () => false),
-    StoreNotStartedError
-  );
+  await storage.joinValue(new MessageContext(), "before-start", 0, 1, () => true);
   storage.start(Context.background());
   assert.throws(() => {
     storage.start(Context.background());
   }, StoreAlreadyStartedError);
   await storage.stop(Context.background());
   await storage.stop(Context.background());
-  await assert.rejects(
-    storage.joinValue(new MessageContext(), "after-stop", 0, 1, () => false),
-    StoreStoppedError
-  );
+  await storage.joinValue(new MessageContext(), "after-stop", 0, 1, () => true);
   assert.throws(() => {
     storage.start(Context.background());
   }, StoreStoppedError);
 });
 
-await test("join storage stop drains an admitted callback and rejects later work", async () => {
-  const storage = makeStorage();
+await test("join storage stop waits for active TTL joins without clearing their groups", async () => {
+  const config = new MutableConfig();
+  config.ttl = 60_000;
+  const storage = makeStorage(config);
   let releaseCallback!: () => void;
   const released = new Promise<void>((resolve) => {
     releaseCallback = resolve;
@@ -206,11 +301,12 @@ await test("join storage stop drains an admitted callback and rejects later work
   await Promise.all([admitted, stopping]);
 
   assert.equal(stopped, true);
+  assert.equal(storage.size(), 1);
+  await storage.joinValue(new MessageContext(), "key", 1, 2, (values) => {
+    assert.deepEqual(values, [[1], [2]]);
+    return true;
+  });
   assert.equal(storage.size(), 0);
-  await assert.rejects(
-    storage.joinValue(new MessageContext(), "later", 0, 2, () => false),
-    StoreStoppedError
-  );
 });
 
 await test("join storage registers and updates the exact canonical metrics", async () => {

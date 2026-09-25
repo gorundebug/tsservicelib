@@ -766,6 +766,114 @@ await test("Node HTTP source records beginRequest failure without calling endReq
   }
 });
 
+for (const phase of ["consume", "consume-with-result", "result-callback"] as const) {
+  await test(`HTTP source shutdown budget preserves a suspended ${phase}`, async () => {
+    const env = environment();
+    const input = new InputStream<string, string, Error>(
+      inputConfig,
+      env,
+      makeTestSerde(),
+      makeTestSerde()
+    );
+    const downstream = new RecordingStream(downstreamConfig, env);
+    const result = new ConsumedStream(resultConfig, env, env.serde(stringSerdeType));
+    input.setConsumer(downstream);
+    if (phase !== "consume") input.setSource(result);
+    let enter: () => void = () => undefined;
+    let accept: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    let finish: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const accepted = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ended = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let endCalled = false;
+    const endpointHandler: EndpointHandler<NoResultState, string, string, string, string, Error> = {
+      beginRequest: (context) => ({ context, state: { kind: "noResult" } }),
+      async consumeMessage(context, stream, _state, data, resultContext) {
+        if (phase === "result-callback") {
+          resultContext.setResultCallback("message", async () => {
+            enter();
+            await blocked;
+            resultContext.done();
+            data.response.end("ok");
+            return true;
+          });
+        }
+        await stream.collect(context, "accepted");
+        accept();
+        if (phase !== "result-callback") {
+          enter();
+          await blocked;
+          resultContext.done();
+          data.response.end("ok");
+        }
+      },
+      getMessageId: () => "message",
+      endRequest() {
+        endCalled = true;
+        finish();
+      }
+    };
+    const [, handler] = makeNodeHttpEndpointConsumer(input, endpointHandler);
+    const source = env.dataSourceById(10);
+    assert.ok(source);
+    await source.start(Context.background());
+    const server = await startServer(handler);
+    const request = fetch(url(server), { method: "POST" });
+    let callback: Promise<void> | undefined;
+    let stopping: Promise<void> | undefined;
+    try {
+      await waitSourceStage(accepted, "request admission");
+      if (phase === "result-callback") {
+        const context = downstream.values[0]?.context;
+        assert.ok(context);
+        callback = Promise.resolve(result.emit(context, "response"));
+      }
+      await waitSourceStage(entered, "callback entry");
+      stopping = source.stop(Context.background().bounded(20));
+      await waitSourceStage(stopping, "HTTP source shutdown deadline");
+      assert.equal(endCalled, false, "EndRequest must not overlap the suspended callback");
+      const rejected = await fetch(url(server), { method: "POST" });
+      assert.equal(rejected.status, 503);
+      await rejected.text();
+    } finally {
+      release();
+      await callback;
+      await waitSourceStage(ended, "EndRequest after callback release");
+      await stopping;
+      const response = await request;
+      await response.text();
+      await source.stop(Context.background());
+      await stopServer(server);
+    }
+  });
+}
+
+async function waitSourceStage<T>(operation: Promise<T>, stage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Timed out: ${stage}`));
+        }, 2_000);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function attribute(
   attributes: readonly { readonly key: string; readonly value: unknown }[],
   key: string

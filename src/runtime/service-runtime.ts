@@ -2,8 +2,13 @@ import { Context } from "./context.js";
 import type { ManagedDataConnector } from "./data-connector.js";
 import type { RuntimeEnvironment } from "./environment/index.js";
 import { err, str } from "./environment/index.js";
-import { RuntimeStoppedError } from "./errors.js";
-import type { AdmissionLifecycle, ComponentCategory, RuntimeComponent } from "./lifecycle.js";
+import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
+import {
+  settleWithinDeadline,
+  type AdmissionLifecycle,
+  type ComponentCategory,
+  type RuntimeComponent
+} from "./lifecycle.js";
 import { RuntimeTaskRegistry } from "./task-registry.js";
 
 const START_ORDER: readonly ComponentCategory[] = [
@@ -115,10 +120,19 @@ export class ServiceRuntime {
       drainTimeoutMs === undefined ? context : context.bounded(Math.max(0, drainTimeoutMs));
     if (this.#state === "starting") {
       this.#startupController.abort(new RuntimeStoppedError("runtime startup was stopped"));
-      try {
-        await this.#startPromise;
-      } catch {
-        // startOnce owns partial-start rollback and preserves its error for the start caller.
+      const [startup] = await settleWithinDeadline(stopContext, [
+        this.#startPromise ?? Promise.resolve()
+      ]);
+      if (startup === undefined) {
+        // startOnce still owns partial-start rollback and the dependencies of
+        // the uncooperative initializer. Do not stop those objects underneath it.
+        this.#tasks.cancel(
+          stopContext.signal().reason ??
+            new RuntimeStoppedError("runtime startup shutdown timed out")
+        );
+        this.#state = "stopped";
+        this.#environment.log().warn(stopContext, "runtime startup shutdown timed out");
+        return;
       }
     }
     if (this.#state === "created" || this.#state === "stopped") {
@@ -156,7 +170,19 @@ export class ServiceRuntime {
         ),
         stopContext
       );
-      await this.#tasks.drain(stopContext.remainingMs());
+      if (this.#tasks.activeCount() > 0) {
+        const drainBudget = stopContext.remainingMs();
+        const [drained] = await settleWithinDeadline(stopContext, [this.#tasks.drain(drainBudget)]);
+        if (drained === undefined) {
+          if (drainBudget !== undefined && stopContext.remainingMs() === 0) {
+            throw new RuntimeDrainTimeoutError(drainBudget);
+          }
+          throw errorFromUnknown(
+            stopContext.signal().reason ?? new RuntimeStoppedError("runtime shutdown was cancelled")
+          );
+        }
+        if (drained.status === "rejected") throw errorFromUnknown(drained.reason);
+      }
       this.#tasks.stopAdmission();
     } catch (error: unknown) {
       this.#tasks.cancel(error);
@@ -276,35 +302,5 @@ export class ServiceRuntime {
         str("component", component.name),
         err(error instanceof Error ? error : new Error(String(error)))
       );
-  }
-}
-
-async function settleWithinDeadline<T>(
-  context: Context,
-  operations: readonly Promise<T>[]
-): Promise<readonly (PromiseSettledResult<T> | undefined)[]> {
-  if (operations.length === 0) return [];
-  const results = new Array<PromiseSettledResult<T> | undefined>(operations.length);
-  const tracked = operations.map(async (operation, index) => {
-    try {
-      results[index] = { status: "fulfilled", value: await operation };
-    } catch (reason: unknown) {
-      results[index] = { status: "rejected", reason };
-    }
-  });
-  const remainingMs = context.remainingMs();
-  if (remainingMs === undefined) {
-    await Promise.all(tracked);
-    return results;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, Math.max(0, remainingMs));
-  });
-  try {
-    await Promise.race([Promise.all(tracked), timeout]);
-    return results;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }

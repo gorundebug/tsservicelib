@@ -1,3 +1,4 @@
+import { isTaskCancellation } from "../errors.js";
 import type { PoolTask } from "./pool.js";
 
 // The graph API is also bundled into the Temporal isolate, where process and
@@ -49,7 +50,12 @@ export function subscribeAbort(signal: AbortSignal, callback: () => void): () =>
   };
 }
 
-export function reportPoolError(handler: (error: unknown) => void, error: unknown): void {
+export function reportPoolError(
+  handler: (error: unknown) => void,
+  error: unknown,
+  signal?: AbortSignal
+): void {
+  if (signal !== undefined && isTaskCancellation(error, signal)) return;
   try {
     handler(error);
   } catch {

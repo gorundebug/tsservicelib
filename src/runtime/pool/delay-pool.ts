@@ -1,3 +1,4 @@
+import { reportUnhandledTaskError } from "../errors.js";
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { IndexedHeap } from "./indexed-heap.js";
 import { subscribeAbort, reportPoolError } from "./pool-support.js";
@@ -61,7 +62,7 @@ export class DelayPool implements Lifecycle {
 
   public constructor(options: DelayPoolOptions = {}) {
     this.#name = options.name ?? "delay";
-    this.#onError = options.onError ?? (() => undefined);
+    this.#onError = options.onError ?? reportUnhandledTaskError;
     this.#logger = options.logger;
     this.#metrics = makeMetrics(options.metrics, options.service);
   }
@@ -151,13 +152,13 @@ export class DelayPool implements Lifecycle {
       try {
         completion = task.execute();
       } catch (error: unknown) {
-        reportPoolError(this.#onError, error);
+        reportPoolError(this.#onError, error, task.context.signal());
         this.completeTask(task, task.context, started, cancelled);
         return;
       }
       void Promise.resolve(completion)
         .catch((error: unknown) => {
-          reportPoolError(this.#onError, error);
+          reportPoolError(this.#onError, error, task.context.signal());
         })
         .finally(() => {
           this.completeTask(task, task.context, started, cancelled);

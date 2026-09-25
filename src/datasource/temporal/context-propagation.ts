@@ -50,7 +50,7 @@ export const temporalWorkflowClientInterceptor: WorkflowClientInterceptor = {
     const headers = submission.tracingEnabled
       ? input.headers
       : Object.fromEntries(
-          Object.entries(input.headers ?? {}).filter(([name]) => !TRACE_CARRIER_NAMES.has(name))
+          Object.entries(input.headers).filter(([name]) => !TRACE_CARRIER_NAMES.has(name))
         );
     return next({
       ...input,
