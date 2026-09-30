@@ -23,6 +23,7 @@ import {
   type StreamContext,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 const inputConfig: InputStreamConfig = {

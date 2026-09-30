@@ -19,6 +19,7 @@ import {
   type Logger,
   type StreamConfig
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment, makeTestSerde } from "./support/environment.js";
 
 class RecordingLogger implements Logger {

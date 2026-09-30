@@ -18,6 +18,7 @@ import {
   type TypedStreamConsumer,
   type WhenStreamConfig
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 
 type Event =

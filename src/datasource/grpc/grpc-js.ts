@@ -1,4 +1,3 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Server,
   ServerCredentials,
@@ -25,6 +24,7 @@ import {
   type MessageShape
 } from "@bufbuild/protobuf";
 
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
   DataSourceEndpoint,

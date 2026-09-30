@@ -1,4 +1,3 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Client,
   credentials,
@@ -17,6 +16,7 @@ import {
   type MessageShape
 } from "@bufbuild/protobuf";
 
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   DataSinkEndpoint,
   DataSinkEndpointConsumerWithResult,

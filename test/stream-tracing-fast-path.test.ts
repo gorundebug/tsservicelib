@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+
 import ts from "typescript";
+
 import {
   ConsumedStream,
   MessageContext,
@@ -16,6 +18,7 @@ import {
   type Tracing
 } from "@gorundebug/tsservicelib/runtime";
 import { DelayStream } from "@gorundebug/tsservicelib/operators";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 const config: StreamConfig = {

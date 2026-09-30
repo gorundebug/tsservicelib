@@ -25,6 +25,7 @@ import {
   type TransformationType,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 function streamConfig<const T extends TransformationType>(

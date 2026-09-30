@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import {
   ConsumedStream,
   MessageContext,
@@ -11,6 +12,7 @@ import {
 import { makeMapStream } from "@gorundebug/tsservicelib/operators";
 import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 await test("link metrics and spans use receiving pipeline and component definition", async () => {

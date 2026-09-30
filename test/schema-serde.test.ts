@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { create, isMessage } from "@bufbuild/protobuf";
 import { TimestampSchema } from "@bufbuild/protobuf/wkt";
+
 import {
   JsonSerde,
   ProtobufSerde,

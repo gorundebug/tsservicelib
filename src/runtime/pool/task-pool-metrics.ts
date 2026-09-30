@@ -1,6 +1,5 @@
 import type { Context } from "../context.js";
 import type { Float64Histogram, Int64Counter, Int64Gauge, Metrics } from "../environment/index.js";
-
 import type { TaskPoolOptions } from "./pool.js";
 
 export interface TaskPoolMetrics {

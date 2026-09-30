@@ -27,8 +27,9 @@ import {
   type StreamConfig,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
-import { makeTestEnvironmentWithStore } from "./support/environment.js";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
+
+import { makeTestEnvironmentWithStore } from "./support/environment.js";
 
 const sourceConfig: StreamConfig = {
   id: 1,

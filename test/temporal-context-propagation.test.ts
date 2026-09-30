@@ -8,6 +8,7 @@ import type { WorkflowStartInput } from "@temporalio/client";
 import { defaultPayloadConverter, type Headers } from "@temporalio/common";
 
 import { MessageContext } from "@gorundebug/tsservicelib/runtime";
+
 import type * as ContextPropagationModule from "../src/datasource/temporal/context-propagation.js";
 import type * as WorkflowContextInterceptorModule from "../src/datasource/temporal/workflow-context-interceptor.js";
 

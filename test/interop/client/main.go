@@ -10,13 +10,14 @@ import (
 	"os"
 	"time"
 
-	interopv1 "github.com/gorundebug/tsservicelib/test/interop/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	interopv1 "github.com/gorundebug/tsservicelib/test/interop/gen"
 )
 
 type report struct {

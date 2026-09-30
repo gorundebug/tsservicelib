@@ -33,6 +33,7 @@ import {
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
+
 import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 
 const inputConfig: InputStreamConfig = {

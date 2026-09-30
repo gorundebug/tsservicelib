@@ -23,6 +23,7 @@ import {
   type SplitStreamConfig,
   type StreamConfig
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 await test("same-type operators retain the exact source StreamSerde instance", () => {

@@ -1,4 +1,3 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   Agent as HttpAgent,
   request as httpRequest,
@@ -8,6 +7,7 @@ import {
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   DataSinkEndpoint,
   DataSinkEndpointConsumerWithResult,

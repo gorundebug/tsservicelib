@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { Duplex } from "node:stream";
 import { test } from "node:test";
+
 import { create, type DescMethod, type DescService } from "@bufbuild/protobuf";
 import { TimestampSchema, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { Metadata } from "@grpc/grpc-js";
+
 import {
   makeGrpcNoStreamingEndpointConsumer,
   makeGrpcClientStreamingEndpointConsumer,
@@ -21,6 +23,7 @@ import {
   type GrpcDataConnectorConfig,
   type GrpcEndpointConfig
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 
 function gate(): { promise: Promise<void>; resolve(): void } {

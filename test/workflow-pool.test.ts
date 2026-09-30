@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { Context } from "@gorundebug/tsservicelib/runtime/graph";
-import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { Context } from "@gorundebug/tsservicelib/runtime/graph";
+import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
+
 import type * as WorkflowPools from "../src/datasource/temporal/workflow-pool.js";
 
 const { WorkflowTaskPool, WorkflowPriorityTaskPool } = (await import(

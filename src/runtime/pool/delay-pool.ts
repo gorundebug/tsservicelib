@@ -1,9 +1,9 @@
-import { reportUnhandledTaskError } from "../errors.js";
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
-import { IndexedHeap } from "./indexed-heap.js";
-import { subscribeAbort, reportPoolError } from "./pool-support.js";
 import { performance } from "node:perf_hooks";
 
+import { reportUnhandledTaskError } from "../errors.js";
+import { IndexedHeap } from "./indexed-heap.js";
+import { subscribeAbort, reportPoolError } from "./pool-support.js";
 import type { Context } from "../context.js";
 import {
   err,

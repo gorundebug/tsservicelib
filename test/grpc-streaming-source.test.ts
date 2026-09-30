@@ -32,8 +32,9 @@ import {
   type StreamConfig,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
-import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
+
+import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 
 interface HandlerState {
   last: Timestamp | undefined;

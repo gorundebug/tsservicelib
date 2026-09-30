@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import {
   create,
   fromBinary,
@@ -9,6 +10,7 @@ import {
 } from "@bufbuild/protobuf";
 import { TimestampSchema, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { Client, credentials } from "@grpc/grpc-js";
+
 import {
   makeGrpcNoStreamingEndpointConsumer,
   type EndpointHandler
@@ -21,6 +23,7 @@ import {
   type GrpcEndpointConfig,
   type InputStreamConfig
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 
 async function within<T>(promise: Promise<T>): Promise<T> {

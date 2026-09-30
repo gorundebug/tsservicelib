@@ -9,6 +9,7 @@ import {
   type StreamConfig,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment, makeTestSerde } from "./support/environment.js";
 
 class NumberConsumer extends ServiceStream implements TypedStreamConsumer<number> {

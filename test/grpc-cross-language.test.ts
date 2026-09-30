@@ -28,6 +28,7 @@ import {
   type StreamContext,
   type TypedStreamConsumer
 } from "@gorundebug/tsservicelib/runtime";
+
 import { InteropService, type Echo } from "./generated/interop_pb.js";
 import { makeTestEnvironment, registerTestSerdeType } from "./support/environment.js";
 

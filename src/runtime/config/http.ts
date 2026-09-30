@@ -1,5 +1,4 @@
 import { HTTPMethodType } from "./types.js";
-
 import type {
   DataConnectorConfig,
   EndpointConfig,

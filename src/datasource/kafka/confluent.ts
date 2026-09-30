@@ -1,9 +1,9 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
 
 import type { KafkaJS } from "@confluentinc/kafka-javascript";
 import type * as ConfluentKafka from "@confluentinc/kafka-javascript";
 
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
   DataSourceEndpoint,

@@ -11,6 +11,7 @@ import {
   ServiceRuntime
 } from "@gorundebug/tsservicelib/runtime";
 import { TestLog } from "@gorundebug/tsservicelib/runtime/testlog";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 function lifecycle(name: string, events: string[], failStart = false): Lifecycle {

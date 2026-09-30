@@ -1,6 +1,6 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   type Context,
   DataSourceEndpoint,

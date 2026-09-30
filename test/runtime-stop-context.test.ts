@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { Context, RuntimeTaskRegistry, ServiceRuntime } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 function barrier(): { promise: Promise<void>; resolve: () => void } {

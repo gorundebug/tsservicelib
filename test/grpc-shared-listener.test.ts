@@ -19,8 +19,10 @@ import {
   type handleBidiStreamingCall,
   type UntypedHandleCall
 } from "@grpc/grpc-js";
+
 import { GrpcJsDataSource } from "@gorundebug/tsservicelib/datasource/grpc";
 import { Context, type GrpcDataConnectorConfig } from "@gorundebug/tsservicelib/runtime";
+
 import { makeTestEnvironment } from "./support/environment.js";
 
 function descriptor(name: string, kind: DescMethod["methodKind"]): DescService {
