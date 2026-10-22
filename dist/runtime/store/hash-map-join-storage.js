@@ -1,11 +1,13 @@
 import { Context } from "../context.js";
-import { StoreAlreadyStartedError, StoreNotStartedError, StoreStoppedError } from "./storage.js";
+import { isTaskCancellation, reportUnhandledTaskError } from "../errors.js";
+import { StoreAlreadyStartedError, StoreStoppedError } from "./storage.js";
 const SHRINK_FACTOR = 4;
 /** Event-loop implementation of Go's two-generation HashMapJoinStorage. */
 export class HashMapJoinStorage {
     #config;
     #current = new Map();
     #previous = new Map();
+    #metricsEnabled;
     #count;
     #evictionsTotal;
     #highWaterMark = 0;
@@ -13,15 +15,21 @@ export class HashMapJoinStorage {
     #rotationContext;
     #started = false;
     #stopped = false;
+    #activeTTLJoins = 0;
+    #stopCompletion;
+    #releaseStop;
     constructor(environment, config) {
         this.#config = config;
-        const scope = environment.metrics().scope("hashmap_join_storage", {
+        const metrics = environment.metrics();
+        this.#metricsEnabled = metrics.enabled();
+        const scope = metrics.scope("hashmap_join_storage", {
             service: environment.serviceConfig().name,
             name: config.name()
         });
         this.#count = scope.gauge("count", "Elements count stored in a join storage");
         this.#evictionsTotal = scope.counter("evictions_total", "Total number of items evicted from join storage by TTL");
-        this.#count.set(0);
+        if (this.#metricsEnabled)
+            this.#count.set(0);
     }
     size() {
         return this.#current.size + this.#previous.size;
@@ -35,60 +43,79 @@ export class HashMapJoinStorage {
         this.#rotationContext = context;
         this.armRotation();
     }
-    async stop(context) {
+    stop(context) {
         void context;
-        if (this.#stopped)
-            return;
+        if (this.#stopCompletion !== undefined)
+            return this.#stopCompletion;
         this.#stopped = true;
         if (this.#rotationTimer !== undefined) {
             clearTimeout(this.#rotationTimer);
             this.#rotationTimer = undefined;
         }
-        const items = new Set([...this.#current.values(), ...this.#previous.values()]);
-        for (const item of items)
-            item.cancelDeadline();
-        await Promise.allSettled([...items].map((item) => item.tail));
-        this.#current.clear();
-        this.#previous.clear();
-        this.#count.set(0);
+        // Go's rotation write lock waits for TTL-bearing JoinValue readers,
+        // not for expiry callbacks or zero-TTL calls. Stop ends maintenance;
+        // individual groups and their accepted expiry callbacks remain alive.
+        this.#stopCompletion =
+            this.#activeTTLJoins === 0
+                ? Promise.resolve()
+                : new Promise((resolve) => {
+                    this.#releaseStop = resolve;
+                });
+        return this.#stopCompletion;
     }
     async joinValue(context, key, index, value, callback) {
         if (!Number.isSafeInteger(index) || index < 0) {
             throw new RangeError(`join value index must be a non-negative integer, got ${String(index)}`);
         }
         const ttl = this.effectiveTTL(context);
-        for (;;) {
-            if (this.#stopped)
-                throw new StoreStoppedError();
-            if (!this.#started)
-                throw new StoreNotStartedError();
-            const located = this.findLive(key);
-            const item = located?.item ?? this.createItem(context, key, index, callback, ttl);
-            const operation = item.tail.then(async () => {
-                const currentLocation = this.locate(key, item);
-                if (item.processed || this.expired(item) || currentLocation === undefined)
-                    return false;
-                while (item.values.length <= index)
-                    item.values.push([]);
-                item.values[index]?.push(value);
-                item.processed = await callback(item.values);
-                if (item.processed) {
-                    item.cancelDeadline();
-                    this.removeAt(key, item, currentLocation);
+        const renewTTL = this.#config.renewTTL();
+        if (ttl > 0) {
+            if (this.#stopCompletion !== undefined)
+                await this.#stopCompletion;
+            this.#activeTTLJoins += 1;
+        }
+        try {
+            for (;;) {
+                const located = this.findLive(key);
+                const item = located?.item ?? this.createItem(context, key, index, callback, ttl);
+                const operation = item.tail.then(async () => {
+                    const currentLocation = this.locate(key, item);
+                    if (item.processed || this.expired(item) || currentLocation === undefined)
+                        return false;
+                    while (item.values.length <= index)
+                        item.values.push([]);
+                    item.values[index]?.push(value);
+                    item.processed = await callback(item.values);
+                    const locationAfterCallback = this.locate(key, item);
+                    if (locationAfterCallback === undefined)
+                        return true;
+                    if (item.processed) {
+                        item.cancelDeadline();
+                        this.removeAt(key, item, locationAfterCallback);
+                    }
+                    else if (renewTTL && ttl > 0) {
+                        if (locationAfterCallback === "previous")
+                            this.#previous.delete(key);
+                        item.deadline = Date.now() + ttl;
+                        this.#current.set(key, item);
+                        item.cancelDeadline();
+                        this.armDeadline(context, key, item, ttl);
+                    }
+                    return true;
+                });
+                item.tail = operation.then(() => undefined, () => undefined);
+                if (await operation)
+                    return;
+            }
+        }
+        finally {
+            if (ttl > 0) {
+                this.#activeTTLJoins -= 1;
+                if (this.#activeTTLJoins === 0) {
+                    this.#releaseStop?.();
+                    this.#releaseStop = undefined;
                 }
-                else if (this.#config.renewTTL() && ttl > 0) {
-                    if (currentLocation === "previous")
-                        this.#previous.delete(key);
-                    item.deadline = Date.now() + ttl;
-                    this.#current.set(key, item);
-                    item.cancelDeadline();
-                    this.armDeadline(context, key, item, ttl);
-                }
-                return true;
-            });
-            item.tail = operation.then(() => undefined, () => undefined);
-            if (await operation)
-                return;
+            }
         }
     }
     effectiveTTL(context) {
@@ -116,8 +143,10 @@ export class HashMapJoinStorage {
             tail: Promise.resolve()
         };
         const replaced = this.#current.get(key);
+        if (this.#previous.delete(key) && this.#metricsEnabled)
+            this.#count.dec();
         this.#current.set(key, item);
-        if (replaced === undefined)
+        if (this.#metricsEnabled && replaced === undefined)
             this.#count.inc();
         if (ttl > 0)
             this.armDeadline(context, key, item, ttl);
@@ -132,13 +161,30 @@ export class HashMapJoinStorage {
             const operation = item.tail.then(async () => {
                 if (item.processed)
                     return;
+                // An admitted callback may renew the item while its old timer waits.
+                // A context deadline is absolute; only the configured TTL can renew.
+                if (context.deadline() === undefined && item.deadline !== undefined) {
+                    const remaining = item.deadline - Date.now();
+                    if (remaining > 0) {
+                        item.cancelDeadline();
+                        this.armDeadline(context, key, item, remaining);
+                        return;
+                    }
+                }
                 item.processed = true;
-                await item.deadlineCallback(item.values);
-                const location = this.locate(key, item);
-                if (location !== undefined)
-                    this.removeAt(key, item, location, context);
+                try {
+                    await item.deadlineCallback(item.values);
+                }
+                finally {
+                    const location = this.locate(key, item);
+                    if (location !== undefined)
+                        this.removeAt(key, item, location, context);
+                }
             });
-            item.tail = operation.catch(() => undefined);
+            item.tail = operation.catch((error) => {
+                if (!isTaskCancellation(error, context.signal()))
+                    reportUnhandledTaskError(error);
+            });
         };
         if (context.deadline() !== undefined) {
             const signal = context.signal();
@@ -156,11 +202,6 @@ export class HashMapJoinStorage {
                 expire();
             return;
         }
-        const signal = context.signal();
-        const aborted = () => {
-            expire();
-        };
-        signal.addEventListener("abort", aborted, { once: true });
         const timer = setTimeout(expire, Math.max(0, Math.ceil(ttl)));
         if (typeof timer === "object" && "unref" in timer)
             timer.unref();
@@ -169,10 +210,7 @@ export class HashMapJoinStorage {
                 return;
             retired = true;
             clearTimeout(timer);
-            signal.removeEventListener("abort", aborted);
         };
-        if (signal.aborted)
-            expire();
     }
     locate(key, item) {
         if (this.#current.get(key) === item)
@@ -186,9 +224,11 @@ export class HashMapJoinStorage {
         if (storage.get(key) !== item)
             return;
         storage.delete(key);
-        this.#count.dec();
-        if (evictionContext !== undefined)
-            this.#evictionsTotal.inc(evictionContext);
+        if (this.#metricsEnabled) {
+            this.#count.dec();
+            if (evictionContext !== undefined)
+                this.#evictionsTotal.inc(evictionContext);
+        }
     }
     armRotation() {
         const ttl = this.#config.ttlMs();
@@ -220,7 +260,7 @@ export class HashMapJoinStorage {
         for (const [key, item] of this.#current)
             this.#previous.set(key, item);
         this.#current.clear();
-        if (evicted > 0) {
+        if (this.#metricsEnabled && evicted > 0) {
             this.#count.sub(evicted);
             this.#evictionsTotal.add(this.#rotationContext ?? Context.background(), evicted);
         }

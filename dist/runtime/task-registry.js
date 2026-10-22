@@ -1,4 +1,4 @@
-import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
+import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown, isTaskCancellation, reportUnhandledTaskError } from "./errors.js";
 import { combineAbortSignals } from "./context.js";
 export class RuntimeTaskRegistry {
     #controller = new AbortController();
@@ -6,7 +6,7 @@ export class RuntimeTaskRegistry {
     #onError;
     #accepting = true;
     #nextId = 1;
-    constructor(onError = () => undefined) {
+    constructor(onError) {
         this.#onError = onError;
     }
     accepting() {
@@ -30,12 +30,12 @@ export class RuntimeTaskRegistry {
     }
     admitDetached(task, externalSignal) {
         if (!this.#accepting) {
-            this.#onError(new RuntimeStoppedError());
+            this.#onError?.(new RuntimeStoppedError());
             return;
         }
-        this.startTask(task, externalSignal, () => undefined);
+        this.startTask(task, externalSignal, () => undefined, true);
     }
-    startTask(task, externalSignal, accepted) {
+    startTask(task, externalSignal, accepted, detached = false) {
         const id = this.#nextId++;
         const signal = externalSignal === undefined
             ? this.#controller.signal
@@ -55,7 +55,12 @@ export class RuntimeTaskRegistry {
             // reporting callback must not manufacture a second unhandled
             // rejection while the original promise remains visible to admit().
             try {
-                this.#onError(errorFromUnknown(value));
+                if (!isTaskCancellation(value, signal)) {
+                    if (this.#onError !== undefined)
+                        this.#onError(errorFromUnknown(value));
+                    else if (detached)
+                        reportUnhandledTaskError(value);
+                }
             }
             catch {
                 // Error reporters are terminal sinks. There is no second canonical

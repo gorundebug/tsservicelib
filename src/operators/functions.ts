@@ -4,8 +4,24 @@ import type { KeyValue } from "../runtime/datastruct/key-value.js";
 import type { Completion, Stream } from "../runtime/stream.js";
 
 export interface When {
+  readonly name: string;
   valueType(): string;
   whenConsumer(): Stream;
+}
+
+/** Resolve the When node identity once in buildSwitch, not for every message. */
+export function whenIndex(whenItems: readonly When[], name: string): number {
+  if (name.length === 0) throw new Error("case branch name must not be empty");
+  let index = -1;
+  for (const [candidate, item] of whenItems.entries()) {
+    if (item.name !== name) continue;
+    if (index >= 0) {
+      throw new Error(`case branch ${JSON.stringify(name)} is ambiguous (indices ${String(index)} and ${String(candidate)})`);
+    }
+    index = candidate;
+  }
+  if (index < 0) throw new Error(`case branch ${JSON.stringify(name)} was not found`);
+  return index;
 }
 
 export interface BuildSwitchFunction<T> {

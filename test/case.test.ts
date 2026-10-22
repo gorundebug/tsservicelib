@@ -196,8 +196,8 @@ await test("default case switch uses registered runtime types with Go-compatible
     environment.serdeByName<Event>("event")
   );
   const branches: readonly When[] = [
-    { valueType: () => "event", whenConsumer: () => source },
-    { valueType: () => "created", whenConsumer: () => source }
+    { name: "all-events", valueType: () => "event", whenConsumer: () => source },
+    { name: "created-events", valueType: () => "created", whenConsumer: () => source }
   ];
   const select = defaultBuildSwitch(source, branches);
 

@@ -1,4 +1,5 @@
 import { callerMetadata } from "../caller-metadata.js";
+import { CountedCaller } from "../counted-caller.js";
 import { DelayPool } from "../pool/index.js";
 import { ServiceHTTPServer } from "../service-http-server.js";
 import { makeDefaultSerdeRegistry } from "../serde/index.js";
@@ -200,22 +201,23 @@ export class ServiceEnvironment {
     }
     makeCaller(source, consumer) {
         const caller = this.#callerFactory.create(source, consumer);
+        const recordCall = this.makeLinkRecorder(source, consumer);
+        if (this.#tracing === undefined) {
+            return new CountedCaller(caller, recordCall);
+        }
         const metadata = callerMetadata(caller);
         const grouping = this.runtimeConfig().streamById(consumer.id);
-        const traceAttributes = this.#tracing === undefined
-            ? undefined
-            : [
-                stringAttribute("from", source.name),
-                stringAttribute("to", consumer.name),
-                stringAttribute("pipeline", grouping?.pipeline ?? ""),
-                stringAttribute("component", grouping?.component ?? ""),
-                ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
-                ...(metadata?.taskPoolName === undefined
-                    ? []
-                    : [stringAttribute("taskpoolname", metadata.taskPoolName)])
-            ];
-        const instrumented = new InstrumentedCaller(caller, this.makeLinkRecorder(source, consumer), this.#tracing?.tracer(this.serviceConfig().name), traceAttributes);
-        return instrumented;
+        const traceAttributes = [
+            stringAttribute("from", source.name),
+            stringAttribute("to", consumer.name),
+            stringAttribute("pipeline", grouping?.pipeline ?? ""),
+            stringAttribute("component", grouping?.component ?? ""),
+            ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+            ...(metadata?.taskPoolName === undefined
+                ? []
+                : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+        ];
+        return new InstrumentedCaller(caller, recordCall, this.#tracing.tracer(this.serviceConfig().name), traceAttributes);
     }
     makeLinkRecorder(source, consumer) {
         const key = graphLinkKey(source.id, consumer.id);
@@ -232,9 +234,14 @@ export class ServiceEnvironment {
                 component: grouping?.component ?? ""
             })
             : undefined;
+        if (counter === undefined) {
+            return () => {
+                statistics.count += 1;
+            };
+        }
         return (context) => {
             statistics.count += 1;
-            counter?.inc(context);
+            counter.inc(context);
         };
     }
     #delayPool;
@@ -281,7 +288,7 @@ class InstrumentedCaller {
     }
     consume(context, value) {
         this.recordCall(context);
-        if (this.tracer === undefined || !context.samplingEnabled()) {
+        if (!context.samplingEnabled()) {
             return this.caller.consume(context, value);
         }
         const started = this.tracer.start(context, "stream.call", this.traceAttributes);

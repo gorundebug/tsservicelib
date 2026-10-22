@@ -62,7 +62,7 @@ export declare class MessageContext extends Context {
     /** Local values survive derived contexts but are never serialized to transports. */
     withLocalValue<T>(key: MessageContextKey<T>, value: T): MessageContext;
     localValue<T>(key: MessageContextKey<T>): T;
-    transportMetadata(): ReadonlyMap<string, string>;
+    transportMetadata(tracingEnabled?: boolean): ReadonlyMap<string, string>;
     /** @internal Attaches processing-side Activity state without serializing it. */
     withDurableCallContext(durable: DurableCallExecutionContext): MessageContext;
     /** @internal Returns local state owned by the receiving Activity adapter. */

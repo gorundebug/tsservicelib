@@ -27,8 +27,12 @@ export declare class GrpcJsDataSource extends InputDataSource {
     constructor(connectorId: number, environment: RuntimeEnvironment);
     add(service: DescService, method: DescMethod, handler: UntypedHandleCall): void;
     start(context: Context): Promise<void>;
+    private startListening;
+    private trackHandler;
+    private trackCall;
     stop(context: Context): Promise<void>;
     stopAdmission(context: Context): Promise<void>;
+    private stopListening;
 }
 export declare function makeGrpcNoStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>(stream: TypedInputStream<T, R, E>, service: DescService, method: DescMethod, handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>): Consumer<T>;
 export declare function makeGrpcClientStreamingEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>(stream: TypedInputStream<T, R, E>, service: DescService, method: DescMethod, handler: EndpointHandler<HandlerState, ReqT, ResR, T, R, E>): Consumer<T>;

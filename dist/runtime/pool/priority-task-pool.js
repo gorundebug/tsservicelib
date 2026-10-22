@@ -1,3 +1,4 @@
+import { reportUnhandledTaskError } from "../errors.js";
 import { IndexedHeap } from "./indexed-heap.js";
 import { bindPoolTask, normalizeExecutorsCount, subscribeAbort, reportPoolError } from "./pool-support.js";
 import { err, int, str } from "../environment/log.js";
@@ -19,7 +20,7 @@ export class PriorityTaskPool {
     constructor(options) {
         this.#name = options.name;
         this.#executorsCount = normalizeExecutorsCount(options.executorsCount);
-        this.#onError = options.onError ?? (() => undefined);
+        this.#onError = options.onError ?? reportUnhandledTaskError;
         this.#logger = options.logger;
         this.#metrics = makeTaskPoolMetrics("priority", options);
     }
@@ -128,20 +129,20 @@ export class PriorityTaskPool {
         this.finishDrainIfIdle();
     }
     run(task) {
-        const started = performance.now();
+        const started = this.#metrics === undefined ? undefined : performance.now();
         this.#metrics?.executorsBusy.inc();
         let completion;
         try {
             completion = task.execute();
         }
         catch (error) {
-            reportPoolError(this.#onError, error);
+            reportPoolError(this.#onError, error, task.context.signal());
             this.taskFinished(task.context, started);
             return;
         }
         void Promise.resolve(completion)
             .catch((error) => {
-            reportPoolError(this.#onError, error);
+            reportPoolError(this.#onError, error, task.context.signal());
         })
             .finally(() => {
             this.taskFinished(task.context, started);
@@ -150,7 +151,9 @@ export class PriorityTaskPool {
     taskFinished(context, started) {
         this.#metrics?.executorsBusy.dec();
         this.#metrics?.tasksTotal.inc(context);
-        this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+        if (started !== undefined) {
+            this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+        }
         this.#active -= 1;
         this.#metrics?.executorsAllocated.set(Math.max(this.#executorsCount, this.#active));
         this.pump();

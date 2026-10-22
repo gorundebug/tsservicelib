@@ -5,10 +5,12 @@ import { MessageContext } from "../../runtime/context.js";
 import { TEMPORAL_HEADER_DEADLINE_UNIX_NANO, TEMPORAL_HEADER_PRIORITY } from "./headers.js";
 export { TEMPORAL_HEADER_DEADLINE_UNIX_NANO, TEMPORAL_HEADER_PRIORITY } from "./headers.js";
 const CARRIER_NAMES = ["traceparent", "tracestate", "baggage", "x-trace", "x-stream-id"];
+const STREAM_ID_ONLY_NAMES = ["x-stream-id"];
+const TRACE_CARRIER_NAMES = new Set(["traceparent", "tracestate", "baggage", "x-trace"]);
 const submissionContext = new AsyncLocalStorage();
 const activityMessageContext = new AsyncLocalStorage();
-export function runWithTemporalSubmissionContext(context, operation) {
-    return submissionContext.run(context, operation);
+export function runWithTemporalSubmissionContext(context, operation, tracingEnabled = true) {
+    return submissionContext.run({ context, tracingEnabled }, operation);
 }
 export function currentTemporalActivityMessageContext() {
     const context = activityMessageContext.getStore();
@@ -19,16 +21,25 @@ export function currentTemporalActivityMessageContext() {
 }
 export const temporalWorkflowClientInterceptor = {
     async startWithDetails(input, next) {
-        const context = submissionContext.getStore();
-        if (context === undefined)
+        const submission = submissionContext.getStore();
+        if (submission === undefined)
             return next(input);
-        return next({ ...input, headers: { ...input.headers, ...encodeContext(context) } });
+        const headers = submission.tracingEnabled
+            ? input.headers
+            : Object.fromEntries(Object.entries(input.headers).filter(([name]) => !TRACE_CARRIER_NAMES.has(name)));
+        return next({
+            ...input,
+            headers: {
+                ...headers,
+                ...encodeContext(submission.context, submission.tracingEnabled)
+            }
+        });
     }
 };
-export function temporalActivityInterceptors(temporalContext) {
+export function temporalActivityInterceptors(temporalContext, tracingEnabled = true) {
     const inbound = {
         async execute(input, next) {
-            let context = decodeContext(input.headers).withExternalCancellation(temporalContext.cancellationSignal);
+            let context = decodeContext(input.headers, tracingEnabled).withExternalCancellation(temporalContext.cancellationSignal);
             if (temporalContext.info.startToCloseTimeoutMs > 0) {
                 context = context.bounded(temporalContext.info.startToCloseTimeoutMs);
             }
@@ -37,8 +48,8 @@ export function temporalActivityInterceptors(temporalContext) {
     };
     return { inbound };
 }
-function encodeContext(context) {
-    const values = new Map(context.transportMetadata());
+function encodeContext(context, tracingEnabled) {
+    const values = new Map(context.transportMetadata(tracingEnabled));
     const priority = context.priority();
     if (priority !== undefined)
         values.set(TEMPORAL_HEADER_PRIORITY, String(priority));
@@ -49,9 +60,9 @@ function encodeContext(context) {
     }
     return Object.fromEntries([...values].map(([name, value]) => [name, defaultPayloadConverter.toPayload(value)]));
 }
-function decodeContext(headers) {
+function decodeContext(headers, tracingEnabled) {
     const metadata = new Map();
-    for (const name of CARRIER_NAMES) {
+    for (const name of tracingEnabled ? CARRIER_NAMES : STREAM_ID_ONLY_NAMES) {
         const value = decodeString(headers[name]);
         if (value !== undefined && value !== "")
             metadata.set(name, value);

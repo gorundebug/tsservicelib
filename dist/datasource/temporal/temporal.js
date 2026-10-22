@@ -34,6 +34,7 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
     #streamContext;
     #pending = new Map();
     #traceAttributes;
+    #tracingEnabled;
     #tracer;
     constructor(endpoint, stream, connector, decode, handler) {
         super(endpoint, stream);
@@ -42,10 +43,9 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
         this.#decode = decode;
         this.#handler = handler;
         this.#streamContext = makeStreamContext(stream, stream.resultStream(), new FunctionCollector((context, value) => stream.consume(context, value)), new FunctionCollector((context, value) => stream.errorStream().consume(context, value)));
-        this.#tracer = stream
-            .runtimeEnvironment()
-            .tracing()
-            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        const tracing = stream.runtimeEnvironment().tracing();
+        this.#tracingEnabled = tracing !== undefined;
+        this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
         if (stream.resultStream() !== undefined) {
             stream.setResultConsumer({
@@ -63,7 +63,9 @@ class TemporalEndpointConsumer extends DataSourceEndpointConsumer {
         let context = parent
             .withStreamId(envelope.streamId || newStreamId())
             .withPriority(envelope.priority);
-        context = applyDataSourceEndpointTracing(context, this.#stream.runtimeEnvironment(), this.#endpoint.id);
+        if (this.#tracingEnabled) {
+            context = applyDataSourceEndpointTracing(context, this.#stream.runtimeEnvironment(), this.#endpoint.id);
+        }
         if (cancellationSignal !== undefined) {
             context = context.withExternalCancellation(cancellationSignal);
         }

@@ -1,3 +1,4 @@
+import { isTaskCancellation } from "../errors.js";
 // The graph API is also bundled into the Temporal isolate, where process and
 // Node context propagation do not exist. Never statically import Node here.
 const asyncHooks = typeof process === "undefined" ? undefined : process.getBuiltinModule("async_hooks");
@@ -41,7 +42,9 @@ export function subscribeAbort(signal, callback) {
         }
     };
 }
-export function reportPoolError(handler, error) {
+export function reportPoolError(handler, error, signal) {
+    if (signal !== undefined && isTaskCancellation(error, signal))
+        return;
     try {
         handler(error);
     }

@@ -3,9 +3,12 @@ import type { MessageContext } from "../runtime/context.js";
 import type { KeyValue } from "../runtime/datastruct/key-value.js";
 import type { Completion, Stream } from "../runtime/stream.js";
 export interface When {
+    readonly name: string;
     valueType(): string;
     whenConsumer(): Stream;
 }
+/** Resolve the When node identity once in buildSwitch, not for every message. */
+export declare function whenIndex(whenItems: readonly When[], name: string): number;
 export interface BuildSwitchFunction<T> {
     buildSwitch(stream: Stream, whenItems: readonly When[]): (value: Readonly<T>) => number;
 }

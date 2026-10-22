@@ -201,6 +201,13 @@ export declare const HTTPMethodType: {
     readonly Undefined: "";
     readonly GET: "GET";
     readonly POST: "POST";
+    readonly PUT: "PUT";
+    readonly PATCH: "PATCH";
+    readonly DELETE: "DELETE";
+    readonly HEAD: "HEAD";
+    readonly OPTIONS: "OPTIONS";
+    readonly TRACE: "TRACE";
+    readonly CONNECT: "CONNECT";
 };
 export type HTTPMethodType = (typeof HTTPMethodType)[keyof typeof HTTPMethodType];
 export interface HttpEndpointConfig extends EndpointConfig, FunctionConfig {

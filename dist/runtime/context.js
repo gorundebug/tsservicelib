@@ -4,6 +4,14 @@ export function newStreamId() {
     return globalThis.crypto.randomUUID();
 }
 const EMPTY_METADATA = new Map();
+const STREAM_TRANSPORT_HEADERS = [STREAM_ID_HEADER];
+const TRACING_TRANSPORT_HEADERS = [
+    STREAM_ID_HEADER,
+    TRACE_SAMPLING_HEADER,
+    "traceparent",
+    "tracestate",
+    "baggage"
+];
 /** Identity-based, typed key for process-local invocation state. */
 export class MessageContextKey {
     defaultValue;
@@ -64,8 +72,10 @@ export function combineAbortSignals(signals) {
     };
     const listeners = new Map();
     for (const signal of signals) {
+        if (listeners.has(signal))
+            continue;
         if (signal.aborted) {
-            controller.abort(signal.reason);
+            abort(signal);
             return controller.signal;
         }
         const listener = () => {
@@ -270,15 +280,10 @@ export class MessageContext extends Context {
         }
         return key.defaultValue;
     }
-    transportMetadata() {
+    transportMetadata(tracingEnabled = true) {
         const result = new Map();
-        for (const name of [
-            STREAM_ID_HEADER,
-            TRACE_SAMPLING_HEADER,
-            "traceparent",
-            "tracestate",
-            "baggage"
-        ]) {
+        const names = tracingEnabled ? TRACING_TRANSPORT_HEADERS : STREAM_TRANSPORT_HEADERS;
+        for (const name of names) {
             const value = this.#messageState.metadata?.get(name);
             if (value !== undefined) {
                 result.set(name, value);

@@ -12,4 +12,8 @@ export interface RuntimeComponent {
     readonly name: string;
     readonly lifecycle: Lifecycle;
 }
+/** Observe every operation, but stop waiting when the shared shutdown context expires.
+ * An undefined result means the operation still owns its resources and may finish later.
+ */
+export declare function settleWithinDeadline<T>(context: Context, operations: readonly Promise<T>[]): Promise<readonly (PromiseSettledResult<T> | undefined)[]>;
 //# sourceMappingURL=lifecycle.d.ts.map

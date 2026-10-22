@@ -28,6 +28,8 @@ export declare class TemporalWorkflowEnvironment implements RuntimeEnvironment {
         readonly logger?: Logger;
         readonly metrics?: Metrics;
         readonly tracing?: Tracing;
+        readonly noopMetrics?: boolean;
+        readonly noopTracing?: boolean;
     });
     runtimeConfig(): RuntimeConfig;
     serviceConfig(): ServiceConfig;

@@ -1,6 +1,6 @@
 import { Context } from "./context.js";
 import type { RuntimeEnvironment } from "./environment/index.js";
-import type { RuntimeComponent } from "./lifecycle.js";
+import { type RuntimeComponent } from "./lifecycle.js";
 import { RuntimeTaskRegistry } from "./task-registry.js";
 export declare class ServiceRuntime {
     #private;

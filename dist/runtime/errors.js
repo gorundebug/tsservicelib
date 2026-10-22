@@ -18,4 +18,16 @@ export function errorFromUnknown(value) {
     }
     return new Error(String(value));
 }
+/** Preserve ordinary cancellation without hiding unrelated failures after abort. */
+export function isTaskCancellation(value, signal) {
+    return (signal.aborted &&
+        (value === signal.reason || (value instanceof Error && value.name === "AbortError")));
+}
+/** Deliver an unhandled background failure to the host's uncaught-error policy. */
+export function reportUnhandledTaskError(value) {
+    const error = errorFromUnknown(value);
+    queueMicrotask(() => {
+        throw error;
+    });
+}
 //# sourceMappingURL=errors.js.map

@@ -155,6 +155,7 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
     #tasks = new RuntimeTaskRegistry();
     #waiters = [];
     #traceAttributes;
+    #tracingEnabled;
     #tracer;
     #pending;
     #active = 0;
@@ -169,10 +170,9 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
                 consume: (context, value) => this.consumeResult(context, value)
             });
         }
-        this.#tracer = stream
-            .runtimeEnvironment()
-            .tracing()
-            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        const tracing = stream.runtimeEnvironment().tracing();
+        this.#tracingEnabled = tracing !== undefined;
+        this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     start(context) {
@@ -221,7 +221,9 @@ class CustomEndpointConsumer extends DataSourceEndpointConsumer {
         }
     }
     async handleAdmitted(context, value) {
-        context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
+        if (this.#tracingEnabled) {
+            context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
+        }
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const started = this.#tracer.start(context, "local.input", this.#traceAttributes);

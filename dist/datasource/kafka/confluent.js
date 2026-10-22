@@ -1,5 +1,5 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, RotatingMap, RuntimeTaskRegistry, TRACE_SAMPLING_HEADER, boolAttribute, err, errorFromUnknown, makeStreamContext, newStreamId, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
@@ -348,6 +348,7 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
     #pending;
     #waiters = [];
     #traceAttributes;
+    #tracingEnabled;
     #tracer;
     #active = 0;
     #started = false;
@@ -359,10 +360,9 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
         stream.setResultConsumer({
             consume: (context, value) => this.consumeResult(context, value)
         });
-        this.#tracer = stream
-            .runtimeEnvironment()
-            .tracing()
-            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        const tracing = stream.runtimeEnvironment().tracing();
+        this.#tracingEnabled = tracing !== undefined;
+        this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     start() {
@@ -421,13 +421,18 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
     }
     async handleAdmitted(record, control, signal) {
         let context = new MessageContext().withExternalCancellation(signal);
-        const metadata = new Map();
-        for (const [name, value] of record.headers) {
-            if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(name)) {
-                metadata.set(name, Buffer.from(value).toString("utf8"));
+        if (this.#tracingEnabled) {
+            const metadata = new Map();
+            for (const [name, value] of record.headers) {
+                if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(name)) {
+                    metadata.set(name, Buffer.from(value).toString("utf8"));
+                }
             }
+            context = context.withMetadata(metadata);
         }
-        context = applyDataSourceEndpointTracing(context.withMetadata(metadata), this.stream().runtimeEnvironment(), this.endpoint().id);
+        if (this.#tracingEnabled) {
+            context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
+        }
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
             const started = this.#tracer.start(context, "kafka.input", this.#traceAttributes);

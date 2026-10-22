@@ -1,5 +1,5 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createRequire } from "node:module";
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { DataSinkEndpoint, DataSinkEndpointConsumer, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const require = createRequire(import.meta.url);
@@ -141,6 +141,7 @@ class KafkaSinkEndpoint extends DataSinkEndpoint {
 }
 export class KafkaDataSink extends OutputDataSink {
     #factory;
+    #tracingEnabled;
     #deliveries = new RuntimeTaskRegistry();
     #producer;
     #producerRecovery;
@@ -149,6 +150,7 @@ export class KafkaDataSink extends OutputDataSink {
         super(connectorId, environment);
         requireKafkaDataConnectorConfig(this.config());
         this.#factory = factory;
+        this.#tracingEnabled = environment.tracing() !== undefined;
     }
     factory() {
         return this.#factory;
@@ -246,7 +248,7 @@ export class KafkaDataSink extends OutputDataSink {
                 producer = this.#producer;
                 if (producer === undefined)
                     throw new Error(`Kafka data sink ${this.name} is stopped`);
-                delivery = await producer.send(topic, key, value, selectedPartition, context.transportMetadata());
+                delivery = await producer.send(topic, key, value, selectedPartition, context.transportMetadata(this.#tracingEnabled));
             }
             catch (error) {
                 failure = errorFromUnknown(error);

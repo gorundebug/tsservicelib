@@ -1,7 +1,15 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { createServer } from "node:http";
-import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, MessageContext, RotatingMap, RuntimeTaskRegistry, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, applyDataSourceEndpointTracing, errorFromUnknown, boolAttribute, makeStreamContext, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
+import { DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, MessageContext, RotatingMap, RuntimeTaskRegistry, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, applyDataSourceEndpointTracing, errorFromUnknown, boolAttribute, makeStreamContext, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, settleWithinDeadline, spanError, stringAttribute } from "../../runtime/index.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
+const CONTEXT_METADATA_HEADERS = [
+    STREAM_ID_HEADER,
+    TRACE_SAMPLING_HEADER,
+    "traceparent",
+    "tracestate",
+    "baggage"
+];
+const STREAM_ID_ONLY_HEADERS = [STREAM_ID_HEADER];
 class HttpResult {
     handlerState;
     data;
@@ -76,6 +84,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
     path;
     #consumer;
     #requestHandler;
+    #tracingEnabled;
     constructor(dataSource, config) {
         super(dataSource, config.id);
         if (config.httpMethodType !== "GET" && config.httpMethodType !== "POST") {
@@ -86,6 +95,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
         }
         this.method = config.httpMethodType;
         this.path = config.path;
+        this.#tracingEnabled = this.runtimeEnvironment().tracing() !== undefined;
         this.#requestHandler = (request, response) => {
             void this.serve(request, response).catch((error) => {
                 if (!response.headersSent) {
@@ -119,7 +129,7 @@ class NodeHttpInputEndpoint extends DataSourceEndpoint {
     }
     async serve(request, response) {
         if (request.method !== this.method) {
-            this.onInvalidHttpMethod(contextFromRequest(request), request.method ?? "");
+            this.onInvalidHttpMethod(contextFromRequest(request, undefined, this.#tracingEnabled), request.method ?? "");
             response.setHeader("allow", this.method);
             response.statusCode = 405;
             response.end();
@@ -249,6 +259,7 @@ class NodeHttpEndpointConsumer {
     #hasResult;
     #traceAttributes;
     #tracer;
+    #tracingEnabled;
     #tasks = new RuntimeTaskRegistry();
     #pending;
     #started = false;
@@ -258,10 +269,9 @@ class NodeHttpEndpointConsumer {
         this.#handler = handler;
         this.#hasResult = stream.resultStream() !== undefined;
         this.#streamContext = makeStreamContext(stream, stream.resultStream(), new FunctionCollector((context, value) => this.consume(context, value)), new FunctionCollector((context, value) => stream.errorStream().consume(context, value)));
-        this.#tracer = stream
-            .runtimeEnvironment()
-            .tracing()
-            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        const tracing = stream.runtimeEnvironment().tracing();
+        this.#tracingEnabled = tracing !== undefined;
+        this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
         if (this.#hasResult) {
             stream.setResultConsumer({
@@ -323,7 +333,10 @@ class NodeHttpEndpointConsumer {
         return this.#tasks.admit((lifecycleSignal) => this.serveAccepted(request, response, cancellation, lifecycleSignal), cancellation.signal);
     }
     async serveAccepted(request, response, cancellation, lifecycleSignal) {
-        let context = applyDataSourceEndpointTracing(contextFromRequest(request, lifecycleSignal), this.stream().runtimeEnvironment(), this.endpoint().id);
+        let context = contextFromRequest(request, lifecycleSignal, this.#tracingEnabled);
+        if (this.#tracingEnabled) {
+            context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
+        }
         const data = { request, response };
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
@@ -473,12 +486,12 @@ class NodeHttpEndpointConsumer {
     }
 }
 async function drainAcceptedTasks(tasks, context) {
-    try {
-        await tasks.drain(context.remainingMs());
+    const [result] = await settleWithinDeadline(context, [tasks.drain()]);
+    if (result === undefined) {
+        tasks.cancel(context.signal().reason ?? new Error("HTTP source shutdown deadline exceeded"));
     }
-    catch (error) {
-        tasks.cancel(context.signal().reason ?? error);
-        await tasks.drain();
+    else if (result.status === "rejected") {
+        tasks.cancel(result.reason);
     }
 }
 export function makeNodeHttpEndpointConsumer(stream, handler) {
@@ -506,22 +519,18 @@ function getOrCreateDataSource(connectorId, environment) {
     environment.addDataSource(dataSource);
     return dataSource;
 }
-function contextFromRequest(request, signal) {
-    const metadata = new Map();
-    for (const name of [
-        STREAM_ID_HEADER,
-        TRACE_SAMPLING_HEADER,
-        "traceparent",
-        "tracestate",
-        "baggage"
-    ]) {
+function contextFromRequest(request, signal, tracingEnabled) {
+    let metadata;
+    for (const name of tracingEnabled ? CONTEXT_METADATA_HEADERS : STREAM_ID_ONLY_HEADERS) {
         const value = request.headers[name];
         const first = Array.isArray(value) ? value[0] : value;
         if (first !== undefined) {
+            metadata ??= new Map();
             metadata.set(name, first);
         }
     }
-    return new MessageContext(signal).withMetadata(metadata);
+    const context = new MessageContext(signal);
+    return metadata === undefined ? context : context.withMetadata(metadata);
 }
 function requestPath(request) {
     try {

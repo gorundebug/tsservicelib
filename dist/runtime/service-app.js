@@ -1,3 +1,4 @@
+import { RuntimeStoppedError, reportUnhandledTaskError } from "./errors.js";
 import { RuntimeConfigLoader } from "./config/index.js";
 import { Context } from "./context.js";
 import { err, NoopLogsEngine, noopLogger, NoopMetricsEngine, PrometheusMetricsEngine } from "./environment/index.js";
@@ -211,7 +212,13 @@ function makeRuntimePools(config, metrics, service, logger) {
 }
 function reportAsyncFailure(logger, message) {
     return (error) => {
-        logger.error(Context.background(), message, err(errorFromUnknown(error)));
+        try {
+            logger.error(Context.background(), message, err(errorFromUnknown(error)));
+        }
+        finally {
+            if (!(error instanceof RuntimeStoppedError))
+                reportUnhandledTaskError(error);
+        }
     };
 }
 function resizeRuntimePools(config, pools) {

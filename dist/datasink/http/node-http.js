@@ -1,8 +1,8 @@
-import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { Agent as HttpAgent, request as httpRequest } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
-import { DataSinkEndpoint, DataSinkEndpointConsumerWithResult, FunctionCollector, OutputDataSink, RuntimeTaskRegistry, SinkStreamContext, int64Attribute, errorFromUnknown, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
+import { DataSinkEndpoint, DataSinkEndpointConsumerWithResult, FunctionCollector, OutputDataSink, RuntimeTaskRegistry, SinkStreamContext, int64Attribute, errorFromUnknown, newStreamId, requireHttpDataConnectorConfig, requireHttpEndpointConfig, settleWithinDeadline, spanError, stringAttribute } from "../../runtime/index.js";
 export class Request {
     context;
     method;
@@ -256,6 +256,7 @@ class NodeHttpSinkEndpointConsumer {
     #client;
     #traceAttributes;
     #tracer;
+    #tracingEnabled;
     #tasks = new RuntimeTaskRegistry();
     #started = false;
     #stopped = false;
@@ -264,10 +265,9 @@ class NodeHttpSinkEndpointConsumer {
         this.#streamContext = new StreamContext(stream);
         this.#client = client;
         this.#handler = handler;
-        this.#tracer = stream
-            .runtimeEnvironment()
-            .tracing()
-            ?.tracer(stream.runtimeEnvironment().serviceConfig().name);
+        const tracing = stream.runtimeEnvironment().tracing();
+        this.#tracingEnabled = tracing !== undefined;
+        this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     endpoint() {
@@ -341,7 +341,7 @@ class NodeHttpSinkEndpointConsumer {
             for (const [name, value] of request.headers) {
                 outgoingRequest.headers.set(name, value);
             }
-            for (const [name, metadata] of requestContext.transportMetadata()) {
+            for (const [name, metadata] of requestContext.transportMetadata(this.#tracingEnabled)) {
                 outgoingRequest.headers.set(name, metadata);
             }
             errorEvent = "http_call.error";
@@ -417,12 +417,12 @@ function contextError(context, fallback) {
         : errorFromUnknown(context.signal().reason);
 }
 async function drainAcceptedTasks(tasks, context) {
-    try {
-        await tasks.drain(context.remainingMs());
+    const [result] = await settleWithinDeadline(context, [tasks.drain()]);
+    if (result === undefined) {
+        tasks.cancel(context.signal().reason ?? new Error("HTTP sink shutdown deadline exceeded"));
     }
-    catch (error) {
-        tasks.cancel(context.signal().reason ?? error);
-        await tasks.drain();
+    else if (result.status === "rejected") {
+        tasks.cancel(result.reason);
     }
 }
 //# sourceMappingURL=node-http.js.map

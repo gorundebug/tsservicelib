@@ -35,6 +35,8 @@ export async function replayTemporalWorkflowHistory(workflowsPath, history, work
 }
 export class TemporalConnector {
     #environment;
+    #metricsEnabled;
+    #tracingEnabled;
     #endpoints = new Map();
     #activityEvents;
     #telemetryPlugin;
@@ -56,6 +58,7 @@ export class TemporalConnector {
         this.id = connectorId;
         this.name = config.name;
         this.#environment = environment;
+        this.#metricsEnabled = environment.metrics().enabled();
         this.#workflowsPath =
             options.workflowsPath ?? fileURLToPath(new URL("./workflows.js", import.meta.url));
         this.#activityEvents = environment
@@ -63,6 +66,7 @@ export class TemporalConnector {
             .scope("temporal_activity", { connector: this.name })
             .counterVec("events_total", "Total number of Temporal Activity lifecycle events");
         const tracing = environment.tracing();
+        this.#tracingEnabled = tracing !== undefined;
         this.#telemetryPlugin = temporalWorkerPlugin(tracing);
         this.#telemetryClientInterceptor = getTemporalWorkflowClientInterceptor(tracing);
     }
@@ -155,6 +159,7 @@ export class TemporalConnector {
         try {
             for (const [taskQueue, activities] of this.queueActivities()) {
                 const policy = this.queuePolicy(taskQueue);
+                const tracingEnabled = this.#tracingEnabled;
                 const worker = await Worker.create({
                     connection: this.#connection,
                     namespace: config.namespace,
@@ -162,7 +167,9 @@ export class TemporalConnector {
                     activities,
                     workflowsPath: this.#workflowsPath,
                     interceptors: {
-                        activity: [temporalActivityInterceptors],
+                        activity: [
+                            (activityContext) => temporalActivityInterceptors(activityContext, tracingEnabled)
+                        ],
                         workflowModules: temporalWorkflowInterceptorModules()
                     },
                     ...(this.#telemetryPlugin === undefined ? {} : { plugins: [this.#telemetryPlugin] }),
@@ -235,7 +242,7 @@ export class TemporalConnector {
             throw new Error(`Temporal endpoint ${config.name} is disabled`);
         if (envelope.messageId === "")
             throw new Error("Temporal endpoint message ID is empty");
-        const request = endpointRequest(registration, config, envelope, this.#environment.runtimeConfig().config());
+        const request = endpointRequest(registration, config, envelope, this.#environment.runtimeConfig().config(), this.#metricsEnabled, this.#tracingEnabled);
         const workflowType = config.temporalExecutionType === "Workflow"
             ? registration.workflowType
             : ENDPOINT_WORKFLOW_TYPE;
@@ -251,7 +258,7 @@ export class TemporalConnector {
             workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
             memo: ownershipMemo(owner, envelope.messageId),
             priority: { priorityKey: request.priority }
-        }));
+        }), this.#tracingEnabled);
         await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId);
         if (!waitForResult)
             return { payload: new Uint8Array() };
@@ -313,7 +320,9 @@ export class TemporalConnector {
     }
     activityDiagnostics(boundary, target, context) {
         return (event, failure) => {
-            this.#activityEvents.with({ connector: this.name, boundary, target, event }).inc(context);
+            if (this.#metricsEnabled) {
+                this.#activityEvents.with({ connector: this.name, boundary, target, event }).inc(context);
+            }
             if (failure === undefined)
                 return;
             const fields = [
@@ -348,7 +357,7 @@ export class TemporalConnector {
             scheduledAtUnixMillis: 0,
             firedAtUnixMillis: 0,
             payload: new Uint8Array()
-        }, this.#environment.runtimeConfig().config());
+        }, this.#environment.runtimeConfig().config(), this.#metricsEnabled, this.#tracingEnabled);
         const workflowType = config.temporalExecutionType === "Workflow"
             ? registration.workflowType
             : ENDPOINT_WORKFLOW_TYPE;
@@ -456,10 +465,11 @@ export function endpointWorkflowId(connectorName, endpointName, messageId) {
 function endpointOwner(connectorName, endpointName) {
     return `${temporalIdentityName(connectorName)}/endpoint/${temporalIdentityName(endpointName)}/v1`;
 }
-function endpointRequest(registration, config, envelope, runtimeConfig) {
+function endpointRequest(registration, config, envelope, runtimeConfig, metricsEnabled, tracingEnabled) {
     return {
         executionType: config.temporalExecutionType,
         runtimeConfig,
+        telemetry: { noopMetrics: !metricsEnabled, noopTracing: !tracingEnabled },
         activityType: registration.activityType,
         activityStartToCloseTimeout: config.activityStartToCloseTimeout,
         activityHeartbeatTimeout: config.activityHeartbeatTimeout,

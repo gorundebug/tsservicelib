@@ -4,6 +4,8 @@ import {} from "./environment/metrics/metrics.js";
 import { err, str } from "./environment/log.js";
 /** Apply the current reloadable source-endpoint tracing policy to one event. */
 export function applyDataSourceEndpointTracing(context, environment, endpointId) {
+    if (environment.tracing() === undefined)
+        return context;
     return environment.runtimeConfig().endpointById(endpointId)?.tracingEnabled === true
         ? context.withSampling(true)
         : context;

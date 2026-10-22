@@ -2,6 +2,8 @@ import { RuntimeConfig } from "../../runtime/config/runtime-config.js";
 import { Context } from "../../runtime/context.js";
 import { RuntimeCallerFactory } from "../../runtime/caller-factory.js";
 import { callerMetadata } from "../../runtime/caller-metadata.js";
+import { noopMetrics } from "../../runtime/environment/metrics/noop.js";
+import { CountedCaller } from "../../runtime/counted-caller.js";
 import { stringAttribute } from "../../runtime/environment/tracing/index.js";
 import {} from "../../runtime/serde/registry.js";
 import { makeJoinStorage } from "../../runtime/store/join-storage.js";
@@ -42,8 +44,12 @@ export class TemporalWorkflowEnvironment {
         this.#serviceId = serviceId;
         this.#serdeRegistry = serdeRegistry;
         this.#logger = telemetry.logger ?? workflowLogger;
-        this.#metrics = telemetry.metrics ?? new WorkflowMetrics();
-        this.#tracing = telemetry.tracing ?? new WorkflowTracing();
+        this.#metrics = telemetry.noopMetrics
+            ? noopMetrics
+            : (telemetry.metrics ?? new WorkflowMetrics());
+        this.#tracing = telemetry.noopTracing
+            ? undefined
+            : (telemetry.tracing ?? new WorkflowTracing());
         this.#tasks = new RuntimeTaskRegistry((error) => {
             this.recordFailure(error);
         });
@@ -210,21 +216,23 @@ export class TemporalWorkflowEnvironment {
     }
     makeCaller(source, consumer) {
         const caller = this.#callerFactory.create(source, consumer);
+        const recordCall = this.makeLinkRecorder(source, consumer);
+        if (this.#tracing === undefined || !this.#tracing.enabled()) {
+            return new CountedCaller(caller, recordCall);
+        }
         const metadata = callerMetadata(caller);
         const grouping = this.runtimeConfig().streamById(consumer.id);
-        const traceAttributes = this.#tracing === undefined
-            ? undefined
-            : [
-                stringAttribute("from", source.name),
-                stringAttribute("to", consumer.name),
-                stringAttribute("pipeline", grouping?.pipeline ?? ""),
-                stringAttribute("component", grouping?.component ?? ""),
-                ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
-                ...(metadata?.taskPoolName === undefined
-                    ? []
-                    : [stringAttribute("taskpoolname", metadata.taskPoolName)])
-            ];
-        return new WorkflowInstrumentedCaller(caller, this.makeLinkRecorder(source, consumer), this.#tracing?.tracer(this.serviceConfig().name), traceAttributes);
+        const traceAttributes = [
+            stringAttribute("from", source.name),
+            stringAttribute("to", consumer.name),
+            stringAttribute("pipeline", grouping?.pipeline ?? ""),
+            stringAttribute("component", grouping?.component ?? ""),
+            ...(metadata === undefined ? [] : [stringAttribute("type", metadata.type)]),
+            ...(metadata?.taskPoolName === undefined
+                ? []
+                : [stringAttribute("taskpoolname", metadata.taskPoolName)])
+        ];
+        return new WorkflowInstrumentedCaller(caller, recordCall, this.#tracing.tracer(this.serviceConfig().name), traceAttributes);
     }
     makeLinkRecorder(source, consumer) {
         const key = graphLinkKey(source.id, consumer.id);
@@ -239,9 +247,14 @@ export class TemporalWorkflowEnvironment {
                 component: grouping?.component ?? ""
             })
             : undefined;
+        if (counter === undefined) {
+            return () => {
+                this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
+            };
+        }
         return (context) => {
             this.#linkCallCounts.set(key, (this.#linkCallCounts.get(key) ?? 0) + 1);
-            counter?.inc(context);
+            counter.inc(context);
         };
     }
     delay(context, delayMs, execute) {
@@ -390,7 +403,7 @@ class WorkflowInstrumentedCaller {
     }
     consume(context, value) {
         this.recordCall(context);
-        if (this.tracer === undefined || !context.samplingEnabled()) {
+        if (!context.samplingEnabled()) {
             return this.caller.consume(context, value);
         }
         const started = this.tracer.start(context, "stream.call", this.traceAttributes);

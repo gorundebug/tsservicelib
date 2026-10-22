@@ -16,6 +16,7 @@ export declare class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> 
     private indexNamed;
     private indexLinks;
     private validateReferences;
+    private hasStreamReference;
     private validateCallSemantics;
 }
 //# sourceMappingURL=runtime-config.d.ts.map

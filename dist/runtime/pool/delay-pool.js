@@ -1,7 +1,8 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
+import { reportUnhandledTaskError } from "../errors.js";
 import { IndexedHeap } from "./indexed-heap.js";
 import { subscribeAbort, reportPoolError } from "./pool-support.js";
-import { performance } from "node:perf_hooks";
 import { err } from "../environment/index.js";
 import { PoolStoppedError } from "./pool.js";
 export class DelayPool {
@@ -20,7 +21,7 @@ export class DelayPool {
     #resolveDrain;
     constructor(options = {}) {
         this.#name = options.name ?? "delay";
-        this.#onError = options.onError ?? (() => undefined);
+        this.#onError = options.onError ?? reportUnhandledTaskError;
         this.#logger = options.logger;
         this.#metrics = makeMetrics(options.metrics, options.service);
     }
@@ -100,19 +101,19 @@ export class DelayPool {
         task.removeAbortListener();
         // In particular, abort listeners must never invoke user code inline.
         queueMicrotask(() => {
-            const started = performance.now();
+            const started = this.#metrics === undefined ? undefined : performance.now();
             let completion;
             try {
                 completion = task.execute();
             }
             catch (error) {
-                reportPoolError(this.#onError, error);
+                reportPoolError(this.#onError, error, task.context.signal());
                 this.completeTask(task, task.context, started, cancelled);
                 return;
             }
             void Promise.resolve(completion)
                 .catch((error) => {
-                reportPoolError(this.#onError, error);
+                reportPoolError(this.#onError, error, task.context.signal());
             })
                 .finally(() => {
                 this.completeTask(task, task.context, started, cancelled);
@@ -165,7 +166,9 @@ export class DelayPool {
         this.#tasks.delete(task);
         this.#metrics?.waitQueueLength.dec();
         this.#metrics?.tasksTotal.inc(context);
-        this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+        if (started !== undefined) {
+            this.#metrics?.executionDuration.observe(context, (performance.now() - started) / 1_000);
+        }
         if (cancelled)
             this.#metrics?.taskCancelled.inc(context);
         this.finishDrainIfIdle();

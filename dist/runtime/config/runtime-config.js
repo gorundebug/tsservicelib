@@ -137,7 +137,7 @@ export class RuntimeConfig {
                 throw new Error(`stream ${stream.name} references missing service id ${String(stream.idService)}`);
             }
             for (const sourceId of [stream.idSource, ...stream.idSources]) {
-                if (sourceId !== 0 && !this.#streams.byId.has(sourceId)) {
+                if (sourceId !== 0 && !this.hasStreamReference(sourceId)) {
                     throw new Error(`stream ${stream.name} references missing source stream id ${String(sourceId)}`);
                 }
             }
@@ -191,11 +191,20 @@ export class RuntimeConfig {
             }
         }
         for (const link of this.#config.links) {
-            if (!this.#streams.byId.has(link.from) || !this.#streams.byId.has(link.to)) {
+            if (!this.hasStreamReference(link.from) || !this.hasStreamReference(link.to)) {
                 throw new Error(`link from=${String(link.from)} to=${String(link.to)} references missing stream`);
             }
             this.validateCallSemantics(link.callSemantics, `link from=${String(link.from)} to=${String(link.to)}`);
         }
+    }
+    hasStreamReference(id) {
+        if (this.#streams.byId.has(id))
+            return true;
+        if (id >= 0)
+            return false;
+        // ErrorStream has no separate config: its ID is the negated owner ID.
+        const owner = this.#streams.byId.get(-id);
+        return owner?.type === "Input" || owner?.type === "Process" || owner?.type === "Sink";
     }
     validateCallSemantics(semantics, owner) {
         if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {
