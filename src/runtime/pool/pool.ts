@@ -32,7 +32,7 @@ export interface PriorityTaskPoolLike {
 export interface TaskPoolOptions {
   readonly name: string;
   readonly executorsCount: number;
-  readonly onError?: (error: unknown) => void;
+  readonly onError?: (error: unknown, context: Context) => void;
   readonly logger?: Logger;
   readonly metrics?: Metrics;
   readonly service?: string;

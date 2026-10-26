@@ -1,6 +1,6 @@
 import { type UntypedHandleCall } from "@grpc/grpc-js";
 import { type DescMethod, type DescService } from "@bufbuild/protobuf";
-import { InputDataSource, Context, MessageContext, type Completion, type Consumer, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
+import { InputDataSource, type Context, MessageContext, type Completion, type Consumer, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
 export interface Sender<ResR> {
     send(context: MessageContext, value: ResR): Completion;
 }

@@ -1,5 +1,4 @@
 import { monitorEventLoopDelay, PerformanceObserver, performance } from "node:perf_hooks";
-import { Context } from "./context.js";
 const NANOSECONDS_PER_SECOND = 1_000_000_000;
 /**
  * Node-specific runtime diagnostics. Sampling exists only when metrics are
@@ -8,6 +7,7 @@ const NANOSECONDS_PER_SECOND = 1_000_000_000;
  */
 export class RuntimeDiagnostics {
     #eventLoopDelay;
+    #createGCObserver;
     #gcObserver;
     #eventLoopUtilization = 0;
     #previousUtilization = performance.eventLoopUtilization();
@@ -28,17 +28,22 @@ export class RuntimeDiagnostics {
             priorityTaskPools.reduce((total, pool) => total + pool.queueLength(), 0));
         const pauses = scope.histogram("gc_pause_seconds", "Observed V8 garbage-collection pause duration", {}, [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5]);
         const collections = scope.counterVec("gc_collections_total", "Observed V8 garbage-collection events");
-        this.#gcObserver = new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-                pauses.observe(Context.background(), entry.duration / 1_000);
-                collections.with({ kind: gcKind(entry) }).inc(Context.background());
-            }
-        });
+        this.#createGCObserver = (context) => {
+            const observer = new PerformanceObserver((list) => {
+                if (!this.#started || this.#gcObserver !== observer)
+                    return;
+                for (const entry of list.getEntries()) {
+                    pauses.observe(context, entry.duration / 1_000);
+                    collections.with({ kind: gcKind(entry) }).inc(context);
+                }
+            });
+            return observer;
+        };
     }
     start(context) {
-        void context;
         if (this.#started)
             return Promise.reject(new Error("runtime diagnostics already started"));
+        this.#gcObserver = this.#createGCObserver?.(context);
         this.#started = true;
         this.#previousUtilization = performance.eventLoopUtilization();
         this.#eventLoopDelay?.enable();
@@ -52,6 +57,7 @@ export class RuntimeDiagnostics {
         this.#started = false;
         this.#eventLoopDelay?.disable();
         this.#gcObserver?.disconnect();
+        this.#gcObserver = undefined;
         return Promise.resolve();
     }
     eventLoopLagSeconds() {

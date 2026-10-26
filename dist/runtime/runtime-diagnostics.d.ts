@@ -1,4 +1,4 @@
-import { Context } from "./context.js";
+import type { Context } from "./context.js";
 import type { Metrics } from "./environment/index.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { PriorityTaskPool, TaskPool } from "./pool/index.js";

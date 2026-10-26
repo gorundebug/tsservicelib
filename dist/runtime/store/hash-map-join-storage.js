@@ -1,4 +1,3 @@
-import { Context } from "../context.js";
 import { isTaskCancellation, reportUnhandledTaskError } from "../errors.js";
 import { StoreAlreadyStartedError, StoreStoppedError } from "./storage.js";
 const SHRINK_FACTOR = 4;
@@ -12,7 +11,6 @@ export class HashMapJoinStorage {
     #evictionsTotal;
     #highWaterMark = 0;
     #rotationTimer;
-    #rotationContext;
     #started = false;
     #stopped = false;
     #activeTTLJoins = 0;
@@ -40,8 +38,7 @@ export class HashMapJoinStorage {
         if (this.#started)
             throw new StoreAlreadyStartedError();
         this.#started = true;
-        this.#rotationContext = context;
-        this.armRotation();
+        this.armRotation(context);
     }
     stop(context) {
         void context;
@@ -230,17 +227,17 @@ export class HashMapJoinStorage {
                 this.#evictionsTotal.inc(evictionContext);
         }
     }
-    armRotation() {
+    armRotation(context) {
         const ttl = this.#config.ttlMs();
         if (this.#stopped || ttl <= 0)
             return;
         this.#rotationTimer = setTimeout(() => {
-            this.rotate();
-            this.armRotation();
+            this.rotate(context);
+            this.armRotation(context);
         }, Math.max(1, Math.ceil(ttl)));
         this.#rotationTimer.unref();
     }
-    rotate() {
+    rotate(context) {
         const total = this.#current.size + this.#previous.size;
         const shouldRotate = this.#highWaterMark === 0 || total * SHRINK_FACTOR < this.#highWaterMark;
         if (total > this.#highWaterMark)
@@ -262,7 +259,7 @@ export class HashMapJoinStorage {
         this.#current.clear();
         if (this.#metricsEnabled && evicted > 0) {
             this.#count.sub(evicted);
-            this.#evictionsTotal.add(this.#rotationContext ?? Context.background(), evicted);
+            this.#evictionsTotal.add(context, evicted);
         }
     }
 }

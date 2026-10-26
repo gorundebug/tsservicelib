@@ -5,7 +5,7 @@ import {
   DataSinkEndpointConsumer,
   FunctionCollector,
   OutputDataSink,
-  Context,
+  type Context,
   errorFromUnknown,
   spanError,
   stringAttribute,
@@ -88,18 +88,18 @@ export class CustomDataSink extends OutputDataSink {
     try {
       for (const endpoint of this.customEndpoints()) await endpoint.start(context);
     } catch (error: unknown) {
-      this.#started = false;
-      await Promise.allSettled(
-        this.customEndpoints().map(async (endpoint) => endpoint.stop(Context.background()))
+      const cleanup = await Promise.allSettled(
+        this.customEndpoints().map(async (endpoint) => endpoint.stop(context))
       );
+      this.#started = cleanup.some((result) => result.status === "rejected");
       throw error;
     }
   }
 
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
-    this.#started = false;
     await Promise.all(this.customEndpoints().map(async (endpoint) => endpoint.stop(context)));
+    this.#started = false;
   }
 
   private customEndpoints(): readonly CustomSinkEndpoint<unknown>[] {

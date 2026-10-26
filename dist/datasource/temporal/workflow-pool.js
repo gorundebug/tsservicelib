@@ -136,7 +136,8 @@ class WorkflowPoolCore {
             await task.execute();
         }
         catch (error) {
-            reportPoolError(this.#onError, error);
+            // Workflow cancellation must reach the workflow failure/completion channel.
+            reportPoolError(this.#onError, error, task.context, true);
         }
         finally {
             this.#metrics?.executorsBusy.dec();

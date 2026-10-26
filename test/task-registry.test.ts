@@ -6,6 +6,46 @@ import {
   RuntimeStoppedError,
   RuntimeTaskRegistry
 } from "@gorundebug/tsservicelib/runtime";
+import { MessageContext, ParallelCaller } from "@gorundebug/tsservicelib/runtime";
+
+await test("parallel caller reports the invocation owner, not a detached root", async () => {
+  const errors: { error: Error; context: unknown }[] = [];
+  const registry = new RuntimeTaskRegistry((error, context) => { errors.push({ error, context }); });
+  const owner = new MessageContext().withStreamId("parallel-owner");
+  const failure = new Error("parallel failure");
+  const caller = new ParallelCaller(registry, { consume: () => Promise.reject(failure) });
+  caller.consume(owner, undefined);
+  await registry.drain();
+  assert.deepEqual(errors, [{ error: failure, context: owner }]);
+  registry.stopAdmission();
+  caller.consume(owner, undefined);
+  assert.equal(errors.length, 2);
+  assert.ok(errors[1]?.error instanceof RuntimeStoppedError);
+  assert.equal(errors[1].context, owner);
+});
+
+await test("parallel caller cancellation is observed without reporting a background failure", async () => {
+  const errors: Error[] = [];
+  const registry = new RuntimeTaskRegistry((error) => { errors.push(error); });
+  const cancellation = new AbortController();
+  const owner = new MessageContext(cancellation.signal);
+  const entered = Promise.withResolvers<undefined>();
+  const caller = new ParallelCaller(registry, {
+    consume: (context) => new Promise<void>((_resolve, reject) => {
+      context.signal().addEventListener("abort", () => {
+        const reason: unknown = context.signal().reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      }, { once: true });
+      entered.resolve(undefined);
+    })
+  });
+  caller.consume(owner, undefined);
+  await entered.promise;
+  cancellation.abort(new Error("owner cancelled"));
+  await registry.drain();
+  assert.deepEqual(errors, []);
+  assert.equal(registry.activeCount(), 0);
+});
 
 await test("runtime task registry observes failures and drains admitted work", async () => {
   const errors: Error[] = [];

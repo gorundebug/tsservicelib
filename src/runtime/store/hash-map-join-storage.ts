@@ -1,4 +1,4 @@
-import { Context, type MessageContext } from "../context.js";
+import type { Context, MessageContext } from "../context.js";
 import type { Int64Counter, Int64Gauge } from "../environment/index.js";
 import type { RuntimeEnvironment } from "../environment/runtime-environment.js";
 import { isTaskCancellation, reportUnhandledTaskError } from "../errors.js";
@@ -31,7 +31,6 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
   readonly #evictionsTotal: Int64Counter;
   #highWaterMark = 0;
   #rotationTimer: NodeJS.Timeout | undefined;
-  #rotationContext: Context | undefined;
   #started = false;
   #stopped = false;
   #activeTTLJoins = 0;
@@ -62,8 +61,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     if (this.#stopped) throw new StoreStoppedError();
     if (this.#started) throw new StoreAlreadyStartedError();
     this.#started = true;
-    this.#rotationContext = context;
-    this.armRotation();
+    this.armRotation(context);
   }
 
   public stop(context: Context): Promise<void> {
@@ -258,20 +256,20 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     }
   }
 
-  private armRotation(): void {
+  private armRotation(context: Context): void {
     const ttl = this.#config.ttlMs();
     if (this.#stopped || ttl <= 0) return;
     this.#rotationTimer = setTimeout(
       () => {
-        this.rotate();
-        this.armRotation();
+        this.rotate(context);
+        this.armRotation(context);
       },
       Math.max(1, Math.ceil(ttl))
     );
     this.#rotationTimer.unref();
   }
 
-  private rotate(): void {
+  private rotate(context: Context): void {
     const total = this.#current.size + this.#previous.size;
     const shouldRotate = this.#highWaterMark === 0 || total * SHRINK_FACTOR < this.#highWaterMark;
     if (total > this.#highWaterMark) this.#highWaterMark = total;
@@ -291,7 +289,7 @@ export class HashMapJoinStorage<K> implements JoinStorage<K> {
     this.#current.clear();
     if (this.#metricsEnabled && evicted > 0) {
       this.#count.sub(evicted);
-      this.#evictionsTotal.add(this.#rotationContext ?? Context.background(), evicted);
+      this.#evictionsTotal.add(context, evicted);
     }
   }
 }

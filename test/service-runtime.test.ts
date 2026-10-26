@@ -6,6 +6,7 @@ import {
   errorFromUnknown,
   type AdmissionLifecycle,
   type Lifecycle,
+  RuntimeDrainTimeoutError,
   RuntimeStoppedError,
   RuntimeTaskRegistry,
   ServiceRuntime
@@ -71,7 +72,7 @@ await test("service stop closes admission, drains accepted work, then stops sink
     lifecycle: lifecycle("source", events)
   });
   runtime.register({ category: "dataSink", name: "sink", lifecycle: lifecycle("sink", events) });
-  await runtime.start();
+  await runtime.start(Context.background());
   const admitted = tasks.admit(async () => {
     await gate;
     events.push("task:done");
@@ -82,7 +83,7 @@ await test("service stop closes admission, drains accepted work, then stops sink
   release?.();
   await admitted;
   await stopping;
-  await runtime.stop();
+  await runtime.stop(Context.background());
 
   assert.deepEqual(events, ["start:sink", "start:source", "stop:source", "task:done", "stop:sink"]);
 });
@@ -119,7 +120,7 @@ await test("graph pools stop before the accepted parallel-work counter drains", 
     name: "pool",
     lifecycle: lifecycle("pool", events)
   });
-  await runtime.start();
+  await runtime.start(Context.background());
   const admitted = tasks.admit(async () => {
     await gate;
     events.push("task:done");
@@ -186,8 +187,8 @@ await test("ordinary sources drain before managed connector admission stops", as
     lifecycle: managedConnector
   });
 
-  await runtime.start();
-  await runtime.stop();
+  await runtime.start(Context.background());
+  await runtime.stop(Context.background());
 
   assert.deepEqual(events, [
     "start:managed",
@@ -220,7 +221,7 @@ await test("accepted graph work may admit nested work while shutdown drains", as
     lifecycle: lifecycle("source", events)
   });
   runtime.register({ category: "dataSink", name: "sink", lifecycle: lifecycle("sink", events) });
-  await runtime.start();
+  await runtime.start(Context.background());
   const parent = tasks.admit(async () => {
     await parentGate;
     tasks.admitDetached(async () => {
@@ -254,7 +255,7 @@ await test("accepted graph work may admit nested work while shutdown drains", as
 await test("stopping a never-started runtime closes task admission", async () => {
   const tasks = new RuntimeTaskRegistry();
   const runtime = new ServiceRuntime(makeTestEnvironment([]), tasks);
-  await runtime.stop();
+  await runtime.stop(Context.background());
   assert.equal(runtime.state(), "stopped");
   await assert.rejects(
     tasks.admit(() => Promise.resolve()),
@@ -265,6 +266,7 @@ await test("stopping a never-started runtime closes task admission", async () =>
 await test("service shutdown keeps sink and telemetry ownership phases deterministic", async () => {
   const events: string[] = [];
   const logs = new TestLog();
+  let metricsAttempts = 0;
   const runtime = new ServiceRuntime(makeTestEnvironment([], { logger: logs.defaultLogger() }));
   runtime.register({ category: "dataSink", name: "sink", lifecycle: lifecycle("sink", events) });
   runtime.register({
@@ -292,7 +294,10 @@ await test("service shutdown keeps sink and telemetry ownership phases determini
       },
       stop(): Promise<void> {
         events.push("stop:metrics");
-        return Promise.reject(new Error("metrics shutdown failed"));
+        metricsAttempts++;
+        return metricsAttempts === 1
+          ? Promise.reject(new Error("metrics shutdown failed"))
+          : Promise.resolve();
       }
     }
   });
@@ -307,15 +312,26 @@ await test("service shutdown keeps sink and telemetry ownership phases determini
     lifecycle: lifecycle("source", events)
   });
 
-  await runtime.start();
+  await runtime.start(Context.background());
   events.length = 0;
-  await runtime.stop();
+  await assert.rejects(runtime.stop(Context.background()), /metrics shutdown failed/);
+  assert.equal(runtime.state(), "stopping");
+  assert.deepEqual(events, [
+    "stop:source",
+    "stop:storage",
+    "stop:sink",
+    "stop:diagnostics",
+    "stop:metrics"
+  ]);
+  await runtime.stop(Context.background());
+  assert.equal(runtime.state(), "stopped");
 
   assert.deepEqual(events, [
     "stop:source",
     "stop:storage",
     "stop:sink",
     "stop:diagnostics",
+    "stop:metrics",
     "stop:metrics",
     "stop:tracing",
     "stop:logging"
@@ -349,14 +365,18 @@ await test("shutdown timeout is one upper bound shared by every stop phase", asy
     lifecycle: slowLifecycle("telemetry")
   });
 
-  await runtime.start();
+  await runtime.start(Context.background());
   const started = performance.now();
-  await runtime.stop(Context.background(), 20);
+  await assert.rejects(runtime.stop(Context.background(), 20), RuntimeDrainTimeoutError);
   const elapsed = performance.now() - started;
 
   assert.ok(elapsed < 80, `shutdown restarted its deadline between phases: ${String(elapsed)}ms`);
-  assert.deepEqual(events, ["stop:source", "stop:sink", "stop:telemetry"]);
+  assert.equal(runtime.state(), "stopping");
+  assert.deepEqual(events, ["stop:source"]);
   await new Promise<void>((resolve) => setTimeout(resolve, 105));
+  await runtime.stop(Context.background());
+  assert.equal(runtime.state(), "stopped");
+  assert.deepEqual(events, ["stop:source", "stop:sink", "stop:telemetry"]);
 });
 
 await test("stop during startup cancels admission and rolls back every started component", async () => {
@@ -399,7 +419,7 @@ await test("stop during startup cancels admission and rolls back every started c
     lifecycle: lifecycle("must-not-start", events)
   });
 
-  const starting = runtime.start();
+  const starting = runtime.start(Context.background());
   await secondEntered;
   const stopping = runtime.stop(Context.background().bounded(100), 100);
 

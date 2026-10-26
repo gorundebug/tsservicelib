@@ -80,7 +80,7 @@ export class ParallelCaller<T> implements Caller<T> {
   }
 
   public consume(context: MessageContext, value: T): void {
-    this.#tasks.admitDetached(async (signal) => {
+    this.#tasks.admitDetachedWithContext(context, async (signal) => {
       await this.#consumer.consume(context.withExternalCancellation(signal), value);
     });
   }

@@ -1,8 +1,8 @@
-import { Context, InputDataSource, type Consumer, type RuntimeEnvironment, type ScheduleEndpointFunction, type ScheduleTrigger, type TypedInputStream } from "../../runtime/index.js";
+import { type Context, InputDataSource, type Consumer, type RuntimeEnvironment, type ScheduleEndpointFunction, type ScheduleTrigger, type TypedInputStream } from "../../runtime/index.js";
 export declare class CronDataSource extends InputDataSource {
     #private;
     constructor(connectorId: number, environment: RuntimeEnvironment);
-    start(_context: Context): Promise<void>;
+    start(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
     private cronEndpoints;
 }

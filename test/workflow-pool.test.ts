@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { Context } from "@gorundebug/tsservicelib/runtime/graph";
+import { Context, MessageContext } from "@gorundebug/tsservicelib/runtime/graph";
 import { TestMetrics } from "@gorundebug/tsservicelib/runtime/testmetrics";
 
 import type * as WorkflowPools from "../src/datasource/temporal/workflow-pool.js";
@@ -14,6 +14,29 @@ const { WorkflowTaskPool, WorkflowPriorityTaskPool } = (await import(
 )) as typeof WorkflowPools;
 
 for (const Pool of [WorkflowTaskPool, WorkflowPriorityTaskPool]) {
+  for (const cancelled of [false, true]) {
+    await test(`${Pool.name} reports the task context, cancellation=${String(cancelled)}`, async () => {
+      const errors: { error: unknown; context: Context }[] = [];
+      const pool = new Pool("workflow", 1, new TestMetrics(), "test", (error, context) => {
+        errors.push({ error, context });
+      });
+      const controller = new AbortController();
+      const context = new MessageContext(controller.signal).withStreamId("workflow-task");
+      const failure = new Error("workflow task failed");
+      const execute = (): void => {
+        if (cancelled) controller.abort(failure);
+        throw failure;
+      };
+      if (pool instanceof WorkflowPriorityTaskPool) pool.addTask(context, 0, execute);
+      else pool.addTask(context, execute);
+      pool.start();
+      await pool.stop();
+      assert.deepEqual(errors, [{ error: failure, context }]);
+      assert.equal(pool.activeCount(), 0);
+      assert.equal(context.cancelled(), cancelled);
+    });
+  }
+
   await test(`${Pool.name} preserves ordering, cancellation and shared drain`, async () => {
     const pool = new Pool("workflow", 0, new TestMetrics(), "test", () => {
       throw new Error("reporter failed");

@@ -1,3 +1,10 @@
+export class ContextDeadlineExceededError extends Error {
+  public constructor() {
+    super("context deadline exceeded");
+    this.name = "ContextDeadlineExceededError";
+  }
+}
+
 export class RuntimeStoppedError extends Error {
   public constructor(message = "runtime is not accepting new work") {
     super(message);

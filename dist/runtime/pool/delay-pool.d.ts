@@ -4,7 +4,7 @@ import type { Lifecycle } from "../lifecycle.js";
 import type { Completion } from "../stream.js";
 export interface DelayPoolOptions {
     readonly name?: string;
-    readonly onError?: (error: unknown) => void;
+    readonly onError?: (error: unknown, context: Context) => void;
     readonly logger?: Logger;
     readonly metrics?: Metrics;
     readonly service?: string;

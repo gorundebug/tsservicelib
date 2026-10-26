@@ -1,5 +1,5 @@
 import { type CanonicalConfig, type RuntimeConfigReloadSource, type RuntimeConfigStore } from "./config/index.js";
-import { Context } from "./context.js";
+import type { Context } from "./context.js";
 import { type Logger, type LogsEngine, NoopMetricsEngine, PrometheusMetricsEngine, type Tracing, type TracingEngine } from "./environment/index.js";
 import { ServiceEnvironment, type JoinStorageFactory } from "./environment/runtime-environment.js";
 import { DelayPool } from "./pool/index.js";
@@ -25,8 +25,8 @@ export declare class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     environment(): ServiceEnvironment<T>;
     runtime(): ServiceRuntime;
     metricsEngine(): ServiceMetricsEngine;
-    start(context?: Context): Promise<void>;
-    stop(context?: Context, drainTimeoutMs?: number): Promise<void>;
+    start(context: Context): Promise<void>;
+    stop(context: Context, drainTimeoutMs?: number): Promise<void>;
     private prepare;
 }
 export type ServiceMetricsEngine = (PrometheusMetricsEngine | NoopMetricsEngine) & {

@@ -51,7 +51,19 @@ export async function settleWithinDeadline<T>(
   const cancelled = new Promise<void>((resolve) => {
     onAbort = resolve;
     signal.addEventListener("abort", onAbort, { once: true });
-    if (remainingMs !== undefined) timer = setTimeout(resolve, Math.max(0, remainingMs));
+    if (remainingMs !== undefined) {
+      const checkDeadline = (): void => {
+        const remaining = context.remainingMs();
+        if (remaining !== undefined && remaining > 0) {
+          // Node truncates fractional delays. Never publish a timeout before
+          // the caller's actual deadline, even if the timer wakes up early.
+          timer = setTimeout(checkDeadline, Math.max(1, Math.ceil(remaining)));
+        } else {
+          resolve();
+        }
+      };
+      timer = setTimeout(checkDeadline, Math.max(0, Math.ceil(remainingMs)));
+    }
     if (signal.aborted) resolve();
   });
   try {

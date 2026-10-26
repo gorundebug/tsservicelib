@@ -1,3 +1,4 @@
+import { ContextDeadlineExceededError } from "./errors.js";
 export const STREAM_ID_HEADER = "x-stream-id";
 export const TRACE_SAMPLING_HEADER = "x-trace";
 export function newStreamId() {
@@ -42,7 +43,7 @@ function composeSignal(signal, deadline) {
     const timer = setTimeout(() => {
         signal.removeEventListener("abort", abortFromParent);
         if (!controller.signal.aborted) {
-            controller.abort(new Error("context deadline exceeded"));
+            controller.abort(new ContextDeadlineExceededError());
         }
     }, Math.max(0, Math.ceil(deadline - contextNow())));
     timer.unref?.();

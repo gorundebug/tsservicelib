@@ -6,7 +6,7 @@ import {
   DataSourceEndpointConsumer,
   FunctionCollector,
   InputDataSource,
-  Context,
+  type Context,
   RotatingMap,
   RuntimeTaskRegistry,
   err,
@@ -154,18 +154,13 @@ interface CustomEndpointConsumerContract<T> extends InputEndpointConsumer {
 
 class CustomSourceEndpoint<T> extends DataSourceEndpoint implements Consumer<T> {
   readonly #producer: DataProducer<T>;
-  readonly #producerTasks: RuntimeTaskRegistry;
+  #producerTasks: RuntimeTaskRegistry | undefined;
   #binding: CustomEndpointConsumerContract<T> | undefined;
   #started = false;
 
   public constructor(dataSource: CustomDataSource, endpointId: number, producer: DataProducer<T>) {
     super(dataSource, endpointId);
     this.#producer = producer;
-    this.#producerTasks = new RuntimeTaskRegistry((error) => {
-      this.runtimeEnvironment()
-        .log()
-        .error(Context.background(), "data producer error", str("endpoint", this.name), err(error));
-    });
   }
 
   public bind(binding: CustomEndpointConsumerContract<T>): void {
@@ -185,22 +180,28 @@ class CustomSourceEndpoint<T> extends DataSourceEndpoint implements Consumer<T> 
     const binding = this.#binding;
     if (binding === undefined) throw new Error(`custom endpoint ${this.name} has no consumer`);
     await binding.start(context);
-    this.#started = true;
-    this.#producerTasks.admitDetached(async (signal) => {
-      await this.#producer.start(context.withExternalCancellation(signal), this);
+    const producerTasks = new RuntimeTaskRegistry((error) => {
+      this.runtimeEnvironment()
+        .log()
+        .error(context, "data producer error", str("endpoint", this.name), err(error));
     });
+    this.#producerTasks = producerTasks;
+    this.#started = true;
+    producerTasks.admitDetached(async (signal) => {
+      await this.#producer.start(context.withExternalCancellation(signal), this);
+    }, context.signal());
   }
 
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
-    this.#started = false;
     await this.#binding?.stop(context);
-    this.#producerTasks.cancel(new Error(`custom endpoint ${this.name} stopped`));
+    this.#producerTasks?.cancel(new Error(`custom endpoint ${this.name} stopped`));
     try {
       await this.#producer.stop(context);
     } finally {
-      await this.#producerTasks.drain(context.remainingMs());
+      await this.#producerTasks?.drain(context.remainingMs());
     }
+    this.#started = false;
   }
 }
 
@@ -220,18 +221,18 @@ export class CustomDataSource extends InputDataSource {
     try {
       for (const endpoint of this.customEndpoints()) await endpoint.start(context);
     } catch (error: unknown) {
-      this.#started = false;
-      await Promise.allSettled(
-        this.customEndpoints().map(async (endpoint) => endpoint.stop(Context.background()))
+      const cleanup = await Promise.allSettled(
+        this.customEndpoints().map(async (endpoint) => endpoint.stop(context))
       );
+      this.#started = cleanup.some((result) => result.status === "rejected");
       throw error;
     }
   }
 
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
-    this.#started = false;
     await Promise.all(this.customEndpoints().map(async (endpoint) => endpoint.stop(context)));
+    this.#started = false;
   }
 
   private customEndpoints(): readonly CustomSourceEndpoint<unknown>[] {
@@ -250,7 +251,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
 {
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, T, R, E>;
-  readonly #tasks = new RuntimeTaskRegistry();
+  #tasks = new RuntimeTaskRegistry();
   readonly #waiters: (() => void)[] = [];
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracingEnabled: boolean;
@@ -288,6 +289,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
     if (this.#started) {
       return Promise.reject(new Error(`custom endpoint ${this.endpoint().name} already started`));
     }
+    this.#tasks = new RuntimeTaskRegistry();
     this.#started = true;
     this.#stopped = false;
     if (this.stream().resultStream() !== undefined) {
@@ -299,15 +301,12 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
 
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
-    this.#started = false;
     this.#stopped = true;
     for (const wake of this.#waiters.splice(0)) wake();
     this.#tasks.cancel(context.signal().reason ?? new Error("custom endpoint stopped"));
-    try {
-      await this.#tasks.drain(context.remainingMs());
-    } finally {
-      this.#pending?.stop(context);
-    }
+    await this.#tasks.drain(context.remainingMs());
+    this.#pending?.stop(context);
+    this.#started = false;
   }
 
   public override consume(context: MessageContext, value: T): Completion {
@@ -315,7 +314,7 @@ class CustomEndpointConsumer<HandlerState, T, R, E>
   }
 
   public handle(context: MessageContext, value: T): Promise<void> {
-    if (!this.#started) return Promise.resolve();
+    if (!this.#started || this.#stopped) return Promise.resolve();
     return this.#tasks.admit(
       async (signal) => this.handleOnce(context, value, signal),
       context.signal()

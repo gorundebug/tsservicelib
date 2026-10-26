@@ -101,9 +101,10 @@ await test("Workflow environment executes the ordinary graph through configured 
   environment.registerStream(target);
   source.setConsumer(target);
 
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   await source.emit(new MessageContext().withSampling(true), 42);
-  await environment.finish();
+  await environment.finish(lifecycleContext);
 
   assert.deepEqual(target.values, [42]);
   assert.equal(environment.linkCallCount(1, 2), 1);
@@ -181,8 +182,9 @@ await test("Workflow PriorityTaskPool uses stable priority then FIFO order", asy
   await source.emit(new MessageContext().withPriority(5), 5);
   await source.emit(new MessageContext().withPriority(1), 1);
   await source.emit(new MessageContext().withPriority(1), 2);
-  await environment.start();
-  await environment.finish();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
+  await environment.finish(lifecycleContext);
 
   assert.deepEqual(target.values, [1, 2, 5]);
 });
@@ -210,7 +212,8 @@ await test("Workflow TaskPool limits logical executors and finish drains", async
   environment.registerStream(target);
   source.setConsumer(target);
 
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   for (let value = 0; value < 5; value += 1) await source.emit(new MessageContext(), value);
   await twoEntered;
   assert.equal(target.maximumActive, 2);
@@ -223,7 +226,7 @@ await test("Workflow TaskPool limits logical executors and finish drains", async
   assert.equal(completed, false);
   releaseTasks();
   assert.equal(await completion, 42);
-  await environment.finish();
+  await environment.finish(lifecycleContext);
 
   assert.equal(target.completed, 5);
   assert.equal(target.active, 0);
@@ -254,11 +257,12 @@ await test("Workflow quiescence yields while pooled asynchronous work is pending
   environment.registerStream(target);
   source.setConsumer(target);
 
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   await source.emit(new MessageContext(), 1);
   assert.equal(await environment.waitForCompletion(Promise.resolve(7)), 7);
   assert.equal(target.completed, true);
-  await environment.finish();
+  await environment.finish(lifecycleContext);
 });
 
 await test("Workflow TaskPool propagates failure and rejects canceled admission", async () => {
@@ -280,13 +284,14 @@ await test("Workflow TaskPool propagates failure and rejects canceled admission"
   environment.registerStream(source);
   environment.registerStream(target);
   source.setConsumer(target);
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   await source.emit(new MessageContext(), 1);
   await assert.rejects(
     environment.waitForCompletion(new Promise<number>(() => undefined)),
     /expected workflow pool failure/
   );
-  await assert.rejects(environment.finish(), /expected workflow pool failure/);
+  await assert.rejects(environment.finish(lifecycleContext), /expected workflow pool failure/);
 
   const canceledEnvironment = new TemporalWorkflowEnvironment(
     config,
@@ -303,12 +308,53 @@ await test("Workflow TaskPool propagates failure and rejects canceled admission"
   canceledEnvironment.registerStream(canceledSource);
   canceledEnvironment.registerStream(canceledTarget);
   canceledSource.setConsumer(canceledTarget);
-  await canceledEnvironment.start();
+  await canceledEnvironment.start(lifecycleContext);
   const controller = new AbortController();
   controller.abort(new Error("expected workflow pool cancellation"));
   await canceledSource.emit(new MessageContext(controller.signal), 2);
-  await assert.rejects(canceledEnvironment.finish(), /expected workflow pool cancellation/);
+  await assert.rejects(canceledEnvironment.finish(lifecycleContext), /expected workflow pool cancellation/);
   assert.deepEqual(canceledTarget.values, []);
+});
+
+await test("Workflow completion propagates cancellation from already admitted pooled work", async () => {
+  const config = workflowPoolConfig(1);
+  const environment = new TemporalWorkflowEnvironment(config, 1, makeDefaultSerdeRegistry(), {
+    logger: noopLogger, metrics: noopMetrics
+  });
+  const [sourceConfig, targetConfig] = config.streams;
+  assert.ok(sourceConfig);
+  assert.ok(targetConfig);
+  const source = new ConsumedStream(sourceConfig, environment, environment.serde(int32SerdeType));
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  class CancelledConsumer extends ServiceStream implements TypedStreamConsumer<number> {
+    public async consume(context: MessageContext): Promise<void> {
+      entered.resolve(undefined);
+      await release.promise;
+      context.signal().throwIfAborted();
+    }
+  }
+  const target = new CancelledConsumer(targetConfig, environment);
+  environment.registerStream(source);
+  environment.registerStream(target);
+  source.setConsumer(target);
+  const lifecycleContext = new MessageContext();
+  const cancellation = new AbortController();
+  const requestContext = new MessageContext(cancellation.signal);
+  const failure = new Error("accepted workflow work cancelled");
+  await environment.start(lifecycleContext);
+  try {
+    await source.emit(requestContext, 1);
+    await entered.promise;
+    cancellation.abort(failure);
+    release.resolve(undefined);
+    await assert.rejects(environment.waitForCompletion(Promise.resolve(42)),
+      (error: unknown) => error === failure);
+  } finally {
+    release.resolve(undefined);
+    await assert.rejects(environment.finish(lifecycleContext),
+      (error: unknown) => error === failure);
+  }
 });
 
 function workflowPoolConfig(executorsCount: number): CanonicalConfig {
@@ -366,3 +412,42 @@ function stream<T extends StreamConfig["type"]>(
     properties: {}
   };
 }
+
+await test("Workflow storage lifecycle preserves caller context and cancellation", async () => {
+  const config = workflowPoolConfig(1);
+  const environment = new TemporalWorkflowEnvironment(
+    config, 1, makeDefaultSerdeRegistry(),
+    { logger: noopLogger, metrics: noopMetrics }
+  );
+  const [sourceConfig, targetConfig] = config.streams;
+  if (sourceConfig === undefined || targetConfig === undefined)
+    throw new Error("workflow lifecycle fixture streams are missing");
+  const source = new ConsumedStream(sourceConfig, environment, environment.serde(int32SerdeType));
+  const target = new RecordingConsumer(targetConfig, environment);
+  environment.registerStream(source);
+  environment.registerStream(target);
+  source.setConsumer(target);
+  const cancellation = new AbortController();
+  const context = new MessageContext(cancellation.signal)
+    .withStreamId("workflow-lifecycle")
+    .withPriority(7);
+  const reason = new Error("workflow stopped by caller");
+  const calls: string[] = [];
+  environment.registerStorage({
+    start(received) {
+      assert.strictEqual(received, context);
+      assert.equal(received.cancelled(), false);
+      calls.push("start");
+    },
+    stop(received) {
+      assert.strictEqual(received, context);
+      assert.equal(received.cancelled(), true);
+      assert.strictEqual(received.signal().reason, reason);
+      calls.push("stop");
+    }
+  });
+  await environment.start(context);
+  cancellation.abort(reason);
+  await environment.finish(context);
+  assert.deepEqual(calls, ["start", "stop"]);
+});

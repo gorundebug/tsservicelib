@@ -3,7 +3,7 @@ import type { Metrics } from "../../runtime/environment/metrics/metrics.js";
 import { type PoolTask, type PriorityTaskPoolLike, type TaskPoolLike } from "../../runtime/pool/pool.js";
 export declare class WorkflowTaskPool implements TaskPoolLike {
     #private;
-    constructor(name: string, executors: number, metrics: Metrics, service: string, onError: (error: unknown) => void);
+    constructor(name: string, executors: number, metrics: Metrics, service: string, onError: (error: unknown, context: Context) => void);
     name(): string;
     executorsCount(): number;
     queueLength(): number;
@@ -15,7 +15,7 @@ export declare class WorkflowTaskPool implements TaskPoolLike {
 }
 export declare class WorkflowPriorityTaskPool implements PriorityTaskPoolLike {
     #private;
-    constructor(name: string, executors: number, metrics: Metrics, service: string, onError: (error: unknown) => void);
+    constructor(name: string, executors: number, metrics: Metrics, service: string, onError: (error: unknown, context: Context) => void);
     name(): string;
     executorsCount(): number;
     queueLength(): number;

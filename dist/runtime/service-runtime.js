@@ -1,6 +1,5 @@
-import { Context } from "./context.js";
 import { err, str } from "./environment/index.js";
-import { RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
+import { ContextDeadlineExceededError, RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "./errors.js";
 import { settleWithinDeadline } from "./lifecycle.js";
 import { RuntimeTaskRegistry } from "./task-registry.js";
 const START_ORDER = [
@@ -26,6 +25,10 @@ export class ServiceRuntime {
     #startupController = new AbortController();
     #started = [];
     #tasks;
+    #admissionStops = new Map();
+    #componentStops = new Map();
+    #rollbackPending = false;
+    #startupPending = false;
     #startPromise;
     #state = "created";
     #stopPromise;
@@ -48,11 +51,12 @@ export class ServiceRuntime {
         }
         this.#components.push(component);
     }
-    start(context = Context.background()) {
+    start(context) {
         if (this.#state !== "created") {
             return Promise.reject(new Error(`runtime cannot start from state ${this.#state}`));
         }
         this.#state = "starting";
+        this.#startupPending = true;
         const startupContext = context.withExternalCancellation(this.#startupController.signal);
         this.#startPromise = this.startOnce(startupContext);
         return this.#startPromise;
@@ -80,66 +84,109 @@ export class ServiceRuntime {
         }
         catch (error) {
             this.#tasks.cancel(error);
-            await this.rollback(context.withoutCancellation());
-            this.#state = "stopped";
+            this.#rollbackPending = true;
+            try {
+                await this.rollback(context);
+            }
+            catch {
+                // Keep the original start error; unfinished rollback stays retryable.
+            }
+            this.#state =
+                this.#started.length === 0 && this.#tasks.activeCount() === 0 ? "stopped" : "stopping";
             throw error;
         }
-    }
-    stop(context = Context.background(), drainTimeoutMs) {
-        if (this.#stopPromise !== undefined) {
-            return this.#stopPromise;
+        finally {
+            this.#startupPending = false;
         }
-        this.#stopPromise = this.stopOnce(context, drainTimeoutMs);
-        return this.#stopPromise;
     }
-    async stopOnce(context, drainTimeoutMs) {
+    async stop(context, drainTimeoutMs) {
         const stopContext = drainTimeoutMs === undefined ? context : context.bounded(Math.max(0, drainTimeoutMs));
-        if (this.#state === "starting") {
-            this.#startupController.abort(new RuntimeStoppedError("runtime startup was stopped"));
-            const [startup] = await settleWithinDeadline(stopContext, [
-                this.#startPromise ?? Promise.resolve()
-            ]);
-            if (startup === undefined) {
-                // startOnce still owns partial-start rollback and the dependencies of
-                // the uncooperative initializer. Do not stop those objects underneath it.
-                this.#tasks.cancel(stopContext.signal().reason ??
-                    new RuntimeStoppedError("runtime startup shutdown timed out"));
-                this.#state = "stopped";
-                this.#environment.log().warn(stopContext, "runtime startup shutdown timed out");
-                return;
-            }
-        }
-        if (this.#state === "created" || this.#state === "stopped") {
+        const budget = stopContext.remainingMs();
+        // There is nothing to wait for, even if this caller is already cancelled.
+        if (!this.#startupPending && this.#started.length === 0 && this.#tasks.activeCount() === 0) {
             this.#tasks.stopAdmission();
             this.#state = "stopped";
             return;
         }
+        for (;;) {
+            const ownsAttempt = this.#stopPromise === undefined;
+            if (ownsAttempt) {
+                const attempt = this.stopOnce(stopContext);
+                this.#stopPromise = attempt;
+                const release = () => {
+                    if (this.#stopPromise === attempt)
+                        this.#stopPromise = undefined;
+                };
+                void attempt.then(release, release);
+            }
+            const attempt = this.#stopPromise;
+            if (attempt === undefined)
+                continue;
+            const [result] = await settleWithinDeadline(stopContext, [attempt]);
+            if (result === undefined) {
+                // Publish the failed wait only after sealing new task admission. Running
+                // operations retain their ownership and can still be awaited by a retry.
+                this.#tasks.stopAdmission();
+                throw this.shutdownError(stopContext, budget);
+            }
+            if (result.status === "fulfilled")
+                return;
+            if (stopContext.cancelled() || stopContext.remainingMs() === 0) {
+                this.#tasks.stopAdmission();
+                throw this.shutdownError(stopContext, budget);
+            }
+            if (ownsAttempt) {
+                this.#tasks.stopAdmission();
+                throw errorFromUnknown(result.reason);
+            }
+            // The preceding caller's context may have expired. This caller can retry
+            // with its own context, without duplicating still-running component stops.
+        }
+    }
+    async stopOnce(context) {
         this.#state = "stopping";
-        const admission = this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category));
-        await this.stopAdmission(admission, stopContext);
-        // A source can be awaiting work submitted through a managed connector.
-        // Drain ordinary sources first (Cron -> Temporal is the canonical case),
-        // then stop durable worker admission while outbound clients remain alive.
-        await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSource" && "stopAdmission" in item.lifecycle), stopContext);
-        await this.stopAdmission(this.#started.filter((item) => item.category === "managedDataConnector"), stopContext);
+        if (this.#startupPending) {
+            this.#startupController.abort(new RuntimeStoppedError("runtime startup was stopped"));
+            const budget = context.remainingMs();
+            const [startup] = await settleWithinDeadline(context, [
+                this.#startPromise ?? Promise.resolve()
+            ]);
+            if (startup === undefined) {
+                const error = this.shutdownError(context, budget);
+                this.#tasks.cancel(error);
+                this.#environment.log().warn(context, "runtime startup shutdown timed out");
+                throw error;
+            }
+        }
+        if (this.#rollbackPending) {
+            await this.rollback(context);
+            await this.drainTasks(context);
+            this.#state = "stopped";
+            return;
+        }
+        await this.stopAdmission(this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category)), context);
+        // Drain ordinary graph producers while outbound managed clients are alive.
+        await this.stopConcurrent(this.#started.filter((item) => ADMISSION_CATEGORIES.has(item.category) && "stopAdmission" in item.lifecycle), context);
+        await this.stopAdmission(this.#started.filter((item) => item.category === "managedDataConnector"), context);
+        await this.stopConcurrent(this.#started.filter((item) => item.category === "storage" ||
+            item.category === "delayPool" ||
+            item.category === "taskPool" ||
+            item.category === "priorityTaskPool"), context);
+        await this.drainTasks(context);
+        await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink"), context);
+        await this.stopConcurrent(this.#started.filter((item) => item.category === "managedDataConnector"), context);
+        await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), context);
+        this.#state = "stopped";
+    }
+    async drainTasks(context) {
         try {
-            // Pools and timers can create ParallelCall tasks while draining. Stop
-            // those graph-work producers before observing the shared task registry.
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "storage" ||
-                item.category === "delayPool" ||
-                item.category === "taskPool" ||
-                item.category === "priorityTaskPool"), stopContext);
             if (this.#tasks.activeCount() > 0) {
-                const drainBudget = stopContext.remainingMs();
-                const [drained] = await settleWithinDeadline(stopContext, [this.#tasks.drain(drainBudget)]);
-                if (drained === undefined) {
-                    if (drainBudget !== undefined && stopContext.remainingMs() === 0) {
-                        throw new RuntimeDrainTimeoutError(drainBudget);
-                    }
-                    throw errorFromUnknown(stopContext.signal().reason ?? new RuntimeStoppedError("runtime shutdown was cancelled"));
-                }
-                if (drained.status === "rejected")
-                    throw errorFromUnknown(drained.reason);
+                const budget = context.remainingMs();
+                const [result] = await settleWithinDeadline(context, [this.#tasks.drain(budget)]);
+                if (result === undefined)
+                    throw this.shutdownError(context, budget);
+                if (result.status === "rejected")
+                    throw errorFromUnknown(result.reason);
             }
             this.#tasks.stopAdmission();
         }
@@ -147,74 +194,105 @@ export class ServiceRuntime {
             this.#tasks.cancel(error);
             throw error;
         }
-        finally {
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "dataSink"), stopContext);
-            await this.stopConcurrent(this.#started.filter((item) => item.category === "managedDataConnector"), stopContext);
-            await this.stopSequential(this.#started.filter((item) => item.category === "telemetry"), stopContext);
-            this.#started.length = 0;
-            this.#state = "stopped";
-        }
     }
     async rollback(context) {
-        for (const component of this.#started.toReversed()) {
-            try {
-                await component.lifecycle.stop(context);
-            }
-            catch (error) {
-                // Preserve the original startup failure while still attempting every rollback.
-                this.logStopError(context, component, error);
-            }
+        await this.stopSequential([...this.#started], context);
+        this.#rollbackPending = false;
+    }
+    stopComponent(component, context, admission) {
+        const admissionOnly = admission && "stopAdmission" in component.lifecycle;
+        const pending = admissionOnly ? this.#admissionStops : this.#componentStops;
+        const existing = pending.get(component);
+        if (existing !== undefined) {
+            if (existing.context === context)
+                return existing.promise;
+            return existing.promise.catch((error) => {
+                const reason = existing.context.signal().reason;
+                const previousWaitExpired = existing.context.cancelled() || existing.context.remainingMs() === 0;
+                const cancellationError = error instanceof RuntimeDrainTimeoutError ||
+                    error instanceof ContextDeadlineExceededError ||
+                    (reason !== undefined && error === reason) ||
+                    (error instanceof Error && reason !== undefined && error.cause === reason);
+                if (previousWaitExpired &&
+                    cancellationError &&
+                    !context.cancelled() &&
+                    context.remainingMs() !== 0) {
+                    // Only the previous caller's wait failed. The component still owns
+                    // its physical drain; join it again using this caller's live context.
+                    return this.stopComponent(component, context, admission);
+                }
+                throw error;
+            });
         }
-        this.#started.length = 0;
+        const operation = Promise.resolve()
+            .then(async () => {
+            if (admissionOnly)
+                await component.lifecycle.stopAdmission(context);
+            else
+                await component.lifecycle.stop(context);
+        })
+            .then(() => {
+            if (!admissionOnly) {
+                const index = this.#started.indexOf(component);
+                if (index >= 0)
+                    this.#started.splice(index, 1);
+                this.#admissionStops.delete(component);
+            }
+        }, (error) => {
+            if (pending.get(component)?.promise === operation)
+                pending.delete(component);
+            throw error;
+        });
+        pending.set(component, { context, promise: operation });
+        return operation;
     }
     async stopConcurrent(components, context) {
-        const ordered = components.toReversed();
-        const results = await settleWithinDeadline(context, ordered.map(async (item) => item.lifecycle.stop(context)));
-        for (const [index, result] of results.entries()) {
-            const component = ordered[index];
-            if (component === undefined)
-                continue;
-            if (result === undefined) {
-                this.logStopTimeout(context, component);
-                continue;
-            }
-            if (result.status === "rejected") {
-                this.logStopError(context, component, result.reason);
-            }
-        }
+        await this.stopGroup(components, context, false);
     }
     async stopAdmission(components, context) {
-        const ordered = components.toReversed();
-        const results = await settleWithinDeadline(context, ordered.map(async (item) => {
-            if ("stopAdmission" in item.lifecycle) {
-                await item.lifecycle.stopAdmission(context);
-                return;
-            }
-            await item.lifecycle.stop(context);
-        }));
-        for (const [index, result] of results.entries()) {
-            const component = ordered[index];
-            if (component === undefined)
-                continue;
-            if (result === undefined) {
-                this.logStopTimeout(context, component);
-                continue;
-            }
-            if (result.status === "rejected") {
-                this.logStopError(context, component, result.reason);
-            }
-        }
+        await this.stopGroup(components, context, true);
     }
-    async stopSequential(components, context) {
-        for (const component of components.toReversed()) {
-            const [result] = await settleWithinDeadline(context, [component.lifecycle.stop(context)]);
+    async stopGroup(components, context, admission) {
+        const ordered = components.toReversed();
+        const budget = context.remainingMs();
+        const results = await settleWithinDeadline(context, ordered.map((component) => this.stopComponent(component, context, admission)));
+        let failure;
+        for (const [index, component] of ordered.entries()) {
+            const result = results[index];
             if (result === undefined) {
                 this.logStopTimeout(context, component);
+                failure ??= this.shutdownError(context, budget);
             }
             else if (result.status === "rejected") {
                 this.logStopError(context, component, result.reason);
+                failure ??= errorFromUnknown(result.reason);
             }
         }
+        if (failure !== undefined)
+            throw failure;
+    }
+    async stopSequential(components, context) {
+        for (const component of components.toReversed()) {
+            const budget = context.remainingMs();
+            const [result] = await settleWithinDeadline(context, [
+                this.stopComponent(component, context, false)
+            ]);
+            if (result === undefined) {
+                this.logStopTimeout(context, component);
+                throw this.shutdownError(context, budget);
+            }
+            if (result.status === "rejected") {
+                this.logStopError(context, component, result.reason);
+                throw errorFromUnknown(result.reason);
+            }
+        }
+    }
+    shutdownError(context, budget) {
+        const reason = context.signal().reason;
+        if (reason instanceof ContextDeadlineExceededError || context.remainingMs() === 0) {
+            return new RuntimeDrainTimeoutError(budget ?? 0);
+        }
+        return errorFromUnknown(reason ?? new RuntimeStoppedError("runtime shutdown was cancelled"));
     }
     logStopTimeout(context, component) {
         this.#environment
@@ -224,7 +302,7 @@ export class ServiceRuntime {
     logStopError(context, component, error) {
         this.#environment
             .log()
-            .warn(context, "runtime component shutdown", str("category", component.category), str("component", component.name), err(error instanceof Error ? error : new Error(String(error))));
+            .warn(context, "runtime component shutdown", str("category", component.category), str("component", component.name), err(errorFromUnknown(error)));
     }
 }
 //# sourceMappingURL=service-runtime.js.map

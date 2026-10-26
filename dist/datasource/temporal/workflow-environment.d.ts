@@ -1,6 +1,7 @@
 import type { CanonicalConfig, JoinStorageType, ServiceConfig } from "../../runtime/config/types.js";
 import { RuntimeConfig } from "../../runtime/config/runtime-config.js";
 import type { MessageContext } from "../../runtime/context.js";
+import { Context } from "../../runtime/context.js";
 import type { DataSink } from "../../runtime/data-sink.js";
 import type { DataSource } from "../../runtime/data-source.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
@@ -70,8 +71,8 @@ export declare class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     makeCaller<T>(source: Stream, consumer: TypedStreamConsumer<T>): Caller<T>;
     makeLinkRecorder(source: Stream, consumer: Stream): (context: MessageContext) => void;
     delay(context: MessageContext, delayMs: number, execute: () => void | Promise<void>): void;
-    start(): Promise<void>;
-    finish(): Promise<void>;
+    start(context: Context): Promise<void>;
+    finish(context: Context): Promise<void>;
     waitSubStreamResult(result: Promise<void>): Promise<void>;
     waitForCompletion<T>(result?: Promise<T>): Promise<T | undefined>;
     throwIfFailed(): void;

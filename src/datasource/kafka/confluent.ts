@@ -6,13 +6,15 @@ import type * as ConfluentKafka from "@confluentinc/kafka-javascript";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
+  ContextDeadlineExceededError,
   DataSourceEndpoint,
   DataSourceEndpointConsumer,
   FunctionCollector,
   InputDataSource,
-  Context,
+  type Context,
   MessageContext,
   RotatingMap,
+  RuntimeDrainTimeoutError,
   RuntimeTaskRegistry,
   TRACE_SAMPLING_HEADER,
   boolAttribute,
@@ -22,6 +24,7 @@ import {
   newStreamId,
   requireKafkaDataConnectorConfig,
   requireKafkaEndpointConfig,
+  settleWithinDeadline,
   spanError,
   stringAttribute,
   type Completion,
@@ -96,7 +99,8 @@ export interface KafkaConsumer {
     concurrency: number,
     handler: (record: KafkaRecord, control: KafkaConsumerControl) => Promise<void>
   ): Promise<void>;
-  stop(): Promise<void>;
+  /** Stop admission and drain accepted callbacks and acknowledgements before ending run(). */
+  stop(context: Context): Promise<void>;
   disconnect(): Promise<void>;
 }
 
@@ -337,7 +341,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
       this.#consumer = consumer;
       this.#reconnect = reconnect;
       this.#admissionStopped = false;
-      await this.#binding?.start();
+      await this.#binding?.start(context);
       this.#run = this.supervise(context, consumer, reconnect.signal);
     } catch (error: unknown) {
       this.#consumer = undefined;
@@ -350,21 +354,21 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
   public async stop(context: Context): Promise<void> {
     await this.stopAdmission(context);
     await this.#binding?.stop(context);
-    await this.#run;
+    if (this.#run !== undefined) await waitForKafkaShutdown(context, this.#run);
     this.#consumer = undefined;
     this.#run = undefined;
   }
 
   public async stopAdmission(context: Context): Promise<void> {
-    void context;
-    if (this.#admissionStopped) return;
-    this.#admissionStopped = true;
-    this.#reconnect?.abort(new Error(`Kafka endpoint ${this.name} stopped`));
-    this.#reconnect = undefined;
-    this.#binding?.stopAdmission();
+    if (!this.#admissionStopped) {
+      this.#admissionStopped = true;
+      this.#reconnect?.abort(new Error(`Kafka endpoint ${this.name} stopped`));
+      this.#reconnect = undefined;
+      this.#binding?.stopAdmission();
+    }
     const consumer = this.#consumer;
     if (consumer !== undefined) {
-      await consumer.stop();
+      await waitForKafkaShutdown(context, consumer.stop(context));
     }
   }
 
@@ -391,7 +395,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
       }
       try {
         await consumer.run(this.#partitionCount, async (record, control) =>
-          this.#binding?.handle(record, control)
+          this.#binding?.handle(context, record, control)
         );
         if (!signal.aborted) {
           this.logReconnectFailure(context, new Error("Kafka consumer stopped unexpectedly"));
@@ -435,10 +439,10 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
 }
 
 interface KafkaEndpointConsumerContract extends InputEndpointConsumer {
-  start(): Promise<void>;
+  start(context: Context): Promise<void>;
   stopAdmission(): void;
   stop(context: Context): Promise<void>;
-  handle(record: KafkaRecord, control: KafkaConsumerControl): Promise<void>;
+  handle(context: Context, record: KafkaRecord, control: KafkaConsumerControl): Promise<void>;
 }
 
 export class KafkaDataSource extends InputDataSource {
@@ -460,7 +464,6 @@ export class KafkaDataSource extends InputDataSource {
   }
 
   public async start(context: Context): Promise<void> {
-    void context;
     if (this.#started) throw new Error(`Kafka data source ${this.name} is already started`);
     this.#started = true;
     const endpoints = this.kafkaEndpoints();
@@ -495,18 +498,18 @@ export class KafkaDataSource extends InputDataSource {
     try {
       for (const endpoint of enabled) await endpoint.start(context);
     } catch (error: unknown) {
-      this.#started = false;
-      await Promise.allSettled(
-        enabled.map(async (endpoint) => endpoint.stop(Context.background()))
+      const cleanup = await Promise.allSettled(
+        enabled.map(async (endpoint) => endpoint.stop(context))
       );
+      this.#started = cleanup.some((result) => result.status === "rejected");
       throw error;
     }
   }
 
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
-    this.#started = false;
     await Promise.all(this.kafkaEndpoints().map(async (endpoint) => endpoint.stop(context)));
+    this.#started = false;
   }
 
   public async stopAdmission(context: Context): Promise<void> {
@@ -531,7 +534,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
 {
   readonly #streamContext: StreamContext<T, R, E>;
   readonly #handler: EndpointHandler<HandlerState, T, R, E>;
-  readonly #tasks = new RuntimeTaskRegistry();
+  #tasks = new RuntimeTaskRegistry();
   #pending: RotatingMap<string, KafkaResult<HandlerState, T, R, E>> | undefined;
   readonly #waiters: (() => void)[] = [];
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
@@ -563,14 +566,15 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
   }
 
-  public start(): Promise<void> {
-    if (this.#started)
+  public start(context: Context): Promise<void> {
+    if (this.#started || this.#tasks.activeCount() !== 0)
       return Promise.reject(new Error(`Kafka endpoint ${this.endpoint().name} already started`));
+    this.#tasks = new RuntimeTaskRegistry();
     this.#started = true;
     this.#stopped = false;
     if (this.stream().resultStream() !== undefined) {
       this.#pending = new RotatingMap(PENDING_ROTATION_INTERVAL_MS);
-      this.#pending.start(Context.background());
+      this.#pending.start(context);
     }
     return Promise.resolve();
   }
@@ -579,13 +583,12 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     if (!this.#started && !this.#stopped) return;
     this.stopAdmission();
     try {
-      await this.#tasks.drain(context.remainingMs());
+      await waitForKafkaShutdown(context, this.#tasks.drain());
     } catch (error: unknown) {
       this.#tasks.cancel(error);
       throw error;
-    } finally {
-      this.#pending?.stop(context);
     }
+    this.#pending?.stop(context);
   }
 
   public stopAdmission(): void {
@@ -601,19 +604,23 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     void value;
   }
 
-  public handle(record: KafkaRecord, control: KafkaConsumerControl): Promise<void> {
+  public handle(context: Context, record: KafkaRecord, control: KafkaConsumerControl): Promise<void> {
     if (!this.#started) return Promise.resolve();
-    return this.#tasks.admit(async (signal) => this.handleOnce(record, control, signal));
+    return this.#tasks.admit(
+      async (signal) => this.handleOnce(context, record, control, signal),
+      context.signal()
+    );
   }
 
   private async handleOnce(
+    context: Context,
     record: KafkaRecord,
     control: KafkaConsumerControl,
     signal: AbortSignal
   ): Promise<void> {
     await this.acquire(signal);
     try {
-      await this.handleAdmitted(record, control, signal);
+      await this.handleAdmitted(context, record, control, signal);
     } finally {
       this.#active -= 1;
       this.#waiters.shift()?.();
@@ -621,11 +628,12 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
   }
 
   private async handleAdmitted(
+    owner: Context,
     record: KafkaRecord,
     control: KafkaConsumerControl,
     signal: AbortSignal
   ): Promise<void> {
-    let context = new MessageContext().withExternalCancellation(signal);
+    let context = MessageContext.fromContext(owner).withExternalCancellation(signal);
     if (this.#tracingEnabled) {
       const metadata = new Map<string, string>();
       for (const [name, value] of record.headers) {
@@ -954,10 +962,29 @@ function defaultKafkaClientFactory(environment: RuntimeEnvironment): KafkaClient
   return factory;
 }
 
+async function waitForKafkaShutdown(context: Context, operation: Promise<void>): Promise<void> {
+  const timeoutMs = context.remainingMs();
+  const [result] = await settleWithinDeadline(context, [operation]);
+  if (result === undefined) {
+    if (context.signal().reason instanceof ContextDeadlineExceededError) {
+      throw new RuntimeDrainTimeoutError(timeoutMs ?? 0);
+    }
+    if (context.signal().aborted) {
+      throw errorFromUnknown(context.signal().reason);
+    }
+    throw new RuntimeDrainTimeoutError(timeoutMs ?? 0);
+  }
+  if (result.status === "rejected") throw result.reason;
+}
+
 class ConfluentConsumer implements KafkaConsumer {
   readonly #consumer: KafkaJS.Consumer;
   #finishRun: (() => void) | undefined;
   #disconnecting: Promise<void> | undefined;
+  #stopping = false;
+  #activeBatches = 0;
+  #draining: Promise<void> | undefined;
+  #finishDraining: (() => void) | undefined;
   public constructor(consumer: KafkaJS.Consumer) {
     this.#consumer = consumer;
   }
@@ -971,11 +998,26 @@ class ConfluentConsumer implements KafkaConsumer {
   public subscribe(topic: string): Promise<void> {
     return this.#consumer.subscribe({ topic });
   }
-  public stop(): Promise<void> {
-    // KafkaJS stop followed by disconnect performs two coordinated group
-    // shutdowns. Closing the consumer once stops admission and releases the
-    // run loop; the supervisor observes the same idempotent promise.
-    return this.disconnect();
+  public async stop(context: Context): Promise<void> {
+    // The native KafkaJS stop() is not implemented. Do not disconnect until
+    // accepted batches finish: their final offset commits need the connection.
+    this.#stopping = true;
+    this.#draining ??= new Promise<void>((resolve) => {
+      this.#finishDraining = resolve;
+    });
+    this.finishIfDrained();
+    await waitForKafkaShutdown(context, this.#draining);
+  }
+
+  private finishIfDrained(): void {
+    if (!this.#stopping || this.#activeBatches !== 0) return;
+    this.#finishDraining?.();
+    this.#finishDraining = undefined;
+    this.finishRun();
+  }
+
+  private isStopping(): boolean {
+    return this.#stopping;
   }
 
   private async disconnectOnce(): Promise<void> {
@@ -1000,21 +1042,31 @@ class ConfluentConsumer implements KafkaConsumer {
         partitionsConsumedConcurrently: Math.max(1, concurrency),
         eachBatchAutoResolve: false,
         eachBatch: async (payload) => {
-          const { batch } = payload;
-          for (const message of batch.messages) {
-            if (!payload.isRunning() || payload.isStale()) break;
-            const record = kafkaRecord(batch.topic, batch.partition, message);
-            const control = new ConfluentMessageControl(
-              this.#consumer,
-              record,
-              (offset) => {
-                payload.resolveOffset(offset);
-              },
-              async () => payload.commitOffsetsIfNecessary()
-            );
-            await handler(record, control);
-            await control.complete();
-            await payload.heartbeat();
+          if (this.#stopping) {
+            payload.pause();
+            return;
+          }
+          this.#activeBatches += 1;
+          try {
+            const { batch } = payload;
+            for (const message of batch.messages) {
+              if (this.isStopping() || !payload.isRunning() || payload.isStale()) break;
+              const record = kafkaRecord(batch.topic, batch.partition, message);
+              const control = new ConfluentMessageControl(
+                this.#consumer,
+                record,
+                (offset) => {
+                  payload.resolveOffset(offset);
+                },
+                async () => payload.commitOffsetsIfNecessary()
+              );
+              await handler(record, control);
+              if (!(await control.complete())) break;
+              await payload.heartbeat();
+            }
+          } finally {
+            this.#activeBatches -= 1;
+            this.finishIfDrained();
           }
         }
       });
@@ -1067,18 +1119,21 @@ class ConfluentMessageControl implements KafkaConsumerControl {
   public async commit(record: KafkaRecord): Promise<void> {
     this.requireRecord(record);
     await this.#consumer.commitOffsets([nextOffset(record)]);
+    this.#resolveOffset(String(record.offset));
     this.#committed = true;
   }
 
-  public async complete(): Promise<void> {
-    if (this.#committed) return;
-    if (!this.#marked) return;
+  public async complete(): Promise<boolean> {
+    if (this.#committed) return true;
+    if (!this.#marked) return false;
     if (this.#metadata.length > 0) {
       await this.#consumer.commitOffsets([nextOffset(this.#record, this.#metadata)]);
-      return;
+      this.#resolveOffset(String(this.#record.offset));
+      return true;
     }
     this.#resolveOffset(String(this.#record.offset));
     await this.#commitOffsetsIfNecessary();
+    return true;
   }
 
   private requireRecord(record: KafkaRecord): void {

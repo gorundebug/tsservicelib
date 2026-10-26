@@ -42,11 +42,11 @@ export function subscribeAbort(signal, callback) {
         }
     };
 }
-export function reportPoolError(handler, error, signal) {
-    if (signal !== undefined && isTaskCancellation(error, signal))
+export function reportPoolError(handler, error, context, reportCancellation = false) {
+    if (!reportCancellation && isTaskCancellation(error, context.signal()))
         return;
     try {
-        handler(error);
+        handler(error, context);
     }
     catch {
         /* An error reporter must not strand accepted work. */

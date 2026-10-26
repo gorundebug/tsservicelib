@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   Context,
   PoolStoppedError,
+  RuntimeDrainTimeoutError,
   PriorityTaskPool,
   TaskPool
 } from "@gorundebug/tsservicelib/runtime";
@@ -317,7 +318,7 @@ await test("priority pool records expiration, resize and exact canonical metrics
   assert.equal(metrics.gaugeValue("priority_task_pool_executors_allocated", labels), 0);
 });
 
-await test("task pool stop deadline reports timeout but still drains admitted work", async () => {
+await test("task pool stop deadline bounds the caller and retains admitted work for retry", async () => {
   const metrics = new TestMetrics();
   const labels = { service: "Order Service", name: "timeout" };
   const pool = new TaskPool({
@@ -333,7 +334,10 @@ await test("task pool stop deadline reports timeout but still drains admitted wo
   await pool.start(Context.background());
   pool.addTask(Context.background(), () => gate);
   await Promise.resolve();
-  const stopping = pool.stop(Context.background().bounded(2));
+  const stopping = assert.rejects(
+    pool.stop(Context.background().bounded(2)),
+    RuntimeDrainTimeoutError
+  );
   await delay(10);
   assert.equal(
     metrics.counterValue("task_pool_events_total", { ...labels, event: "stop_timeout" }),
@@ -341,5 +345,6 @@ await test("task pool stop deadline reports timeout but still drains admitted wo
   );
   release?.();
   await stopping;
+  await pool.stop(Context.background());
   assert.equal(metrics.counterValue("task_pool_tasks_total", labels), 1);
 });

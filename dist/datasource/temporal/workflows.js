@@ -58,7 +58,7 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
         };
         endpoint.stream.setResultConsumer(consumer);
     }
-    await endpoint.environment.start();
+    await endpoint.environment.start(context);
     try {
         return await runDurableCallWorkflow(durable, async () => {
             await endpoint.activate(context, envelope);
@@ -73,7 +73,7 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
     }
     catch (error) {
         try {
-            await endpoint.environment.finish();
+            await endpoint.environment.finish(context);
         }
         catch (cleanupError) {
             if (cleanupError !== error)
@@ -93,7 +93,7 @@ export async function executeTemporalWorkflowEndpoint(endpoint) {
         throw error;
     }
     finally {
-        await endpoint.environment.finish();
+        await endpoint.environment.finish(context);
     }
 }
 export function scheduledEnvelope(envelope) {

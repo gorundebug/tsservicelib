@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  ContextDeadlineExceededError,
   MessageContext,
   STREAM_ID_HEADER,
   TRACE_SAMPLING_HEADER
@@ -109,6 +110,35 @@ await test("context deadlines remain available without the Node performance glob
       Object.defineProperty(globalThis, "performance", descriptor);
     }
   }
+});
+
+await test("early deadline timer has a typed reason independent of remaining time", () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const timer = { unref(): void {} } as unknown as ReturnType<typeof setTimeout>;
+  let fire: (() => void) | undefined;
+  globalThis.setTimeout = ((callback: () => void) => {
+    fire = callback;
+    return timer;
+  }) as unknown as typeof setTimeout;
+  try {
+    const context = new MessageContext().bounded(60_000);
+    assert.ok(fire);
+    fire();
+    assert.ok((context.remainingMs() ?? 0) > 0);
+    assert.equal(context.cancelled(), true);
+    assert.ok(context.signal().reason instanceof ContextDeadlineExceededError);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+await test("external cancellation preserves a reason whose text matches a deadline", () => {
+  const controller = new AbortController();
+  const context = new MessageContext(controller.signal).bounded(60_000);
+  const reason = new Error("context deadline exceeded");
+  controller.abort(reason);
+  assert.equal(context.signal().reason, reason);
+  assert.equal(context.signal().reason instanceof ContextDeadlineExceededError, false);
 });
 
 await test("detached child drops cancellation and deadline but preserves message values", async () => {

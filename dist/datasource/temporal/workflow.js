@@ -5,4 +5,5 @@ export * from "./workflow-environment.js";
 export * from "./workflow-sink.js";
 export * from "./workflows.js";
 export { makeScheduleTrigger, ScheduleBackend } from "../../runtime/schedule.js";
+export { currentTemporalWorkflowMessageContext } from "./workflow-context-interceptor.js";
 //# sourceMappingURL=workflow.js.map

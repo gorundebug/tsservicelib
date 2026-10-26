@@ -5,6 +5,7 @@ import { IndexedHeap } from "./indexed-heap.js";
 import { subscribeAbort, reportPoolError } from "./pool-support.js";
 import { err } from "../environment/index.js";
 import { PoolStoppedError } from "./pool.js";
+import { awaitPoolDrain } from "./task-pool-metrics.js";
 export class DelayPool {
     #schedule = AsyncLocalStorage.snapshot();
     #name;
@@ -107,13 +108,13 @@ export class DelayPool {
                 completion = task.execute();
             }
             catch (error) {
-                reportPoolError(this.#onError, error, task.context.signal());
+                reportPoolError(this.#onError, error, task.context);
                 this.completeTask(task, task.context, started, cancelled);
                 return;
             }
             void Promise.resolve(completion)
                 .catch((error) => {
-                reportPoolError(this.#onError, error, task.context.signal());
+                reportPoolError(this.#onError, error, task.context);
             })
                 .finally(() => {
                 this.completeTask(task, task.context, started, cancelled);
@@ -121,46 +122,21 @@ export class DelayPool {
         });
     }
     async stop(context) {
-        if (this.#state === "stopped") {
+        if (this.#state === "stopped")
             return;
-        }
-        if (this.#drain !== undefined) {
-            await this.#drain;
-            return;
-        }
-        this.#state = "stopping";
-        if (this.#tasks.size === 0) {
-            this.#state = "stopped";
-            return;
-        }
-        this.#drain = new Promise((resolve) => {
-            this.#resolveDrain = resolve;
-        });
-        const drain = this.#drain;
-        if (context.cancelled()) {
-            this.reportStopTimeout(context);
-            await drain;
-            return;
-        }
-        let removeAbortListener = () => undefined;
-        const aborted = new Promise((resolve) => {
-            const listener = () => {
-                resolve("aborted");
-            };
-            context.signal().addEventListener("abort", listener, { once: true });
-            removeAbortListener = () => {
-                context.signal().removeEventListener("abort", listener);
-            };
-        });
-        try {
-            if ((await Promise.race([drain.then(() => "drained"), aborted])) === "aborted") {
-                this.reportStopTimeout(context);
-                await drain;
+        if (this.#drain === undefined) {
+            this.#state = "stopping";
+            if (this.#tasks.size === 0) {
+                this.#state = "stopped";
+                return;
             }
+            this.#drain = new Promise((resolve) => {
+                this.#resolveDrain = resolve;
+            });
         }
-        finally {
-            removeAbortListener();
-        }
+        await awaitPoolDrain(this.#drain, context, () => {
+            this.reportStopTimeout(context);
+        });
     }
     completeTask(task, context, started, cancelled) {
         this.#tasks.delete(task);

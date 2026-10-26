@@ -13,5 +13,6 @@ export interface TaskPoolMetrics {
     readonly taskCancelledOrExpired: Int64Counter;
 }
 export declare function makeTaskPoolMetrics(kind: "task" | "priority", options: TaskPoolOptions): TaskPoolMetrics | undefined;
+/** Bound this caller's wait without cancelling or discarding the physical drain. */
 export declare function awaitPoolDrain(drain: Promise<void>, context: Context, onTimeout: () => void): Promise<void>;
 //# sourceMappingURL=task-pool-metrics.d.ts.map

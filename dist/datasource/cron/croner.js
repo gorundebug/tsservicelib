@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { Context, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, ScheduleBackend, applyDataSourceEndpointTracing, err, makeScheduleTrigger, newStreamId, str } from "../../runtime/index.js";
+import { ContextDeadlineExceededError, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, RuntimeDrainTimeoutError, ScheduleBackend, applyDataSourceEndpointTracing, err, makeScheduleTrigger, newStreamId, settleWithinDeadline, str } from "../../runtime/index.js";
 class CronEndpointConsumer {
     #endpoint;
     #function;
@@ -78,8 +78,8 @@ class CronEndpoint extends DataSourceEndpoint {
         this.#binding = binding;
         this.addEndpointConsumer(binding);
     }
-    start() {
-        if (this.#job !== undefined)
+    start(context) {
+        if (this.#job !== undefined || this.#active.size !== 0)
             throw new Error(`cron endpoint ${this.name} is already started`);
         const config = this.cronConfig();
         if (!config.enabled)
@@ -102,7 +102,9 @@ class CronEndpoint extends DataSourceEndpoint {
                 next.getTime() <= Date.now()) {
                 return;
             }
-            return this.#startDispatch(binding, scheduledAt);
+            if (context.cancelled())
+                return;
+            return this.#startDispatch(context, binding, scheduledAt);
         });
         this.#job = job;
         nextScheduledAt = job.nextRun();
@@ -112,48 +114,38 @@ class CronEndpoint extends DataSourceEndpoint {
             throw new Error(`cron endpoint ${this.name} has no next occurrence`);
         }
     }
-    async stop(context = Context.background()) {
+    async stop(context) {
         this.#job?.stop();
         this.#job = undefined;
-        const drain = Promise.allSettled(this.#active);
         const remainingMs = context.remainingMs();
-        if (remainingMs === undefined) {
-            await drain;
-            return;
-        }
-        let timer;
-        const timeout = new Promise((resolve) => {
-            timer = setTimeout(resolve, Math.max(0, remainingMs));
-        });
-        try {
-            const outcome = await Promise.race([
-                drain.then(() => "drained"),
-                timeout.then(() => "timeout")
-            ]);
-            if (outcome === "timeout") {
-                this.runtimeEnvironment()
-                    .log()
-                    .warn(context, "cron endpoint stopped by shutdown timeout", str("endpoint", this.name));
+        const results = await settleWithinDeadline(context, [...this.#active]);
+        if (results.some((result) => result === undefined)) {
+            const reason = context.signal().reason;
+            if (context.signal().aborted && !(reason instanceof ContextDeadlineExceededError)) {
+                throw reason instanceof Error
+                    ? reason
+                    : new Error("cron shutdown cancelled", { cause: reason });
             }
+            throw new RuntimeDrainTimeoutError(remainingMs ?? 0);
         }
-        finally {
-            if (timer !== undefined)
-                clearTimeout(timer);
+        for (const result of results) {
+            if (result?.status === "rejected")
+                throw result.reason;
         }
     }
-    #startDispatch(binding, scheduledAt) {
-        const execution = this.#dispatch(binding, scheduledAt);
+    #startDispatch(owner, binding, scheduledAt) {
+        const execution = this.#dispatch(owner, binding, scheduledAt);
         this.#active.add(execution);
         return execution.finally(() => {
             this.#active.delete(execution);
         });
     }
-    async #dispatch(binding, scheduledAt) {
+    async #dispatch(owner, binding, scheduledAt) {
         const config = this.cronConfig();
         if (this.#running && config.overlapPolicy === "Skip")
             return;
         this.#running = true;
-        const context = applyDataSourceEndpointTracing(new MessageContext().withStreamId(newStreamId()), this.runtimeEnvironment(), this.id);
+        const context = applyDataSourceEndpointTracing((owner instanceof MessageContext ? owner : MessageContext.fromContext(owner)).withStreamId(newStreamId()), this.runtimeEnvironment(), this.id);
         const started = this.onRequestStart(context);
         let failure;
         try {
@@ -164,7 +156,7 @@ class CronEndpoint extends DataSourceEndpoint {
             failure = error instanceof Error ? error : new Error(String(error));
             this.runtimeEnvironment()
                 .log()
-                .error(Context.background(), "cron endpoint execution failed", str("endpoint", this.name), err(failure));
+                .error(context, "cron endpoint execution failed", str("endpoint", this.name), err(failure));
         }
         finally {
             this.#running = false;
@@ -194,34 +186,44 @@ function isCronEndpointConfig(config) {
 }
 export class CronDataSource extends InputDataSource {
     #started = false;
+    #generation = 0;
     constructor(connectorId, environment) {
         super(connectorId, environment);
         if (this.config().type !== DataConnectorType.Cron) {
             throw new Error(`data source ${this.name} is not cron`);
         }
     }
-    start(_context) {
-        void _context;
+    async start(context) {
+        if (context.cancelled()) {
+            const reason = context.signal().reason;
+            return Promise.reject(reason instanceof Error
+                ? reason
+                : new Error("cron source context cancelled", { cause: reason }));
+        }
         if (this.#started)
             return Promise.reject(new Error(`cron data source ${this.name} is already started`));
         this.#started = true;
+        const generation = ++this.#generation;
         try {
             for (const endpoint of this.cronEndpoints())
-                endpoint.start();
-            return Promise.resolve();
+                endpoint.start(context);
+            return;
         }
         catch (error) {
-            this.#started = false;
-            for (const endpoint of this.cronEndpoints())
-                void endpoint.stop(_context);
-            return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+            const cleanup = await Promise.allSettled(this.cronEndpoints().map(async (endpoint) => endpoint.stop(context)));
+            if (this.#generation === generation) {
+                this.#started = cleanup.some((result) => result.status === "rejected");
+            }
+            throw error instanceof Error ? error : new Error(String(error));
         }
     }
-    stop(context) {
+    async stop(context) {
         if (!this.#started)
-            return Promise.resolve();
-        this.#started = false;
-        return Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop(context))).then(() => undefined);
+            return;
+        const generation = this.#generation;
+        await Promise.all(this.cronEndpoints().map(async (endpoint) => endpoint.stop(context)));
+        if (this.#generation === generation)
+            this.#started = false;
     }
     cronEndpoints() {
         return this.endpoints().map((endpoint) => {

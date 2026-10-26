@@ -1,6 +1,5 @@
 import { RuntimeStoppedError, reportUnhandledTaskError } from "./errors.js";
 import { RuntimeConfigLoader } from "./config/index.js";
-import { Context } from "./context.js";
 import { err, NoopLogsEngine, noopLogger, NoopMetricsEngine, PrometheusMetricsEngine } from "./environment/index.js";
 import { errorFromUnknown } from "./errors.js";
 import { ServiceEnvironment } from "./environment/runtime-environment.js";
@@ -26,6 +25,7 @@ export class ServiceApp {
     #removeConfigValidation;
     #unsubscribeConfig;
     #prepared = false;
+    #ownerContext;
     constructor(config, serviceId, options = {}) {
         this.#metricsEngine = options.metricsEngine ?? makeServiceMetricsEngine();
         this.#logsEngine =
@@ -45,7 +45,15 @@ export class ServiceApp {
                 });
         this.#tracingEngine = options.tracingEngine;
         const tracing = options.tracingEngine?.tracing() ?? options.tracing;
-        const tasks = new RuntimeTaskRegistry(reportAsyncFailure(logger, "parallel runtime task failed"));
+        const reportParallelFailure = reportAsyncFailure(logger, "parallel runtime task failed");
+        const tasks = new RuntimeTaskRegistry((error, context) => {
+            const owner = context ?? this.#ownerContext;
+            if (owner === undefined) {
+                reportUnhandledTaskError(error);
+                return;
+            }
+            reportParallelFailure(error, owner);
+        });
         const pools = makeRuntimePools(config.current(), this.#metricsEngine.metrics(), service.name, logger);
         this.#taskPools = [...pools.task.values()];
         this.#priorityTaskPools = [...pools.priority.values()];
@@ -89,11 +97,13 @@ export class ServiceApp {
     metricsEngine() {
         return this.#metricsEngine;
     }
-    start(context = Context.background()) {
+    start(context) {
+        if (this.#runtime.state() === "created")
+            this.#ownerContext = context;
         this.prepare();
         return this.#runtime.start(context);
     }
-    stop(context = Context.background(), drainTimeoutMs) {
+    stop(context, drainTimeoutMs) {
         return this.#runtime.stop(context, drainTimeoutMs).finally(() => {
             this.#removeConfigValidation();
             this.#unsubscribeConfig();
@@ -211,9 +221,9 @@ function makeRuntimePools(config, metrics, service, logger) {
     return { task, priority };
 }
 function reportAsyncFailure(logger, message) {
-    return (error) => {
+    return (error, context) => {
         try {
-            logger.error(Context.background(), message, err(errorFromUnknown(error)));
+            logger.error(context, message, err(errorFromUnknown(error)));
         }
         finally {
             if (!(error instanceof RuntimeStoppedError))

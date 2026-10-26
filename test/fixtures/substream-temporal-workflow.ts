@@ -91,8 +91,8 @@ export async function substreamReplayWorkflow(count: number): Promise<number[]> 
     }
   });
   entry.setSource(body);
-  await environment.start();
   const parent = new MessageContext().withStreamId("shared-workflow-parent");
+  await environment.start(parent);
 
   async function invoke(value: number): Promise<number> {
     const results: number[] = [];
@@ -116,6 +116,6 @@ export async function substreamReplayWorkflow(count: number): Promise<number[]> 
   try {
     return await Promise.all(Array.from({ length: count }, (_, value) => invoke(value)));
   } finally {
-    await environment.finish();
+    await environment.finish(parent);
   }
 }

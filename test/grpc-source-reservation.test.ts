@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { Duplex } from "node:stream";
+import { Duplex, Readable } from "node:stream";
 import { test } from "node:test";
 
 import { create, type DescMethod, type DescService } from "@bufbuild/protobuf";
@@ -194,26 +194,31 @@ for (const [mode, grpcMethodType, make] of modes) {
             handle(): (call: unknown, callback: (error: Error | null) => void) => void;
           }
         ).handle();
-        const calls: Duplex[] = [];
+        const calls: Readable[] = [];
         const invoke = (id: string): Promise<Error | undefined> => {
           const request = create(TimestampSchema, { seconds: 7n });
           const metadata = new Metadata();
           metadata.set(STREAM_ID_HEADER, id);
           let sent = false;
-          const call = Object.assign(
-            new Duplex({
-              objectMode: true,
-              read() {
-                if (!sent) {
-                  sent = true;
-                  this.push(request);
-                  this.push(null);
-                }
-              },
-              write(_value, _encoding, done) {
-                done();
+          const requestOptions = {
+            objectMode: true,
+            read(this: Readable) {
+              if (!sent) {
+                sent = true;
+                this.push(request);
+                this.push(null);
               }
-            }),
+            }
+          };
+          const call = Object.assign(
+            mode === "client_streaming"
+              ? new Readable(requestOptions)
+              : new Duplex({
+                  ...requestOptions,
+                  write(_value, _encoding, done) {
+                    done();
+                  }
+                }),
             { metadata, request, getDeadline: () => Infinity }
           );
           calls.push(call);

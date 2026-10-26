@@ -160,6 +160,7 @@
     "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
   },
   "dependencies": {
+    "@types/ms": "2.1.0",
     "@bufbuild/protobuf": "2.14.0",
     "@confluentinc/kafka-javascript": "1.9.0",
     "@grpc/grpc-js": "1.14.4",

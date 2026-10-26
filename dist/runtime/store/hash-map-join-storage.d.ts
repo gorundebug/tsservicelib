@@ -1,4 +1,4 @@
-import { Context, type MessageContext } from "../context.js";
+import type { Context, MessageContext } from "../context.js";
 import type { RuntimeEnvironment } from "../environment/runtime-environment.js";
 import type { JoinStorage, JoinStorageConfig, JoinValueCallback } from "./join-storage.js";
 /** Event-loop implementation of Go's two-generation HashMapJoinStorage. */

@@ -182,3 +182,135 @@ await test("custom source preserves the Go handler lifecycle and result correlat
   await dataSource.stop(Context.background());
   assert.equal(producer.stopped, true);
 });
+
+function makeLifecycleHarness(producer: DataProducer<string> = new Producer()) {
+  const environment = makeTestEnvironment([inputConfig, resultConfig], {
+    dataConnectors: [connector],
+    endpoints: [endpoint]
+  });
+  environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+  const input = makeInputStream<string, string, Error>(inputConfig, environment);
+  makeCustomEndpointConsumer(input, producer, new Handler());
+  const dataSource = environment.dataSourceById(connector.id);
+  assert.ok(dataSource);
+  const lifecycle = dataSource.endpoint(endpoint.id) as unknown as {
+    start(context: Context): Promise<void>;
+    stop(context: Context): Promise<void>;
+  };
+  return { environment, dataSource, lifecycle };
+}
+
+await test("custom producer failure is logged with its start owner context", async (t) => {
+  const failure = new Error("producer failure");
+  const observed = Promise.withResolvers<Context>();
+  const harness = makeLifecycleHarness({
+    start: () => Promise.reject(failure),
+    stop: () => undefined
+  });
+  t.mock.method(harness.environment.log(), "error", (context: Context) => {
+    observed.resolve(context);
+  });
+  const owner = new MessageContext().withStreamId("producer-owner");
+  await harness.dataSource.start(owner);
+  assert.equal(await observed.promise, owner);
+  await harness.dataSource.stop(owner);
+});
+
+await test("custom source rollback preserves context and failed cleanup remains retryable", async (t) => {
+  const { dataSource, lifecycle } = makeLifecycleHarness();
+  const owner = new MessageContext().withStreamId("startup-owner");
+  const retry = new MessageContext().withStreamId("shutdown-owner");
+  const failure = new Error("startup failure");
+  const stops: Context[] = [];
+  t.mock.method(lifecycle, "start", () => Promise.reject(failure));
+  t.mock.method(lifecycle, "stop", (context: Context) => {
+    stops.push(context);
+    return context === owner ? Promise.reject(new Error("cleanup incomplete")) : Promise.resolve();
+  });
+  await assert.rejects(dataSource.start(owner), (error: unknown) => error === failure);
+  assert.deepEqual(stops, [owner]);
+  await assert.rejects(dataSource.start(retry), /already started/);
+  await dataSource.stop(retry);
+  assert.deepEqual(stops, [owner, retry]);
+  await dataSource.stop(retry);
+  assert.equal(stops.length, 2);
+});
+
+await test("custom producer stop failure keeps its endpoint available for retry", async () => {
+  const contexts: Context[] = [];
+  const harness = makeLifecycleHarness({
+    start: () => undefined,
+    stop(context): void {
+      contexts.push(context);
+      if (contexts.length === 1) throw new Error("stop incomplete");
+    }
+  });
+  const owner = new MessageContext();
+  const retry = new MessageContext();
+  await harness.dataSource.start(owner);
+  await assert.rejects(harness.dataSource.stop(owner), /stop incomplete/);
+  await assert.rejects(harness.dataSource.start(retry), /already started/);
+  await harness.dataSource.stop(retry);
+  assert.deepEqual(contexts, [owner, retry]);
+});
+
+await test("custom source processes correlated replies after a complete stop and restart", async () => {
+  const environment = makeTestEnvironment([inputConfig, resultConfig], {
+    dataConnectors: [connector],
+    endpoints: [endpoint]
+  });
+  environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+  const input = makeInputStream<string, string, Error>(inputConfig, environment);
+  const result = new ConsumedStream(resultConfig, environment, environment.serde(stringSerdeType));
+  input.setSource(result);
+  input.setConsumer(new FeedbackStream(result));
+  const producer = new Producer();
+  const handler = new Handler();
+  makeCustomEndpointConsumer(input, producer, handler);
+  const dataSource = environment.dataSourceById(connector.id);
+  assert.ok(dataSource);
+
+  for (const value of ["first-run", "second-run"]) {
+    const owner = new MessageContext().withStreamId(value);
+    await dataSource.start(owner);
+    try {
+      await producer.emit(owner, value);
+    } finally {
+      await dataSource.stop(owner);
+    }
+  }
+  assert.deepEqual(handler.events, [
+    "begin", "consume:first-run", "result:first-run", "end",
+    "begin", "consume:second-run", "result:second-run", "end"
+  ]);
+});
+
+await test("custom source drain timeout preserves the running producer until retry completes", async () => {
+  const running = Promise.withResolvers<undefined>();
+  const harness = makeLifecycleHarness({
+    start: () => running.promise,
+    stop: () => undefined
+  });
+  const owner = new MessageContext();
+  await harness.dataSource.start(owner);
+  let retry: Promise<undefined> | undefined;
+  try {
+    await assert.rejects(harness.dataSource.stop(owner.bounded(5)), { name: "RuntimeDrainTimeoutError" });
+    await assert.rejects(harness.dataSource.start(owner), /already started/);
+    let completed = false;
+    retry = harness.dataSource.stop(owner).then(() => {
+      completed = true;
+      return undefined;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(completed, false);
+    running.resolve(undefined);
+    await retry;
+    assert.equal(completed, true);
+    await harness.dataSource.stop(owner);
+  } finally {
+    running.resolve(undefined);
+    await retry;
+    await harness.dataSource.stop(owner);
+  }
+});

@@ -35,7 +35,7 @@ export class RuntimeTaskRegistry {
         }
         this.startTask(task, externalSignal, () => undefined, true);
     }
-    startTask(task, externalSignal, accepted, detached = false) {
+    startTask(task, externalSignal, accepted, detached = false, context) {
         const id = this.#nextId++;
         const signal = externalSignal === undefined
             ? this.#controller.signal
@@ -57,7 +57,7 @@ export class RuntimeTaskRegistry {
             try {
                 if (!isTaskCancellation(value, signal)) {
                     if (this.#onError !== undefined)
-                        this.#onError(errorFromUnknown(value));
+                        this.#onError(errorFromUnknown(value), context);
                     else if (detached)
                         reportUnhandledTaskError(value);
                 }
@@ -72,6 +72,13 @@ export class RuntimeTaskRegistry {
     }
     stopAdmission() {
         this.#accepting = false;
+    }
+    admitDetachedWithContext(context, task) {
+        if (!this.#accepting) {
+            this.#onError?.(new RuntimeStoppedError(), context);
+            return;
+        }
+        this.startTask(task, context.signal(), () => undefined, true, context);
     }
     cancel(reason = new RuntimeStoppedError("runtime work was cancelled")) {
         this.#accepting = false;

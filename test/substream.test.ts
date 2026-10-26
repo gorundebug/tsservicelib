@@ -343,7 +343,8 @@ function workflowEnvironment(fail = false): TemporalWorkflowEnvironment {
 
 await test("Temporal SubStream uses existing workflow task pool and result link", async () => {
   const environment = workflowEnvironment();
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   const stream = environment.streamById(1);
   assert.ok(stream !== undefined && "consume" in stream);
   // The fixture's entry is the typed SubStream constructed above.
@@ -355,14 +356,15 @@ await test("Temporal SubStream uses existing workflow task pool and result link"
       return true;
     }
   });
-  await environment.finish();
+  await environment.finish(lifecycleContext);
   assert.deepEqual(values, [42]);
 });
 
 await test("Temporal asynchronous branch failure wakes SubStream without quiescence", async () => {
   const environment = workflowEnvironment(true);
-  await environment.start();
+  const lifecycleContext = new MessageContext();
+  await environment.start(lifecycleContext);
   const entry = environment.streamById(1) as SubStream<number, number>;
   await assert.rejects(entry.consume(new MessageContext(), 1, { out: () => true }), /body failed/);
-  await assert.rejects(environment.finish(), /body failed/);
+  await assert.rejects(environment.finish(lifecycleContext), /body failed/);
 });

@@ -6,7 +6,7 @@ import {
   type PerformanceEntry
 } from "node:perf_hooks";
 
-import { Context } from "./context.js";
+import type { Context } from "./context.js";
 import type { Metrics } from "./environment/index.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { PriorityTaskPool, TaskPool } from "./pool/index.js";
@@ -21,7 +21,8 @@ const NANOSECONDS_PER_SECOND = 1_000_000_000;
  */
 export class RuntimeDiagnostics implements Lifecycle {
   readonly #eventLoopDelay: IntervalHistogram | undefined;
-  readonly #gcObserver: PerformanceObserver | undefined;
+  readonly #createGCObserver: ((context: Context) => PerformanceObserver) | undefined;
+  #gcObserver: PerformanceObserver | undefined;
   #eventLoopUtilization = 0;
   #previousUtilization = performance.eventLoopUtilization();
   #started = false;
@@ -83,17 +84,21 @@ export class RuntimeDiagnostics implements Lifecycle {
       "gc_collections_total",
       "Observed V8 garbage-collection events"
     );
-    this.#gcObserver = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        pauses.observe(Context.background(), entry.duration / 1_000);
-        collections.with({ kind: gcKind(entry) }).inc(Context.background());
-      }
-    });
+    this.#createGCObserver = (context) => {
+      const observer = new PerformanceObserver((list) => {
+        if (!this.#started || this.#gcObserver !== observer) return;
+        for (const entry of list.getEntries()) {
+          pauses.observe(context, entry.duration / 1_000);
+          collections.with({ kind: gcKind(entry) }).inc(context);
+        }
+      });
+      return observer;
+    };
   }
 
   public start(context: Context): Promise<void> {
-    void context;
     if (this.#started) return Promise.reject(new Error("runtime diagnostics already started"));
+    this.#gcObserver = this.#createGCObserver?.(context);
     this.#started = true;
     this.#previousUtilization = performance.eventLoopUtilization();
     this.#eventLoopDelay?.enable();
@@ -107,6 +112,7 @@ export class RuntimeDiagnostics implements Lifecycle {
     this.#started = false;
     this.#eventLoopDelay?.disable();
     this.#gcObserver?.disconnect();
+    this.#gcObserver = undefined;
     return Promise.resolve();
   }
 

@@ -9,3 +9,5 @@ export {
   ScheduleBackend,
   type ScheduleTrigger
 } from "../../runtime/schedule.js";
+
+export { currentTemporalWorkflowMessageContext } from "./workflow-context-interceptor.js";

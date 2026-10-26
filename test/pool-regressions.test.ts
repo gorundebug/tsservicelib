@@ -5,7 +5,13 @@ import { availableParallelism } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { Context, DelayPool, TaskPool, PriorityTaskPool } from "@gorundebug/tsservicelib/runtime";
+import {
+  Context,
+  DelayPool,
+  TaskPool,
+  PriorityTaskPool,
+  RuntimeDrainTimeoutError
+} from "@gorundebug/tsservicelib/runtime";
 
 type Callback = Parameters<TaskPool["addTask"]>[1];
 function makeGate(): { promise: Promise<void>; resolve: () => void } {
@@ -58,9 +64,7 @@ for (const kind of ["fifo", "priority", "delay"] as const) {
     });
     await pool.start(context);
     let stopped = 0;
-    const first = pool.stop(context.bounded(1)).then(() => {
-      stopped++;
-    });
+    const first = assert.rejects(pool.stop(context.bounded(1)), RuntimeDrainTimeoutError);
     const second = pool.stop(context).then(() => {
       stopped++;
     });
@@ -69,7 +73,7 @@ for (const kind of ["fifo", "priority", "delay"] as const) {
     assert.equal(stopped, 0);
     gate.resolve();
     await Promise.all([first, second]);
-    assert.equal(stopped, 2);
+    assert.equal(stopped, 1);
   });
 }
 

@@ -21,7 +21,7 @@ interface QueuedTask {
 /** Canonical unbounded FIFO task pool. Queue capacity is not backpressure. */
 export class TaskPool implements Lifecycle {
   readonly #name: string;
-  readonly #onError: (error: unknown) => void;
+  readonly #onError: (error: unknown, context: Context) => void;
   readonly #logger: Logger | undefined;
   readonly #metrics: TaskPoolMetrics | undefined;
   readonly #queue = new FifoQueue<QueuedTask>();
@@ -108,16 +108,15 @@ export class TaskPool implements Lifecycle {
     if (this.#state === "stopped") {
       return;
     }
-    if (this.#drain !== undefined) {
-      await this.#drain;
-      return;
+    if (this.#drain === undefined) {
+      this.#state = "stopping";
+      this.#drain = new Promise((resolve) => {
+        this.#resolveDrain = resolve;
+      });
+      this.pump();
+      this.finishDrainIfIdle();
     }
-    this.#state = "stopping";
-    this.#drain = new Promise((resolve) => {
-      this.#resolveDrain = resolve;
-    });
-    this.pump();
-    this.finishDrainIfIdle();
+    if (this.#active === 0 && this.#queue.length === 0) return;
     await awaitPoolDrain(this.#drain, context, () => {
       const reason = context.signal().reason as unknown;
       this.#logger?.warn(
@@ -157,13 +156,13 @@ export class TaskPool implements Lifecycle {
     try {
       completion = task.execute();
     } catch (error: unknown) {
-      reportPoolError(this.#onError, error, task.context.signal());
+      reportPoolError(this.#onError, error, task.context);
       this.taskFinished(task.context, started);
       return;
     }
     void Promise.resolve(completion)
       .catch((error: unknown) => {
-        reportPoolError(this.#onError, error, task.context.signal());
+        reportPoolError(this.#onError, error, task.context);
       })
       .finally(() => {
         this.taskFinished(task.context, started);

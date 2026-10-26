@@ -53,7 +53,7 @@ export class ParallelCaller {
         return true;
     }
     consume(context, value) {
-        this.#tasks.admitDetached(async (signal) => {
+        this.#tasks.admitDetachedWithContext(context, async (signal) => {
             await this.#consumer.consume(context.withExternalCancellation(signal), value);
         });
     }

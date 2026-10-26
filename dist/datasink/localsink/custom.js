@@ -1,5 +1,5 @@
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
-import { DataConnectorType, DataSinkEndpoint, DataSinkEndpointConsumer, FunctionCollector, OutputDataSink, Context, errorFromUnknown, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataConnectorType, DataSinkEndpoint, DataSinkEndpointConsumer, FunctionCollector, OutputDataSink, errorFromUnknown, spanError, stringAttribute } from "../../runtime/index.js";
 class CustomSinkEndpoint extends DataSinkEndpoint {
     #bindings = [];
     bind(binding) {
@@ -31,16 +31,16 @@ export class CustomDataSink extends OutputDataSink {
                 await endpoint.start(context);
         }
         catch (error) {
-            this.#started = false;
-            await Promise.allSettled(this.customEndpoints().map(async (endpoint) => endpoint.stop(Context.background())));
+            const cleanup = await Promise.allSettled(this.customEndpoints().map(async (endpoint) => endpoint.stop(context)));
+            this.#started = cleanup.some((result) => result.status === "rejected");
             throw error;
         }
     }
     async stop(context) {
         if (!this.#started)
             return;
-        this.#started = false;
         await Promise.all(this.customEndpoints().map(async (endpoint) => endpoint.stop(context)));
+        this.#started = false;
     }
     customEndpoints() {
         return this.endpoints().map((endpoint) => {

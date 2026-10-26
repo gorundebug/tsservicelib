@@ -1,3 +1,6 @@
+export declare class ContextDeadlineExceededError extends Error {
+    constructor();
+}
 export declare class RuntimeStoppedError extends Error {
     constructor(message?: string);
 }

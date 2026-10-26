@@ -7,7 +7,7 @@ import {
   type RuntimeConfigReloadSource,
   type RuntimeConfigStore
 } from "./config/index.js";
-import { Context } from "./context.js";
+import type { Context } from "./context.js";
 import {
   err,
   type Logger,
@@ -59,6 +59,7 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
   readonly #removeConfigValidation: () => void;
   readonly #unsubscribeConfig: () => void;
   #prepared = false;
+  #ownerContext: Context | undefined;
 
   public constructor(
     config: RuntimeConfigStore<T>,
@@ -83,9 +84,15 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
       });
     this.#tracingEngine = options.tracingEngine;
     const tracing = options.tracingEngine?.tracing() ?? options.tracing;
-    const tasks = new RuntimeTaskRegistry(
-      reportAsyncFailure(logger, "parallel runtime task failed")
-    );
+    const reportParallelFailure = reportAsyncFailure(logger, "parallel runtime task failed");
+    const tasks = new RuntimeTaskRegistry((error, context) => {
+      const owner = context ?? this.#ownerContext;
+      if (owner === undefined) {
+        reportUnhandledTaskError(error);
+        return;
+      }
+      reportParallelFailure(error, owner);
+    });
     const pools = makeRuntimePools(
       config.current(),
       this.#metricsEngine.metrics(),
@@ -157,12 +164,13 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     return this.#metricsEngine;
   }
 
-  public start(context = Context.background()): Promise<void> {
+  public start(context: Context): Promise<void> {
+    if (this.#runtime.state() === "created") this.#ownerContext = context;
     this.prepare();
     return this.#runtime.start(context);
   }
 
-  public stop(context = Context.background(), drainTimeoutMs?: number): Promise<void> {
+  public stop(context: Context, drainTimeoutMs?: number): Promise<void> {
     return this.#runtime.stop(context, drainTimeoutMs).finally(() => {
       this.#removeConfigValidation();
       this.#unsubscribeConfig();
@@ -292,10 +300,10 @@ function makeRuntimePools(
   return { task, priority };
 }
 
-function reportAsyncFailure(logger: Logger, message: string): (error: unknown) => void {
-  return (error: unknown): void => {
+function reportAsyncFailure(logger: Logger, message: string): (error: unknown, context: Context) => void {
+  return (error: unknown, context: Context): void => {
     try {
-      logger.error(Context.background(), message, err(errorFromUnknown(error)));
+      logger.error(context, message, err(errorFromUnknown(error)));
     } finally {
       if (!(error instanceof RuntimeStoppedError)) reportUnhandledTaskError(error);
     }

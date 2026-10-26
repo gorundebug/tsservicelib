@@ -5,10 +5,10 @@ import {
   isTaskCancellation,
   reportUnhandledTaskError
 } from "./errors.js";
-import { combineAbortSignals } from "./context.js";
+import { combineAbortSignals, type Context } from "./context.js";
 
 export type RuntimeTask<T> = (signal: AbortSignal) => Promise<T>;
-export type RuntimeTaskErrorHandler = (error: Error) => void;
+export type RuntimeTaskErrorHandler = (error: Error, context?: Context) => void;
 
 export class RuntimeTaskRegistry {
   readonly #controller = new AbortController();
@@ -56,7 +56,8 @@ export class RuntimeTaskRegistry {
     task: RuntimeTask<T>,
     externalSignal: AbortSignal | undefined,
     accepted: (promise: Promise<T>) => void,
-    detached = false
+    detached = false,
+    context?: Context
   ): void {
     const id = this.#nextId++;
     const signal =
@@ -80,7 +81,7 @@ export class RuntimeTaskRegistry {
         // rejection while the original promise remains visible to admit().
         try {
           if (!isTaskCancellation(value, signal)) {
-            if (this.#onError !== undefined) this.#onError(errorFromUnknown(value));
+            if (this.#onError !== undefined) this.#onError(errorFromUnknown(value), context);
             else if (detached) reportUnhandledTaskError(value);
           }
         } catch {
@@ -95,6 +96,14 @@ export class RuntimeTaskRegistry {
 
   public stopAdmission(): void {
     this.#accepting = false;
+  }
+
+  public admitDetachedWithContext<T>(context: Context, task: RuntimeTask<T>): void {
+    if (!this.#accepting) {
+      this.#onError?.(new RuntimeStoppedError(), context);
+      return;
+    }
+    this.startTask(task, context.signal(), () => undefined, true, context);
   }
 
   public cancel(reason: unknown = new RuntimeStoppedError("runtime work was cancelled")): void {

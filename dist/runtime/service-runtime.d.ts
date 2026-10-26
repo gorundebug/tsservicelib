@@ -1,4 +1,4 @@
-import { Context } from "./context.js";
+import type { Context } from "./context.js";
 import type { RuntimeEnvironment } from "./environment/index.js";
 import { type RuntimeComponent } from "./lifecycle.js";
 import { RuntimeTaskRegistry } from "./task-registry.js";
@@ -8,14 +8,18 @@ export declare class ServiceRuntime {
     tasks(): RuntimeTaskRegistry;
     state(): "created" | "starting" | "running" | "stopping" | "stopped";
     register(component: RuntimeComponent): void;
-    start(context?: Context): Promise<void>;
+    start(context: Context): Promise<void>;
     private startOnce;
-    stop(context?: Context, drainTimeoutMs?: number): Promise<void>;
+    stop(context: Context, drainTimeoutMs?: number): Promise<void>;
     private stopOnce;
+    private drainTasks;
     private rollback;
+    private stopComponent;
     private stopConcurrent;
     private stopAdmission;
+    private stopGroup;
     private stopSequential;
+    private shutdownError;
     private logStopTimeout;
     private logStopError;
 }

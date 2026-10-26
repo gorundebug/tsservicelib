@@ -1,4 +1,4 @@
-import { InputDataSource, Context, type Completion, type Consumer, type MessageContext, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
+import { InputDataSource, type Context, type Completion, type Consumer, type MessageContext, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
 export interface DataProducer<T> {
     start(context: Context, consumer: Consumer<T>): Completion;
     stop(context: Context): Completion;

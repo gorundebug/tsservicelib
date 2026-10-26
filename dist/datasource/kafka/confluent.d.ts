@@ -1,4 +1,4 @@
-import { InputDataSource, Context, MessageContext, type Completion, type Consumer, type Metrics, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
+import { InputDataSource, type Context, MessageContext, type Completion, type Consumer, type Metrics, type RuntimeEnvironment, type StreamContext, type TypedInputStream } from "../../runtime/index.js";
 export interface KafkaRecord {
     readonly topic: string;
     readonly partition: number;
@@ -26,7 +26,8 @@ export interface KafkaConsumer {
     connect(): Promise<void>;
     subscribe(topic: string): Promise<void>;
     run(concurrency: number, handler: (record: KafkaRecord, control: KafkaConsumerControl) => Promise<void>): Promise<void>;
-    stop(): Promise<void>;
+    /** Stop admission and drain accepted callbacks and acknowledgements before ending run(). */
+    stop(context: Context): Promise<void>;
     disconnect(): Promise<void>;
 }
 export interface KafkaAdmin {

@@ -1,5 +1,7 @@
 import type { Context as OpenTelemetryContext } from "@opentelemetry/api";
 
+import { ContextDeadlineExceededError } from "./errors.js";
+
 export const STREAM_ID_HEADER = "x-stream-id";
 export const TRACE_SAMPLING_HEADER = "x-trace";
 
@@ -70,7 +72,7 @@ function composeSignal(signal: AbortSignal, deadline: number | undefined): Abort
     () => {
       signal.removeEventListener("abort", abortFromParent);
       if (!controller.signal.aborted) {
-        controller.abort(new Error("context deadline exceeded"));
+        controller.abort(new ContextDeadlineExceededError());
       }
     },
     Math.max(0, Math.ceil(deadline - contextNow()))

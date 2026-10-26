@@ -1,4 +1,4 @@
-import { OutputDataSink, Context, type Collector, type Completion, type Consumer, type MessageContext, type RuntimeEnvironment, type Stream, type TypedSinkStream } from "../../runtime/index.js";
+import { OutputDataSink, type Context, type Collector, type Completion, type Consumer, type MessageContext, type RuntimeEnvironment, type Stream, type TypedSinkStream } from "../../runtime/index.js";
 /** Canonical custom-sink lifecycle: getStreamId -> beginRequest -> consumeMessage -> endRequest. */
 export interface EndpointHandler<HandlerState, T, R> {
     getStreamId(context: MessageContext, value: Readonly<T>): string;

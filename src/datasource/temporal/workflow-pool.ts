@@ -22,7 +22,7 @@ interface WorkflowTask {
 class WorkflowPoolCore {
   readonly #name: string;
   readonly #executors: number;
-  readonly #onError: (error: unknown) => void;
+  readonly #onError: (error: unknown, context: Context) => void;
   readonly #queue: FifoQueue<WorkflowTask> | IndexedHeap<WorkflowTask>;
   readonly #metrics: TaskPoolMetrics | undefined;
   #active = 0;
@@ -39,7 +39,7 @@ class WorkflowPoolCore {
     priority: boolean,
     metrics: Metrics,
     service: string,
-    onError: (error: unknown) => void
+    onError: (error: unknown, context: Context) => void
   ) {
     if (!Number.isSafeInteger(executors) || executors < 0) {
       throw new RangeError("executors must be a non-negative integer");
@@ -163,7 +163,8 @@ class WorkflowPoolCore {
     try {
       await task.execute();
     } catch (error: unknown) {
-      reportPoolError(this.#onError, error);
+      // Workflow cancellation must reach the workflow failure/completion channel.
+      reportPoolError(this.#onError, error, task.context, true);
     } finally {
       this.#metrics?.executorsBusy.dec();
       this.#metrics?.tasksTotal.inc(task.context);
@@ -201,7 +202,7 @@ export class WorkflowTaskPool implements TaskPoolLike {
     executors: number,
     metrics: Metrics,
     service: string,
-    onError: (error: unknown) => void
+    onError: (error: unknown, context: Context) => void
   ) {
     this.#core = new WorkflowPoolCore(name, executors, false, metrics, service, onError);
   }
@@ -240,7 +241,7 @@ export class WorkflowPriorityTaskPool implements PriorityTaskPoolLike {
     executors: number,
     metrics: Metrics,
     service: string,
-    onError: (error: unknown) => void
+    onError: (error: unknown, context: Context) => void
   ) {
     this.#core = new WorkflowPoolCore(name, executors, true, metrics, service, onError);
   }

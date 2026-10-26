@@ -1,7 +1,7 @@
 import { Server, ServerCredentials, status } from "@grpc/grpc-js";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
-import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, Context, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, settleWithinDeadline, spanError, str, stringAttribute } from "../../runtime/index.js";
+import { applyDataSourceEndpointTracing, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, MessageContext, STREAM_ID_HEADER, TRACE_SAMPLING_HEADER, errorFromUnknown, err, boolAttribute, int64Attribute, makeStreamContext, newStreamId, requireGrpcDataConnectorConfig, requireGrpcEndpointConfig, settleWithinDeadline, spanError, str, stringAttribute } from "../../runtime/index.js";
 // A service owns one listening address; connectors own disjoint RPC methods.
 const grpcServers = new WeakMap();
 const CONTEXT_METADATA_KEYS = [
@@ -432,13 +432,13 @@ function consumePendingResult(context, value, pendingRequests, handler, streamCo
             pending.result.endCallback();
     }
 }
-function observeGrpcHandler(handler, endpoint, failTransport) {
+function observeGrpcHandler(context, handler, endpoint, failTransport) {
     void handler.catch((value) => {
         const failure = errorFromUnknown(value);
         endpoint
             .runtimeEnvironment()
             .log()
-            .error(Context.background(), "gRPC request handler failed", str("endpoint", endpoint.name), err(failure));
+            .error(context, "gRPC request handler failed", str("endpoint", endpoint.name), err(failure));
         try {
             failTransport(failure);
         }
@@ -446,7 +446,7 @@ function observeGrpcHandler(handler, endpoint, failTransport) {
             endpoint
                 .runtimeEnvironment()
                 .log()
-                .error(Context.background(), "gRPC request failure reporting failed", str("endpoint", endpoint.name), err(errorFromUnknown(transportError)));
+                .error(context, "gRPC request failure reporting failed", str("endpoint", endpoint.name), err(errorFromUnknown(transportError)));
         }
     });
 }
@@ -472,8 +472,7 @@ class GrpcStreamingSourceConsumer extends DataSourceEndpointConsumer {
     hasResult() {
         return this.stream().resultStream() !== undefined;
     }
-    requestContext(call) {
-        let context = contextFromCall(call, this.tracingEnabled);
+    requestContext(context) {
         if (this.tracingEnabled) {
             context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
         }
@@ -525,6 +524,7 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
     }
     handle() {
         return (call, callback) => {
+            const context = contextFromCall(call, this.#tracingEnabled);
             let completed = false;
             const complete = (error, value) => {
                 if (completed)
@@ -532,13 +532,12 @@ class GrpcUnaryEndpointConsumer extends DataSourceEndpointConsumer {
                 completed = true;
                 callback(error, value);
             };
-            observeGrpcHandler(this.handleCall(call, complete), this.endpoint(), (failure) => {
+            observeGrpcHandler(context, this.handleCall(call, complete, context), this.endpoint(), (failure) => {
                 complete(failure);
             });
         };
     }
-    async handleCall(call, callback) {
-        let context = contextFromCall(call, this.#tracingEnabled);
+    async handleCall(call, callback, context) {
         if (this.#tracingEnabled) {
             context = applyDataSourceEndpointTracing(context, this.stream().runtimeEnvironment(), this.endpoint().id);
         }
@@ -674,6 +673,7 @@ class GrpcClientStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
     }
     handle() {
         return (call, callback) => {
+            const context = contextFromCall(call, this.tracingEnabled);
             let completed = false;
             const complete = (error, value) => {
                 if (completed)
@@ -681,13 +681,13 @@ class GrpcClientStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
                 completed = true;
                 callback(error, value);
             };
-            observeGrpcHandler(this.handleCall(call, complete), this.endpoint(), (failure) => {
+            observeGrpcHandler(context, this.handleCall(call, complete, context), this.endpoint(), (failure) => {
                 complete(failure);
             });
         };
     }
-    async handleCall(call, callback) {
-        const request = this.requestContext(call);
+    async handleCall(call, callback, callContext) {
+        const request = this.requestContext(callContext);
         let { context } = request;
         const { span } = request;
         let state;
@@ -799,13 +799,14 @@ class GrpcClientStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
 class GrpcServerStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
     handle() {
         return (call) => {
-            observeGrpcHandler(this.handleCall(call), this.endpoint(), (failure) => {
+            const context = contextFromCall(call, this.tracingEnabled);
+            observeGrpcHandler(context, this.handleCall(call, context), this.endpoint(), (failure) => {
                 call.destroy(failure);
             });
         };
     }
-    async handleCall(call) {
-        const request = this.requestContext(call);
+    async handleCall(call, callContext) {
+        const request = this.requestContext(callContext);
         let { context } = request;
         const { span } = request;
         const sender = new StreamingSender((value, callback) => call.write(value, callback), span);
@@ -903,13 +904,14 @@ class GrpcServerStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
 class GrpcBidiStreamingEndpointConsumer extends GrpcStreamingSourceConsumer {
     handle() {
         return (call) => {
-            observeGrpcHandler(this.handleCall(call), this.endpoint(), (failure) => {
+            const context = contextFromCall(call, this.tracingEnabled);
+            observeGrpcHandler(context, this.handleCall(call, context), this.endpoint(), (failure) => {
                 call.destroy(failure);
             });
         };
     }
-    async handleCall(call) {
-        const request = this.requestContext(call);
+    async handleCall(call, callContext) {
+        const request = this.requestContext(callContext);
         let { context } = request;
         const { span } = request;
         const sender = new StreamingSender((value, callback) => call.write(value, callback), span);

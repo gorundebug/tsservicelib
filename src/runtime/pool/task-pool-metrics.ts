@@ -1,4 +1,11 @@
 import type { Context } from "../context.js";
+import {
+  ContextDeadlineExceededError,
+  RuntimeDrainTimeoutError,
+  RuntimeStoppedError,
+  errorFromUnknown
+} from "../errors.js";
+import { settleWithinDeadline } from "../lifecycle.js";
 import type { Float64Histogram, Int64Counter, Int64Gauge, Metrics } from "../environment/index.js";
 import type { TaskPoolOptions } from "./pool.js";
 
@@ -82,32 +89,23 @@ function registerTaskPoolMetrics(
   };
 }
 
+/** Bound this caller's wait without cancelling or discarding the physical drain. */
 export async function awaitPoolDrain(
   drain: Promise<void>,
   context: Context,
   onTimeout: () => void
 ): Promise<void> {
-  if (context.cancelled()) {
-    onTimeout();
-    await drain;
-    return;
+  const budget = context.remainingMs();
+  const [result] = await settleWithinDeadline(context, [drain]);
+  if (result?.status === "fulfilled") return;
+  if (result?.status === "rejected") throw errorFromUnknown(result.reason);
+  onTimeout();
+  const reason: unknown = context.signal().reason;
+  if (
+    reason instanceof ContextDeadlineExceededError ||
+    (!context.cancelled() && context.remainingMs() === 0)
+  ) {
+    throw new RuntimeDrainTimeoutError(budget ?? 0);
   }
-  let removeAbortListener = (): void => undefined;
-  const aborted = new Promise<"aborted">((resolve) => {
-    const listener = (): void => {
-      resolve("aborted");
-    };
-    context.signal().addEventListener("abort", listener, { once: true });
-    removeAbortListener = () => {
-      context.signal().removeEventListener("abort", listener);
-    };
-  });
-  try {
-    if ((await Promise.race([drain.then(() => "drained" as const), aborted])) === "aborted") {
-      onTimeout();
-      await drain;
-    }
-  } finally {
-    removeAbortListener();
-  }
+  throw errorFromUnknown(reason ?? new RuntimeStoppedError("pool shutdown was cancelled"));
 }

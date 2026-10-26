@@ -358,18 +358,17 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
     throw new Error("Temporal Workflow Delay must use its durable execution context");
   }
 
-  public async start(): Promise<void> {
+  public async start(context: Context): Promise<void> {
     if (this.#started) return;
     await this.buildRuntimeStreams();
     this.validateRuntimeTopology();
-    const context = Context.background();
     for (const storage of this.#storages) await storage.start(context);
     for (const pool of this.#taskPools.values()) pool.start();
     for (const pool of this.#priorityTaskPools.values()) pool.start();
     this.#started = true;
   }
 
-  public async finish(): Promise<void> {
+  public async finish(context: Context): Promise<void> {
     if (!this.#started) return;
     try {
       await this.waitForQuiescence();
@@ -377,7 +376,6 @@ export class TemporalWorkflowEnvironment implements RuntimeEnvironment {
       // The recorded graph failure is rethrown after deterministic cleanup.
     }
     this.#tasks.stopAdmission();
-    const context = Context.background();
     for (const pool of this.#taskPools.values()) await pool.stop();
     for (const pool of this.#priorityTaskPools.values()) await pool.stop();
     await this.#tasks.drain();

@@ -236,3 +236,46 @@ await test("custom sink shares one endpoint between independent sink streams", a
   assert.deepEqual(firstHandler.events, ["begin", "consume:stream-first:first", "end"]);
   assert.deepEqual(secondHandler.events, ["begin", "consume:stream-second:second", "end"]);
 });
+
+await test("custom sink rollback preserves context and retains failed cleanup for retry", async (t) => {
+  const { dataSink } = makeHarness();
+  const lifecycle = dataSink.endpoint(endpointConfig.id) as unknown as {
+    start(context: Context): Promise<void>;
+    stop(context: Context): Promise<void>;
+  };
+  const owner = new MessageContext().withStreamId("startup-owner");
+  const retry = new MessageContext().withStreamId("shutdown-owner");
+  const failure = new Error("startup failure");
+  const stops: Context[] = [];
+  t.mock.method(lifecycle, "start", () => Promise.reject(failure));
+  t.mock.method(lifecycle, "stop", (context: Context) => {
+    stops.push(context);
+    return context === owner ? Promise.reject(new Error("cleanup incomplete")) : Promise.resolve();
+  });
+  await assert.rejects(dataSink.start(owner), (error: unknown) => error === failure);
+  assert.deepEqual(stops, [owner]);
+  await assert.rejects(dataSink.start(retry), /already started/);
+  await dataSink.stop(retry);
+  assert.deepEqual(stops, [owner, retry]);
+  await dataSink.stop(retry);
+  assert.equal(stops.length, 2);
+});
+
+await test("custom sink failed stop is retryable with a new caller context", async (t) => {
+  const { dataSink } = makeHarness();
+  const lifecycle = dataSink.endpoint(endpointConfig.id) as unknown as {
+    stop(context: Context): Promise<void>;
+  };
+  const owner = new MessageContext();
+  const retry = new MessageContext();
+  const stops: Context[] = [];
+  t.mock.method(lifecycle, "stop", (context: Context) => {
+    stops.push(context);
+    return stops.length === 1 ? Promise.reject(new Error("stop incomplete")) : Promise.resolve();
+  });
+  await dataSink.start(owner);
+  await assert.rejects(dataSink.stop(owner), /stop incomplete/);
+  await assert.rejects(dataSink.start(retry), /already started/);
+  await dataSink.stop(retry);
+  assert.deepEqual(stops, [owner, retry]);
+});

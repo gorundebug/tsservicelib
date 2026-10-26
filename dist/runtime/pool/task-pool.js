@@ -85,16 +85,16 @@ export class TaskPool {
         if (this.#state === "stopped") {
             return;
         }
-        if (this.#drain !== undefined) {
-            await this.#drain;
-            return;
+        if (this.#drain === undefined) {
+            this.#state = "stopping";
+            this.#drain = new Promise((resolve) => {
+                this.#resolveDrain = resolve;
+            });
+            this.pump();
+            this.finishDrainIfIdle();
         }
-        this.#state = "stopping";
-        this.#drain = new Promise((resolve) => {
-            this.#resolveDrain = resolve;
-        });
-        this.pump();
-        this.finishDrainIfIdle();
+        if (this.#active === 0 && this.#queue.length === 0)
+            return;
         await awaitPoolDrain(this.#drain, context, () => {
             const reason = context.signal().reason;
             this.#logger?.warn(context, "task pool stopped by timeout", str("pool", this.#name), int("tasks_count", this.#queue.length), err(reason instanceof Error ? reason : new Error("timeout")));
@@ -127,13 +127,13 @@ export class TaskPool {
             completion = task.execute();
         }
         catch (error) {
-            reportPoolError(this.#onError, error, task.context.signal());
+            reportPoolError(this.#onError, error, task.context);
             this.taskFinished(task.context, started);
             return;
         }
         void Promise.resolve(completion)
             .catch((error) => {
-            reportPoolError(this.#onError, error, task.context.signal());
+            reportPoolError(this.#onError, error, task.context);
         })
             .finally(() => {
             this.taskFinished(task.context, started);

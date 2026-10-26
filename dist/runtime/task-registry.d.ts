@@ -1,5 +1,6 @@
+import { type Context } from "./context.js";
 export type RuntimeTask<T> = (signal: AbortSignal) => Promise<T>;
-export type RuntimeTaskErrorHandler = (error: Error) => void;
+export type RuntimeTaskErrorHandler = (error: Error, context?: Context) => void;
 export declare class RuntimeTaskRegistry {
     #private;
     constructor(onError?: RuntimeTaskErrorHandler);
@@ -9,6 +10,7 @@ export declare class RuntimeTaskRegistry {
     admitDetached<T>(task: RuntimeTask<T>, externalSignal?: AbortSignal): void;
     private startTask;
     stopAdmission(): void;
+    admitDetachedWithContext<T>(context: Context, task: RuntimeTask<T>): void;
     cancel(reason?: unknown): void;
     drain(timeoutMs?: number): Promise<void>;
 }

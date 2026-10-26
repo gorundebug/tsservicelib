@@ -16,10 +16,11 @@ import {
 import type { Lifecycle } from "../lifecycle.js";
 import type { Completion } from "../stream.js";
 import { PoolStoppedError } from "./pool.js";
+import { awaitPoolDrain } from "./task-pool-metrics.js";
 
 export interface DelayPoolOptions {
   readonly name?: string;
-  readonly onError?: (error: unknown) => void;
+  readonly onError?: (error: unknown, context: Context) => void;
   readonly logger?: Logger;
   readonly metrics?: Metrics;
   readonly service?: string;
@@ -46,7 +47,7 @@ interface DelayPoolMetrics {
 export class DelayPool implements Lifecycle {
   readonly #schedule = AsyncLocalStorage.snapshot();
   readonly #name: string;
-  readonly #onError: (error: unknown) => void;
+  readonly #onError: (error: unknown, context: Context) => void;
   readonly #logger: Logger | undefined;
   readonly #metrics: DelayPoolMetrics | undefined;
   readonly #tasks = new Set<DelayTask>();
@@ -152,13 +153,13 @@ export class DelayPool implements Lifecycle {
       try {
         completion = task.execute();
       } catch (error: unknown) {
-        reportPoolError(this.#onError, error, task.context.signal());
+        reportPoolError(this.#onError, error, task.context);
         this.completeTask(task, task.context, started, cancelled);
         return;
       }
       void Promise.resolve(completion)
         .catch((error: unknown) => {
-          reportPoolError(this.#onError, error, task.context.signal());
+          reportPoolError(this.#onError, error, task.context);
         })
         .finally(() => {
           this.completeTask(task, task.context, started, cancelled);
@@ -167,45 +168,20 @@ export class DelayPool implements Lifecycle {
   }
 
   public async stop(context: Context): Promise<void> {
-    if (this.#state === "stopped") {
-      return;
-    }
-    if (this.#drain !== undefined) {
-      await this.#drain;
-      return;
-    }
-    this.#state = "stopping";
-    if (this.#tasks.size === 0) {
-      this.#state = "stopped";
-      return;
-    }
-    this.#drain = new Promise((resolve) => {
-      this.#resolveDrain = resolve;
-    });
-    const drain = this.#drain;
-    if (context.cancelled()) {
-      this.reportStopTimeout(context);
-      await drain;
-      return;
-    }
-    let removeAbortListener = (): void => undefined;
-    const aborted = new Promise<"aborted">((resolve) => {
-      const listener = (): void => {
-        resolve("aborted");
-      };
-      context.signal().addEventListener("abort", listener, { once: true });
-      removeAbortListener = () => {
-        context.signal().removeEventListener("abort", listener);
-      };
-    });
-    try {
-      if ((await Promise.race([drain.then(() => "drained" as const), aborted])) === "aborted") {
-        this.reportStopTimeout(context);
-        await drain;
+    if (this.#state === "stopped") return;
+    if (this.#drain === undefined) {
+      this.#state = "stopping";
+      if (this.#tasks.size === 0) {
+        this.#state = "stopped";
+        return;
       }
-    } finally {
-      removeAbortListener();
+      this.#drain = new Promise((resolve) => {
+        this.#resolveDrain = resolve;
+      });
     }
+    await awaitPoolDrain(this.#drain, context, () => {
+      this.reportStopTimeout(context);
+    });
   }
 
   private completeTask(

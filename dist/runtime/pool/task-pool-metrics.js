@@ -1,3 +1,5 @@
+import { ContextDeadlineExceededError, RuntimeDrainTimeoutError, RuntimeStoppedError, errorFromUnknown } from "../errors.js";
+import { settleWithinDeadline } from "../lifecycle.js";
 export function makeTaskPoolMetrics(kind, options) {
     if (options.metrics?.enabled() !== true || options.service === undefined)
         return undefined;
@@ -36,30 +38,20 @@ function registerTaskPoolMetrics(kind, metrics, service, name) {
         })
     };
 }
+/** Bound this caller's wait without cancelling or discarding the physical drain. */
 export async function awaitPoolDrain(drain, context, onTimeout) {
-    if (context.cancelled()) {
-        onTimeout();
-        await drain;
+    const budget = context.remainingMs();
+    const [result] = await settleWithinDeadline(context, [drain]);
+    if (result?.status === "fulfilled")
         return;
+    if (result?.status === "rejected")
+        throw errorFromUnknown(result.reason);
+    onTimeout();
+    const reason = context.signal().reason;
+    if (reason instanceof ContextDeadlineExceededError ||
+        (!context.cancelled() && context.remainingMs() === 0)) {
+        throw new RuntimeDrainTimeoutError(budget ?? 0);
     }
-    let removeAbortListener = () => undefined;
-    const aborted = new Promise((resolve) => {
-        const listener = () => {
-            resolve("aborted");
-        };
-        context.signal().addEventListener("abort", listener, { once: true });
-        removeAbortListener = () => {
-            context.signal().removeEventListener("abort", listener);
-        };
-    });
-    try {
-        if ((await Promise.race([drain.then(() => "drained"), aborted])) === "aborted") {
-            onTimeout();
-            await drain;
-        }
-    }
-    finally {
-        removeAbortListener();
-    }
+    throw errorFromUnknown(reason ?? new RuntimeStoppedError("pool shutdown was cancelled"));
 }
 //# sourceMappingURL=task-pool-metrics.js.map
