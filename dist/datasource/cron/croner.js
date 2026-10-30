@@ -1,5 +1,16 @@
 import { Cron } from "croner";
 import { ContextDeadlineExceededError, DataConnectorType, DataSourceEndpoint, FunctionCollector, InputDataSource, MessageContext, RuntimeDrainTimeoutError, ScheduleBackend, applyDataSourceEndpointTracing, err, makeScheduleTrigger, newStreamId, settleWithinDeadline, str } from "../../runtime/index.js";
+/** Canonical local interval; calendar expressions stay with Croner. */
+export function parseLocalScheduleInterval(expression) {
+    if (!expression.startsWith("@every"))
+        return undefined;
+    const match = /^@every ([1-9][0-9]{0,7})ms$/u.exec(expression);
+    const milliseconds = match === null ? Number.NaN : Number(match[1]);
+    if (!Number.isInteger(milliseconds) || milliseconds < 10 || milliseconds > 86_400_000) {
+        throw new RangeError("local interval requires @every <10..86400000>ms");
+    }
+    return milliseconds;
+}
 class CronEndpointConsumer {
     #endpoint;
     #function;
@@ -69,6 +80,7 @@ class CronEndpointConsumer {
 class CronEndpoint extends DataSourceEndpoint {
     #binding;
     #job;
+    #intervalStop;
     #running = false;
     #active = new Set();
     bind(binding) {
@@ -79,7 +91,7 @@ class CronEndpoint extends DataSourceEndpoint {
         this.addEndpointConsumer(binding);
     }
     start(context) {
-        if (this.#job !== undefined || this.#active.size !== 0)
+        if (this.#job !== undefined || this.#intervalStop !== undefined || this.#active.size !== 0)
             throw new Error(`cron endpoint ${this.name} is already started`);
         const config = this.cronConfig();
         if (!config.enabled)
@@ -87,6 +99,13 @@ class CronEndpoint extends DataSourceEndpoint {
         const binding = this.#binding;
         if (binding === undefined)
             throw new Error(`cron endpoint ${this.name} has no consumer`);
+        const interval = parseLocalScheduleInterval(config.schedule);
+        if (interval !== undefined) {
+            if (config.timezone !== "UTC")
+                throw new Error("local interval requires timezone UTC");
+            this.#startInterval(context, binding, interval);
+            return;
+        }
         let nextScheduledAt = null;
         const job = new Cron(config.schedule, {
             name: `${this.dataSource().name}.${this.name}`,
@@ -115,6 +134,8 @@ class CronEndpoint extends DataSourceEndpoint {
         }
     }
     async stop(context) {
+        this.#intervalStop?.();
+        this.#intervalStop = undefined;
         this.#job?.stop();
         this.#job = undefined;
         const remainingMs = context.remainingMs();
@@ -132,6 +153,47 @@ class CronEndpoint extends DataSourceEndpoint {
             if (result?.status === "rejected")
                 throw result.reason;
         }
+    }
+    #startInterval(owner, binding, milliseconds) {
+        let next = Date.now() + milliseconds;
+        let timer;
+        let stopped = false;
+        const signal = owner.signal();
+        const stop = () => {
+            stopped = true;
+            if (timer !== undefined)
+                clearTimeout(timer);
+            signal.removeEventListener("abort", stop);
+        };
+        const arm = () => {
+            const delay = Math.max(0, Math.min(next - Date.now(), owner.remainingMs() ?? Infinity, 2_147_483_647));
+            timer = setTimeout(fire, delay);
+        };
+        const fire = () => {
+            if (stopped || owner.cancelled()) {
+                stop();
+                return;
+            }
+            const count = Math.floor((Date.now() - next) / milliseconds) + 1;
+            if (count < 1) {
+                arm();
+                return;
+            }
+            const scheduledAt = new Date(next + (count - 1) * milliseconds);
+            next += count * milliseconds;
+            arm();
+            if (count === 1 || this.cronConfig().missedRunPolicy === "FireOnce") {
+                void this.#startDispatch(owner, binding, scheduledAt).catch((failure) => {
+                    this.runtimeEnvironment().log().error(owner, "interval endpoint dispatch failed", err(failure instanceof Error ? failure : new Error(String(failure))));
+                });
+            }
+        };
+        this.#intervalStop = stop;
+        signal.addEventListener("abort", stop, { once: true });
+        if (owner.cancelled())
+            stop();
+        else
+            arm();
     }
     #startDispatch(owner, binding, scheduledAt) {
         const execution = this.#dispatch(owner, binding, scheduledAt);

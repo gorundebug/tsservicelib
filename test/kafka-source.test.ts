@@ -192,6 +192,11 @@ class Control implements KafkaConsumerControl {
 }
 
 class Handler implements EndpointHandler<undefined, string, string, Error> {
+  public readonly transportErrors: Error[] = [];
+  public onError(context: MessageContext, stream: StreamContext<string, string, Error>, error: Error): void | Promise<void> {
+    this.transportErrors.push(error);
+    return stream.errorCollect(context, error);
+  }
   public readonly events: string[] = [];
   public beginStreamId: string | undefined;
   public consumeStreamId: string | undefined;
@@ -315,7 +320,8 @@ await test("Kafka source reconnects with the current broker configuration", asyn
   environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
   const input = makeInputStream<string, string, Error>(inputConfig, environment);
   const factory = new ReconnectingFactory();
-  makeKafkaEndpointConsumer(input, new Handler(), factory);
+  const handler = new Handler();
+  makeKafkaEndpointConsumer(input, handler, factory);
   const dataSource = environment.dataSourceById(10);
   assert.ok(dataSource);
   await dataSource.start(Context.background());
@@ -330,6 +336,9 @@ await test("Kafka source reconnects with the current broker configuration", asyn
   );
   factory.consumers[0]?.fail(new Error("broker transport failed"));
   await waitFor(() => factory.consumers.length === 2);
+
+  assert.deepEqual(handler.transportErrors.map(error => error.message), ["broker transport failed"]);
+  assert.deepEqual(handler.events, []);
 
   assert.deepEqual(factory.brokerAttempts, [
     ["redpanda:9092"],
@@ -564,4 +573,160 @@ await test("Kafka shutdown distinguishes an early deadline from identically word
       await dataSource.stop(owner);
     }
   }
+});
+
+await test("Kafka startup rejects an already cancelled owner without allocating clients", async () => {
+  const { dataSource, factory } = makeContextHarness();
+  const controller = new AbortController();
+  const reason = new Error("startup cancelled before allocation");
+  controller.abort(reason);
+  await assert.rejects(dataSource.start(new Context(controller.signal)), (error) => error === reason);
+  assert.equal(factory.adminInstance.connects, 0);
+  assert.equal(factory.consumerInstance.connected, false);
+});
+
+for (const phase of ["admin-connect", "metadata", "admin-close", "consumer-connect", "subscribe"] as const) {
+  await test(`Kafka startup cancellation retains ${phase} until cleanup finishes`, async (t) => {
+    const { dataSource, factory } = makeContextHarness();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const admin = factory.adminInstance;
+    const consumer = factory.consumerInstance;
+    const gate = async (): Promise<void> => { entered.resolve(undefined); await release.promise; };
+    if (phase === "admin-connect") t.mock.method(admin, "connect", gate);
+    if (phase === "metadata") t.mock.method(admin, "partitionCount", async () => { await gate(); return 2; });
+    if (phase === "admin-close") t.mock.method(admin, "disconnect", gate);
+    if (phase === "consumer-connect") {
+      const connect = consumer.connect.bind(consumer);
+      t.mock.method(consumer, "connect", async () => { await gate(); await connect(); });
+    }
+    if (phase === "subscribe") {
+      const subscribe = consumer.subscribe.bind(consumer);
+      t.mock.method(consumer, "subscribe", async (topic: string) => { await gate(); await subscribe(topic); });
+    }
+    const adminClosed = t.mock.method(admin, "disconnect");
+    const consumerClosed = t.mock.method(consumer, "disconnect");
+    const runs = t.mock.method(consumer, "run");
+    const controller = new AbortController();
+    const reason = new Error(`cancel ${phase}`);
+    const starting = dataSource.start(new Context(controller.signal));
+    const rejected = assert.rejects(starting, (error) => error === reason);
+    try {
+      await entered.promise;
+      controller.abort(reason);
+      await rejected;
+      await assert.rejects(dataSource.start(new Context()), /already started/);
+      await assert.rejects(dataSource.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
+      assert.equal(runs.mock.calls.length, 0);
+    } finally {
+      release.resolve(undefined);
+      await dataSource.stop(new Context().bounded(2_000));
+    }
+    assert.equal(adminClosed.mock.calls.length, 1);
+    assert.equal(consumerClosed.mock.calls.length, phase === "consumer-connect" || phase === "subscribe" ? 1 : 0);
+    assert.equal(consumer.connected, false);
+    assert.equal(runs.mock.calls.length, 0);
+    await dataSource.start(new Context());
+    await dataSource.stop(new Context());
+  });
+}
+
+await test("Kafka startup deadline is not reported as a shutdown timeout", async (t) => {
+  const { dataSource, factory } = makeContextHarness();
+  const release = Promise.withResolvers<undefined>();
+  t.mock.method(factory.adminInstance, "connect", () => release.promise);
+  try {
+    await assert.rejects(dataSource.start(new Context().bounded(5)), ContextDeadlineExceededError);
+    await assert.rejects(dataSource.start(new Context()), /already started/);
+  } finally {
+    release.resolve(undefined);
+    await dataSource.stop(new Context().bounded(2_000));
+  }
+  assert.equal(factory.consumerInstance.connected, false);
+});
+
+for (const kind of ["admin", "consumer"] as const) {
+  await test(`Kafka failed ${kind} connection preserves primary error and retries failed cleanup`, async (t) => {
+    const { dataSource, factory } = makeContextHarness();
+    const client = kind === "admin" ? factory.adminInstance : factory.consumerInstance;
+    const failure = new Error(`${kind} connect failed`);
+    const cleanupFailure = new Error(`${kind} cleanup failed`);
+    let allowCleanup = false;
+    const disconnect = client.disconnect.bind(client);
+    t.mock.method(client, "connect", () => Promise.reject(failure));
+    const close = t.mock.method(client, "disconnect", async () => {
+      if (!allowCleanup) throw cleanupFailure;
+      await disconnect();
+    });
+    await assert.rejects(dataSource.start(new Context()), (error) => error === failure);
+    assert.ok(close.mock.calls.length >= 1);
+    await assert.rejects(dataSource.start(new Context()), /already started/);
+    allowCleanup = true;
+    await dataSource.stop(new Context().bounded(2_000));
+    const closed = close.mock.calls.length;
+    await dataSource.stop(new Context());
+    assert.equal(close.mock.calls.length, closed);
+  });
+}
+
+await test("Kafka stop during startup prevents a late connection from starting consumption", async (t) => {
+  const { dataSource, factory } = makeContextHarness();
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  const consumer = factory.consumerInstance;
+  const connect = consumer.connect.bind(consumer);
+  t.mock.method(consumer, "connect", async () => { entered.resolve(undefined); await release.promise; await connect(); });
+  const runs = t.mock.method(consumer, "run");
+  const starting = dataSource.start(new Context());
+  const rejected = assert.rejects(starting, /stopped during startup/);
+  try {
+    await entered.promise;
+    await assert.rejects(dataSource.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
+  } finally {
+    release.resolve(undefined);
+    await rejected;
+    await dataSource.stop(new Context().bounded(2_000));
+  }
+  assert.equal(consumer.connected, false);
+  assert.equal(runs.mock.calls.length, 0);
+});
+
+await test("Kafka stop retains a pending reconnect without stopping an unconnected consumer", async (t) => {
+  const environment = makeTestEnvironment([inputConfig, resultConfig], {
+    dataConnectors: [connector], endpoints: [endpoint]
+  });
+  environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+  const input = makeInputStream<string, string, Error>(inputConfig, environment);
+  const factory = new ReconnectingFactory();
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  const makeConsumer = factory.consumer.bind(factory);
+  let prematureStops = 0;
+  let lateRuns = 0;
+  t.mock.method(factory, "consumer", (brokers: readonly string[]) => {
+    const client = makeConsumer(brokers) as FakeConsumer;
+    if (factory.consumers.length === 2) {
+      const connect = client.connect.bind(client);
+      t.mock.method(client, "connect", async () => { entered.resolve(undefined); await release.promise; await connect(); });
+      t.mock.method(client, "stop", () => { prematureStops += 1; return Promise.resolve(); });
+      t.mock.method(client, "run", () => { lateRuns += 1; return Promise.resolve(); });
+    }
+    return client;
+  });
+  makeKafkaEndpointConsumer(input, new Handler(), factory);
+  const dataSource = environment.dataSourceById(connector.id);
+  assert.ok(dataSource);
+  await dataSource.start(new Context());
+  factory.consumers[0]?.fail(new Error("reconnect required"));
+  try {
+    await entered.promise;
+    await assert.rejects(dataSource.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
+    assert.equal(prematureStops, 0);
+  } finally {
+    release.resolve(undefined);
+    await dataSource.stop(new Context().bounded(2_000));
+  }
+  assert.equal(lateRuns, 0);
+  assert.equal(factory.consumers.length, 2);
+  assert.ok(factory.consumers.every((consumer) => !consumer.connected));
 });

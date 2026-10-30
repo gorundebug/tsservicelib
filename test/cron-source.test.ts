@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { Cron } from "croner";
 
-import { makeCronEndpointConsumer } from "@gorundebug/tsservicelib/datasource/cron";
+import { makeCronEndpointConsumer, parseLocalScheduleInterval } from "@gorundebug/tsservicelib/datasource/cron";
 import { InputStream } from "@gorundebug/tsservicelib/operators";
 import {
   ConsumedStream,
@@ -78,6 +78,74 @@ const function_: ScheduleEndpointFunction<string> = {
     return out.out(context, `${trigger.scheduleId}:${trigger.backend}`);
   }
 };
+
+await test("local interval parser keeps canonical millisecond bounds", () => {
+  for (const value of [10, 100, 1_000, 86_400_000]) {
+    assert.equal(parseLocalScheduleInterval(`@every ${String(value)}ms`), value);
+  }
+  assert.equal(parseLocalScheduleInterval("* * * * *"), undefined);
+  for (const value of ["@every", "@every 9ms", "@every 86400001ms", "@every 010ms",
+    "@every +10ms", "@every -10ms", "@every 1s", "@every 0.1s", "@every  100ms",
+    "@every 100ms ", "@every 100ms\n"]) {
+    assert.throws(() => parseLocalScheduleInterval(value), /local interval requires/);
+  }
+});
+
+await test("native interval keeps cadence, owner metadata and shutdown", { timeout: 5_000 }, async () => {
+  const entered = Promise.withResolvers<undefined>();
+  const values: Readonly<ScheduleTrigger>[] = [];
+  const cancellation = new AbortController();
+  const owner = new MessageContext(cancellation.signal).withMetadata(new Map([["owner", "interval"]]));
+  const { source } = ownerContextSource((context, trigger) => {
+    assert.equal(context.metadata().get("owner"), "interval");
+    assert.ok(context.streamId());
+    values.push(trigger);
+    if (values.length === 3) entered.resolve(undefined);
+  }, { ...endpoint, schedule: "@every 100ms" });
+  try {
+    await source.start(owner);
+    await entered.promise;
+    cancellation.abort();
+    await source.stop(new Context().bounded(1_000));
+    assert.ok(values.length >= 3);
+    for (let i = 1; i < values.length; i++) {
+      const current = values[i];
+      const previous = values[i - 1];
+      assert.ok(current && previous);
+      const delta = Date.parse(current.scheduledAt) - Date.parse(previous.scheduledAt);
+      assert.ok(delta >= 100 && delta % 100 === 0);
+      assert.notEqual(current.triggerId, previous.triggerId);
+    }
+    const count = values.length;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(values.length, count);
+  } finally {
+    cancellation.abort();
+    await source.stop(new Context().bounded(1_000));
+  }
+});
+
+await test("native interval skips overlap and retains accepted work during stop", { timeout: 5_000 }, async () => {
+  const entered = Promise.withResolvers<MessageContext>();
+  const release = Promise.withResolvers<undefined>();
+  let calls = 0;
+  const { source } = ownerContextSource(async (context) => {
+    calls++;
+    entered.resolve(context);
+    await release.promise;
+  }, { ...endpoint, schedule: "@every 100ms" });
+  try {
+    await source.start(new Context());
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(calls, 1);
+    await assert.rejects(source.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
+    await assert.rejects(source.start(new Context()), /already started/);
+  } finally {
+    release.resolve(undefined);
+    await source.stop(new Context().bounded(1_000));
+  }
+});
 
 await test("Croner datasource invokes the endpoint function before the input stream", async () => {
   const consumerConfig = {
@@ -190,7 +258,62 @@ await test("Croner source waits for its correlated pipeline result during stop",
   assert.equal(stopped, true);
 });
 
-function ownerContextSource(onTrigger: ScheduleEndpointFunction<string>["onTrigger"]) {
+await test("empty Croner activation waits for an explicit result", { timeout: 5_000 }, async (t) => {
+  const consumerConfig = { ...streamConfig, id: 2, name: "readyAfterSkip", type: "Map" as const, idSource: streamConfig.id };
+  const scheduleConfig: CronEndpointConfig = { ...endpoint, schedule: "@every 50ms" };
+  const environment = makeTestEnvironment([streamConfig, consumerConfig, resultConfig], {
+    dataConnectors: [{ id: 10, name: "localCron", properties: {}, type: DataConnectorType.Cron, implementation: "node/croner" }],
+    endpoints: [scheduleConfig]
+  });
+  const input = new InputStream<string, string, Error>(streamConfig, environment, makeTestSerde(), makeTestSerde());
+  const result = new ConsumedStream<string>(resultConfig, environment, makeTestSerde());
+  input.setSource(result);
+  const entered = Promise.withResolvers<MessageContext>();
+  const received: MessageContext[] = [];
+  class ReadyConsumer extends ServiceStream {
+    public consume(context: MessageContext): void {
+      received.push(context);
+      entered.resolve(context);
+    }
+  }
+  input.setConsumer(new ReadyConsumer(consumerConfig, environment));
+  const skipped: { context: MessageContext; out: Collector<string> }[] = [];
+  const invoked = Promise.withResolvers<MessageContext>();
+  let calls = 0;
+  makeCronEndpointConsumer(input, {
+    onTrigger(context, _trigger, out) {
+      calls++;
+      if (calls <= 2) {
+        skipped.push({ context, out });
+        invoked.resolve(context);
+        return;
+      }
+      return out.out(context, "ready");
+    }
+  });
+  const source = environment.dataSourceById(10);
+  assert.ok(source);
+  try {
+    await source.start(new Context(t.signal));
+    const context = await invoked.promise;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(calls, 1, "missing output must not release overlap");
+    assert.equal(received.length, 0);
+    let stopped = false;
+    const stopping = source.stop(new Context().bounded(2_000)).then(() => { stopped = true; });
+    await Promise.resolve();
+    assert.equal(stopped, false, "real output must still await its result");
+    await result.emit(context, "done");
+    await stopping;
+    assert.equal(stopped, true);
+  } finally {
+    for (const context of received) await result.emit(context, "cleanup");
+    for (const old of skipped) await result.emit(old.context, "cleanup");
+    await source.stop(new Context().bounded(1_000));
+  }
+});
+
+function ownerContextSource(onTrigger: ScheduleEndpointFunction<string>["onTrigger"], configuration = endpoint) {
   const environment = makeTestEnvironment([streamConfig], {
     dataConnectors: [
       {
@@ -201,7 +324,7 @@ function ownerContextSource(onTrigger: ScheduleEndpointFunction<string>["onTrigg
         implementation: "node/croner"
       }
     ],
-    endpoints: [endpoint]
+    endpoints: [configuration]
   });
   const input = new InputStream<string, never, Error>(
     streamConfig,

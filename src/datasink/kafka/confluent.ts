@@ -6,7 +6,6 @@ import type * as ConfluentKafka from "@confluentinc/kafka-javascript";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   DataSinkEndpoint,
-  DataSinkEndpointConsumer,
   OutputDataSink,
   RuntimeTaskRegistry,
   err,
@@ -26,7 +25,8 @@ import {
   type Span,
   type Stream,
   type Tracer,
-  type TypedSinkStream
+  type TypedSinkStream,
+  type TypedSinkStreamWithResult
 } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 
@@ -465,9 +465,12 @@ export class KafkaDataSink extends OutputDataSink {
   }
 }
 
+type KafkaSinkStream<T> = Omit<TypedSinkStream<T, unknown>, "errorStream">;
+
 class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
-  readonly #base: DataSinkEndpointConsumer<T, R>;
-  readonly #stream: TypedSinkStream<T, R>;
+  readonly #endpoint: KafkaSinkEndpoint;
+  readonly #stream: KafkaSinkStream<T>;
+  readonly #collectResult: (context: MessageContext, result: R) => Completion;
   readonly #handler: EndpointHandler<HandlerState, T, R>;
   readonly #partitioner: Partitioner<T> | undefined;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
@@ -475,13 +478,15 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
 
   public constructor(
     endpoint: KafkaSinkEndpoint,
-    stream: TypedSinkStream<T, R>,
+    stream: KafkaSinkStream<T>,
     handler: EndpointHandler<HandlerState, T, R>,
-    partitioner: Partitioner<T> | undefined
+    partitioner: Partitioner<T> | undefined,
+    collectResult: (context: MessageContext, result: R) => Completion
   ) {
-    this.#base = new DataSinkEndpointConsumer(endpoint, stream);
+    this.#endpoint = endpoint;
     this.#stream = stream;
     this.#handler = handler;
+    this.#collectResult = collectResult;
     this.#partitioner = partitioner;
     this.#tracer = stream
       .runtimeEnvironment()
@@ -491,7 +496,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
   }
 
   public endpoint(): SinkEndpoint {
-    return this.#base.endpoint();
+    return this.#endpoint;
   }
 
   public start(_context: Context): Promise<void> {
@@ -505,8 +510,8 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
   }
 
   public async consume(context: MessageContext, value: T): Promise<void> {
-    const endpoint = this.#base.endpoint();
-    if (!(endpoint instanceof KafkaSinkEndpoint) || !endpoint.active()) return;
+    const endpoint = this.#endpoint;
+    if (!endpoint.active()) return;
     let span: Span | undefined;
     if (this.#tracer !== undefined && context.samplingEnabled()) {
       const started = this.#tracer.start(context, "kafka.output", this.#traceAttributes);
@@ -561,7 +566,7 @@ class KafkaEndpointConsumer<HandlerState, T, R> implements Consumer<T> {
           onDelivery
         );
       },
-      (resultContext, result) => this.#stream.errorStream().consume(resultContext, result)
+      this.#collectResult
     );
     try {
       await this.#handler.consumeMessage(handlerContext, this.#stream, state, value, message);
@@ -599,6 +604,33 @@ export function makeKafkaEndpointConsumer<HandlerState, T, R>(
   handler: EndpointHandler<HandlerState, T, R>,
   factory?: KafkaClientFactory
 ): Consumer<T> {
+  return makeEndpointConsumer(
+    stream,
+    handler,
+    (context, result) => stream.errorStream().consume(context, result),
+    factory
+  );
+}
+
+export function makeKafkaEndpointConsumerWithResult<HandlerState, T, R, E>(
+  stream: TypedSinkStreamWithResult<T, R, E>,
+  handler: EndpointHandler<HandlerState, T, R>,
+  factory?: KafkaClientFactory
+): Consumer<T> {
+  return makeEndpointConsumer(
+    stream,
+    handler,
+    (context, result) => stream.consumeResult(context, result),
+    factory
+  );
+}
+
+function makeEndpointConsumer<HandlerState, T, R>(
+  stream: KafkaSinkStream<T>,
+  handler: EndpointHandler<HandlerState, T, R>,
+  collectResult: (context: MessageContext, result: R) => Completion,
+  factory: KafkaClientFactory | undefined
+): Consumer<T> {
   const environment = stream.runtimeEnvironment();
   factory ??= defaultKafkaClientFactory(environment);
   const endpointConfig = requireKafkaEndpointConfig(
@@ -616,7 +648,7 @@ export function makeKafkaEndpointConsumer<HandlerState, T, R>(
     throw new Error(`endpoint ${endpointConfig.name} is not a Kafka sink endpoint`);
   }
   const endpoint = existing ?? new KafkaSinkEndpoint(dataSink, endpointConfig.id);
-  const consumer = new KafkaEndpointConsumer(endpoint, stream, handler, partitioner);
+  const consumer = new KafkaEndpointConsumer(endpoint, stream, handler, partitioner, collectResult);
   endpoint.bind(consumer);
   if (existing === undefined) dataSink.addEndpoint(endpoint);
   stream.setSinkConsumer(consumer);

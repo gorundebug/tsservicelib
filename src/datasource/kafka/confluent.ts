@@ -147,7 +147,7 @@ export class ConfluentKafkaClientFactory implements KafkaClientFactory {
   ): KafkaConsumer {
     return new ConfluentConsumer(
       makeKafka(brokers, connectionTimeoutMs, this.#metrics, security).consumer({
-        kafkaJS: { groupId, fromBeginning: true, autoCommit: true }
+        kafkaJS: { groupId, fromBeginning: true, autoCommit: true, readUncommitted: false }
       })
     );
   }
@@ -176,6 +176,8 @@ export interface ResultContext<HandlerState, T, R, E> {
 }
 
 export interface EndpointHandler<HandlerState, T, R, E> {
+  /** Transport errors have no message state and do not select retry/ACK policy. */
+  onError(context: MessageContext, stream: StreamContext<T, R, E>, error: Error): Completion;
   concurrency(stream: StreamContext<T, R, E>): number;
   beginRequest(
     context: MessageContext,
@@ -296,6 +298,8 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
   #run: Promise<void> | undefined;
   #reconnect: AbortController | undefined;
   #admissionStopped = false;
+  #connecting = false;
+  #disconnecting: Promise<void> | undefined;
 
   public constructor(dataSource: KafkaDataSource, endpointId: number) {
     super(dataSource, endpointId);
@@ -332,30 +336,29 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
     this.#partitionCount = partitionCount;
   }
 
-  public async start(context: Context): Promise<void> {
+  public async start(
+    context: Context,
+    checkActive = (): void => { assertKafkaStartupContext(context); }
+  ): Promise<void> {
     if (!this.enabled()) return;
     this.validate();
+    checkActive();
     const reconnect = new AbortController();
-    const consumer = await this.connectCurrentConsumer();
-    try {
-      this.#consumer = consumer;
-      this.#reconnect = reconnect;
-      this.#admissionStopped = false;
-      await this.#binding?.start(context);
-      this.#run = this.supervise(context, consumer, reconnect.signal);
-    } catch (error: unknown) {
-      this.#consumer = undefined;
-      this.#reconnect = undefined;
-      await consumer.disconnect();
-      throw error;
-    }
+    const consumer = await this.connectCurrentConsumer(context, checkActive);
+    this.#reconnect = reconnect;
+    this.#admissionStopped = false;
+    await this.#binding?.start(context);
+    checkActive();
+    this.#run = this.supervise(context, consumer, reconnect.signal);
   }
 
   public async stop(context: Context): Promise<void> {
     await this.stopAdmission(context);
     await this.#binding?.stop(context);
     if (this.#run !== undefined) await waitForKafkaShutdown(context, this.#run);
-    this.#consumer = undefined;
+    if (this.#consumer !== undefined) {
+      await waitForKafkaShutdown(context, this.disconnectConsumer(this.#consumer));
+    }
     this.#run = undefined;
   }
 
@@ -367,7 +370,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
       this.#binding?.stopAdmission();
     }
     const consumer = this.#consumer;
-    if (consumer !== undefined) {
+    if (consumer !== undefined && !this.#connecting && this.#run !== undefined) {
       await waitForKafkaShutdown(context, consumer.stop(context));
     }
   }
@@ -382,36 +385,52 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
       if (consumer === undefined) {
         if (!(await reconnectDelay(signal))) return;
         try {
-          consumer = await this.connectCurrentConsumer();
+          consumer = await this.connectCurrentConsumer(context, () => {
+            assertKafkaStartupContext(context);
+            if (signal.aborted) throw errorFromUnknown(signal.reason);
+          });
           if (signal.aborted) {
-            await consumer.disconnect();
+            await this.disconnectConsumer(consumer);
             return;
           }
           this.#consumer = consumer;
         } catch (error: unknown) {
-          this.logReconnectFailure(context, error);
+          if (signal.aborted || context.cancelled()) return;
+          await this.logReconnectFailure(context, error);
+          if (this.#consumer !== undefined) return;
           continue;
         }
       }
+      let cleanupFailed = false;
       try {
         await consumer.run(this.#partitionCount, async (record, control) =>
           this.#binding?.handle(context, record, control)
         );
         if (!signal.aborted) {
-          this.logReconnectFailure(context, new Error("Kafka consumer stopped unexpectedly"));
+          await this.logReconnectFailure(context, new Error("Kafka consumer stopped unexpectedly"));
         }
       } catch (error: unknown) {
-        if (!signal.aborted) this.logReconnectFailure(context, error);
+        if (!signal.aborted) await this.logReconnectFailure(context, error);
       } finally {
-        if (this.#consumer === consumer) this.#consumer = undefined;
-        await consumer.disconnect();
+        try {
+          await this.disconnectConsumer(consumer);
+        } catch (error: unknown) {
+          // Keep the client for a later stop retry instead of losing ownership.
+          await this.logReconnectFailure(context, error);
+          cleanupFailed = true;
+        }
         consumer = undefined;
       }
+      if (cleanupFailed) return;
       if (signal.aborted) return;
     }
   }
 
-  private async connectCurrentConsumer(): Promise<KafkaConsumer> {
+  private async connectCurrentConsumer(
+    context: Context,
+    checkActive: () => void
+  ): Promise<KafkaConsumer> {
+    checkActive();
     const dataSource = this.dataSource();
     if (!(dataSource instanceof KafkaDataSource)) {
       throw new Error(`invalid Kafka data source for ${this.name}`);
@@ -421,24 +440,55 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
     const consumer = dataSource
       .factory()
       .consumer(brokers, this.consumerGroup, config.dialTimeout, kafkaSecurity(config));
-    await consumer.connect();
+    this.#consumer = consumer;
+    this.#connecting = true;
     try {
+      await consumer.connect();
+      checkActive();
       await consumer.subscribe(this.topic);
+      checkActive();
       return consumer;
     } catch (error: unknown) {
-      await consumer.disconnect();
+      try {
+        await this.disconnectConsumer(consumer);
+      } catch (cleanupError: unknown) {
+        await this.logReconnectFailure(context, cleanupError);
+      }
       throw error;
+    } finally {
+      this.#connecting = false;
     }
   }
 
-  private logReconnectFailure(context: Context, error: unknown): void {
+  private disconnectConsumer(consumer: KafkaConsumer): Promise<void> {
+    if (this.#disconnecting !== undefined) return this.#disconnecting;
+    const operation = consumer.disconnect().then(() => {
+      if (this.#consumer === consumer) this.#consumer = undefined;
+    });
+    this.#disconnecting = operation;
+    const settled = (): void => { this.#disconnecting = undefined; };
+    void operation.then(settled, settled);
+    return operation;
+  }
+
+  private async logReconnectFailure(context: Context, error: unknown): Promise<void> {
     this.runtimeEnvironment()
       .log()
       .error(context, "Kafka consumer reconnect required", err(errorFromUnknown(error)));
+    if (!context.signal().aborted) {
+      try {
+        await this.#binding?.onError(context, errorFromUnknown(error));
+      } catch (callbackError: unknown) {
+        this.runtimeEnvironment().log().error(
+          context, "Kafka onError failed", err(errorFromUnknown(callbackError))
+        );
+      }
+    }
   }
 }
 
 interface KafkaEndpointConsumerContract extends InputEndpointConsumer {
+  onError(context: Context, error: Error): Completion;
   start(context: Context): Promise<void>;
   stopAdmission(): void;
   stop(context: Context): Promise<void>;
@@ -448,6 +498,10 @@ interface KafkaEndpointConsumerContract extends InputEndpointConsumer {
 export class KafkaDataSource extends InputDataSource {
   readonly #factory: KafkaClientFactory;
   #started = false;
+  #starting: Promise<void> | undefined;
+  #stopping = false;
+  #admin: KafkaAdmin | undefined;
+  #adminClosing: Promise<void> | undefined;
 
   public constructor(
     connectorId: number,
@@ -465,55 +519,88 @@ export class KafkaDataSource extends InputDataSource {
 
   public async start(context: Context): Promise<void> {
     if (this.#started) throw new Error(`Kafka data source ${this.name} is already started`);
+    assertKafkaStartupContext(context);
     this.#started = true;
-    const endpoints = this.kafkaEndpoints();
-    const enabled = endpoints.filter((endpoint) => endpoint.enabled());
-    if (enabled.length === 0) return;
-    const config = requireKafkaDataConnectorConfig(this.config());
-    const brokers = splitBrokers(config.brokers, this.name);
-    const admin = this.#factory.admin(brokers, config.dialTimeout, kafkaSecurity(config));
+    this.#stopping = false;
+    // Native connect has no cancellation API. Retain its task and clients until
+    // it settles; cancelling the caller must not permit a second startup.
+    const operation = this.startOwned(context);
+    this.#starting = operation;
+    const settled = (): void => { this.#starting = undefined; };
+    void operation.then(settled, settled);
+    await waitForKafkaStartup(context, operation);
+  }
+
+  private async startOwned(context: Context): Promise<void> {
+    const enabled: KafkaSourceEndpoint[] = [];
+    const checkActive = (): void => {
+      assertKafkaStartupContext(context);
+      if (this.#stopping) throw new Error(`Kafka data source ${this.name} stopped during startup`);
+    };
     try {
-      let adminConnected = false;
-      try {
-        for (const endpoint of enabled) endpoint.validate();
-        await admin.connect();
-        adminConnected = true;
-        for (const endpoint of enabled) {
-          if (endpoint.createTopic) {
-            await admin.createTopic(
-              endpoint.topic,
-              endpoint.partitions,
-              endpoint.replicationFactor
-            );
-          }
-          endpoint.setPartitionCount(await admin.partitionCount(endpoint.topic));
+      enabled.push(...this.kafkaEndpoints().filter((endpoint) => endpoint.enabled()));
+      if (enabled.length === 0) return;
+      for (const endpoint of enabled) endpoint.validate();
+      checkActive();
+      const config = requireKafkaDataConnectorConfig(this.config());
+      const brokers = splitBrokers(config.brokers, this.name);
+      const admin = this.#factory.admin(brokers, config.dialTimeout, kafkaSecurity(config));
+      this.#admin = admin;
+      await admin.connect();
+      checkActive();
+      for (const endpoint of enabled) {
+        if (endpoint.createTopic) {
+          await admin.createTopic(endpoint.topic, endpoint.partitions, endpoint.replicationFactor);
+          checkActive();
         }
-      } finally {
-        if (adminConnected) await admin.disconnect();
+        endpoint.setPartitionCount(await admin.partitionCount(endpoint.topic));
+        checkActive();
+      }
+      await this.closeAdmin();
+      for (const endpoint of enabled) {
+        checkActive();
+        await endpoint.start(context, checkActive);
       }
     } catch (error: unknown) {
-      this.#started = false;
-      throw error;
-    }
-    try {
-      for (const endpoint of enabled) await endpoint.start(context);
-    } catch (error: unknown) {
-      const cleanup = await Promise.allSettled(
-        enabled.map(async (endpoint) => endpoint.stop(context))
-      );
+      const cleanup = await Promise.allSettled([
+        this.closeAdmin(),
+        ...enabled.map(async (endpoint) => endpoint.stop(context))
+      ]);
       this.#started = cleanup.some((result) => result.status === "rejected");
       throw error;
     }
   }
 
+  private closeAdmin(): Promise<void> {
+    if (this.#adminClosing !== undefined) return this.#adminClosing;
+    const admin = this.#admin;
+    if (admin === undefined) return Promise.resolve();
+    const operation = admin.disconnect().then(() => { this.#admin = undefined; });
+    this.#adminClosing = operation;
+    const settled = (): void => { this.#adminClosing = undefined; };
+    void operation.then(settled, settled);
+    return operation;
+  }
+
+  private async joinStartup(context: Context): Promise<void> {
+    this.#stopping = true;
+    if (this.#starting !== undefined) {
+      // Startup errors belong to start(); shutdown retries cleanup separately.
+      await waitForKafkaShutdown(context, this.#starting.then(() => undefined, () => undefined));
+    }
+  }
+
   public async stop(context: Context): Promise<void> {
     if (!this.#started) return;
+    await this.joinStartup(context);
+    await waitForKafkaShutdown(context, this.closeAdmin());
     await Promise.all(this.kafkaEndpoints().map(async (endpoint) => endpoint.stop(context)));
     this.#started = false;
   }
 
   public async stopAdmission(context: Context): Promise<void> {
     if (!this.#started) return;
+    await this.joinStartup(context);
     await Promise.all(
       this.kafkaEndpoints().map(async (endpoint) => endpoint.stopAdmission(context))
     );
@@ -610,6 +697,10 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       async (signal) => this.handleOnce(context, record, control, signal),
       context.signal()
     );
+  }
+
+  public onError(context: Context, error: Error): Completion {
+    return this.#handler.onError(MessageContext.fromContext(context), this.#streamContext, error);
   }
 
   private async handleOnce(
@@ -962,6 +1053,21 @@ function defaultKafkaClientFactory(environment: RuntimeEnvironment): KafkaClient
   return factory;
 }
 
+function assertKafkaStartupContext(context: Context): void {
+  if (context.signal().aborted) throw errorFromUnknown(context.signal().reason);
+  if (context.cancelled()) throw new ContextDeadlineExceededError();
+}
+
+async function waitForKafkaStartup(context: Context, operation: Promise<void>): Promise<void> {
+  const [result] = await settleWithinDeadline(context, [operation]);
+  if (result === undefined) {
+    assertKafkaStartupContext(context);
+    throw new ContextDeadlineExceededError();
+  }
+  if (result.status === "rejected") throw result.reason;
+  assertKafkaStartupContext(context);
+}
+
 async function waitForKafkaShutdown(context: Context, operation: Promise<void>): Promise<void> {
   const timeoutMs = context.remainingMs();
   const [result] = await settleWithinDeadline(context, [operation]);
@@ -992,7 +1098,11 @@ class ConfluentConsumer implements KafkaConsumer {
     return this.#consumer.connect();
   }
   public disconnect(): Promise<void> {
-    this.#disconnecting ??= this.disconnectOnce();
+    if (this.#disconnecting === undefined) {
+      const operation = this.disconnectOnce();
+      this.#disconnecting = operation;
+      void operation.catch(() => { this.#disconnecting = undefined; });
+    }
     return this.#disconnecting;
   }
   public subscribe(topic: string): Promise<void> {

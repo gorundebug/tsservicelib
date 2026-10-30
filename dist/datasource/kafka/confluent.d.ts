@@ -58,6 +58,8 @@ export interface ResultContext<HandlerState, T, R, E> {
     done(): void;
 }
 export interface EndpointHandler<HandlerState, T, R, E> {
+    /** Transport errors have no message state and do not select retry/ACK policy. */
+    onError(context: MessageContext, stream: StreamContext<T, R, E>, error: Error): Completion;
     concurrency(stream: StreamContext<T, R, E>): number;
     beginRequest(context: MessageContext, stream: StreamContext<T, R, E>): {
         readonly context: MessageContext;
@@ -75,6 +77,9 @@ export declare class KafkaDataSource extends InputDataSource {
     constructor(connectorId: number, environment: RuntimeEnvironment, factory: KafkaClientFactory);
     factory(): KafkaClientFactory;
     start(context: Context): Promise<void>;
+    private startOwned;
+    private closeAdmin;
+    private joinStartup;
     stop(context: Context): Promise<void>;
     stopAdmission(context: Context): Promise<void>;
     private kafkaEndpoints;

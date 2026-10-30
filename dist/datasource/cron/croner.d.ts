@@ -1,4 +1,6 @@
 import { type Context, InputDataSource, type Consumer, type RuntimeEnvironment, type ScheduleEndpointFunction, type ScheduleTrigger, type TypedInputStream } from "../../runtime/index.js";
+/** Canonical local interval; calendar expressions stay with Croner. */
+export declare function parseLocalScheduleInterval(expression: string): number | undefined;
 export declare class CronDataSource extends InputDataSource {
     #private;
     constructor(connectorId: number, environment: RuntimeEnvironment);

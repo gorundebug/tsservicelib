@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
-import { DataSinkEndpoint, DataSinkEndpointConsumer, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { DataSinkEndpoint, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const require = createRequire(import.meta.url);
 let confluentKafka;
@@ -301,16 +301,18 @@ export class KafkaDataSink extends OutputDataSink {
     }
 }
 class KafkaEndpointConsumer {
-    #base;
+    #endpoint;
     #stream;
+    #collectResult;
     #handler;
     #partitioner;
     #traceAttributes;
     #tracer;
-    constructor(endpoint, stream, handler, partitioner) {
-        this.#base = new DataSinkEndpointConsumer(endpoint, stream);
+    constructor(endpoint, stream, handler, partitioner, collectResult) {
+        this.#endpoint = endpoint;
         this.#stream = stream;
         this.#handler = handler;
+        this.#collectResult = collectResult;
         this.#partitioner = partitioner;
         this.#tracer = stream
             .runtimeEnvironment()
@@ -319,7 +321,7 @@ class KafkaEndpointConsumer {
         this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
     }
     endpoint() {
-        return this.#base.endpoint();
+        return this.#endpoint;
     }
     start(_context) {
         void _context;
@@ -330,8 +332,8 @@ class KafkaEndpointConsumer {
         return Promise.resolve();
     }
     async consume(context, value) {
-        const endpoint = this.#base.endpoint();
-        if (!(endpoint instanceof KafkaSinkEndpoint) || !endpoint.active())
+        const endpoint = this.#endpoint;
+        if (!endpoint.active())
             return;
         let span;
         if (this.#tracer !== undefined && context.samplingEnabled()) {
@@ -374,7 +376,7 @@ class KafkaEndpointConsumer {
         }
         const message = new SinkMessage(endpoint.topic, (key, payload, onDelivery) => {
             dataSink.send(handlerContext, endpoint.topic, key, payload, async () => this.partition(value, endpoint.partitionCount()), onDelivery);
-        }, (resultContext, result) => this.#stream.errorStream().consume(resultContext, result));
+        }, this.#collectResult);
         try {
             await this.#handler.consumeMessage(handlerContext, this.#stream, state, value, message);
             span?.addEvent("consume_message");
@@ -410,6 +412,12 @@ class KafkaEndpointConsumer {
     }
 }
 export function makeKafkaEndpointConsumer(stream, handler, factory) {
+    return makeEndpointConsumer(stream, handler, (context, result) => stream.errorStream().consume(context, result), factory);
+}
+export function makeKafkaEndpointConsumerWithResult(stream, handler, factory) {
+    return makeEndpointConsumer(stream, handler, (context, result) => stream.consumeResult(context, result), factory);
+}
+function makeEndpointConsumer(stream, handler, collectResult, factory) {
     const environment = stream.runtimeEnvironment();
     factory ??= defaultKafkaClientFactory(environment);
     const endpointConfig = requireKafkaEndpointConfig(environment.runtimeConfig().endpointById(stream.endpointId()));
@@ -423,7 +431,7 @@ export function makeKafkaEndpointConsumer(stream, handler, factory) {
         throw new Error(`endpoint ${endpointConfig.name} is not a Kafka sink endpoint`);
     }
     const endpoint = existing ?? new KafkaSinkEndpoint(dataSink, endpointConfig.id);
-    const consumer = new KafkaEndpointConsumer(endpoint, stream, handler, partitioner);
+    const consumer = new KafkaEndpointConsumer(endpoint, stream, handler, partitioner, collectResult);
     endpoint.bind(consumer);
     if (existing === undefined)
         dataSink.addEndpoint(endpoint);

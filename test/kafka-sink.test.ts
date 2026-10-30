@@ -9,9 +9,10 @@ import {
   type KafkaProducer,
   type Partitioner,
   SinkMessage,
-  makeKafkaEndpointConsumer
+  makeKafkaEndpointConsumer,
+  makeKafkaEndpointConsumerWithResult
 } from "@gorundebug/tsservicelib/datasink/kafka";
-import { makeSinkStream } from "@gorundebug/tsservicelib/operators";
+import { makeSinkStream, makeSinkStreamWithResult } from "@gorundebug/tsservicelib/operators";
 import {
   ConsumedStream,
   Context,
@@ -179,11 +180,13 @@ class FakeAdmin implements KafkaAdmin {
 }
 
 class FakeFactory implements KafkaClientFactory {
+  public producerCreations = 0;
   public readonly producerInstance = new FakeProducer();
   public readonly adminInstance = new FakeAdmin();
   public readonly brokers: string[][] = [];
   public producer(brokers: readonly string[]): KafkaProducer {
     this.brokers.push([...brokers]);
+    this.producerCreations++;
     return this.producerInstance;
   }
   public admin(brokers: readonly string[]): KafkaAdmin {
@@ -413,3 +416,124 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+function makeResultHarness(mode: "skip" | "async" | "sync") {
+  const configured = { ...sinkConfig, valueType: "string" };
+  const { environment } = makeTestEnvironmentWithStore([sourceConfig, configured, resultConfig], {
+    dataConnectors: [connectorConfig],
+    endpoints: [endpointConfig(true)]
+  });
+  const source = new ConsumedStream(sourceConfig, environment, environment.serde(stringSerdeType));
+  environment.serdeRegistry().registerStreamErrorType(configured.id, errorSerdeType);
+  const sink = makeSinkStreamWithResult<string, string, Error>(configured, source);
+  const results = new RecordingStream<string>(resultConfig, environment);
+  const errors = new RecordingStream<Error>(
+    { ...resultConfig, id: 4, name: "errors" },
+    environment
+  );
+  sink.setConsumer(results);
+  sink.errorStream().setConsumer(errors);
+  const ended: (Error | undefined)[] = [];
+  const handler: EndpointHandler<undefined, string, string> = {
+    getStreamId: (_context, value) => value,
+    beginRequest: (context) => ({ context, state: undefined }),
+    async consumeMessage(context, _stream, _state, value, message) {
+      message.value = Buffer.from(value);
+      if (mode === "skip") await message.skip(context, "skipped");
+      else if (mode === "sync") {
+        const result = await message.sendSync(context);
+        await message.out(context, String(result.offset));
+      } else {
+        message.send(context, (_partition, offset, error) => error?.message ?? String(offset));
+      }
+    },
+    endRequest: (_context, _stream, error) => {
+      ended.push(error);
+    }
+  };
+  const factory = new FakeFactory();
+  makeKafkaEndpointConsumerWithResult(sink, handler, factory);
+  const dataSink = environment.dataSinkById(10);
+  assert.ok(dataSink);
+  return { environment, source, sink, results, errors, ended, factory, dataSink };
+}
+
+for (const mode of ["skip", "async", "sync"] as const) {
+  await test(`Kafka SinkWithResult ${mode} uses ordinary continuation after completion`, async () => {
+    const h = makeResultHarness(mode);
+    const context = new MessageContext();
+    h.factory.producerInstance.deferDelivery = true;
+    await h.dataSink.start(context);
+    try {
+      const pending = h.source.emit(context, "request-1");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (mode !== "skip") {
+        assert.deepEqual(h.results.values, []);
+        h.factory.producerInstance.completeDelivery();
+      }
+      await pending;
+      await h.dataSink.stop(context);
+      assert.deepEqual(h.results.values, [mode === "skip" ? "skipped" : "41"]);
+      assert.deepEqual(h.errors.values, []);
+      assert.deepEqual(h.ended, [undefined]);
+    } finally {
+      await h.dataSink.stop(context);
+    }
+  });
+}
+
+await test("Kafka shared endpoint keeps ordinary and result-bearing bindings independent", async () => {
+  const h = makeResultHarness("async");
+  const plainConfig = { ...sinkConfig, id: 5, name: "plain" };
+  const plainSource = new ConsumedStream(
+    sourceConfig,
+    h.environment,
+    h.environment.serde(stringSerdeType)
+  );
+  h.environment.serdeRegistry().registerStreamErrorType(plainConfig.id, errorSerdeType);
+  const plain = makeSinkStream<string, Error>(plainConfig, plainSource);
+  const failures = new RecordingStream<Error>(
+    { ...resultConfig, id: 6, name: "plain-errors" },
+    h.environment
+  );
+  plain.errorStream().setConsumer(failures);
+  makeKafkaEndpointConsumer(plain, new Handler(), h.factory);
+  const context = new MessageContext();
+  await h.dataSink.start(context);
+  assert.equal(h.factory.producerCreations, 1, "both bindings start with one producer");
+  const failure = new Error("producer rejected");
+  try {
+    h.factory.producerInstance.nextFailure = failure;
+    await plainSource.emit(context, "plain");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await h.source.emit(context, "with-result");
+    await h.dataSink.stop(context);
+    assert.deepEqual(failures.values, [failure]);
+    assert.deepEqual(h.results.values, ["41"]);
+    assert.deepEqual(h.errors.values, []);
+    assert.equal(
+      h.factory.producerCreations,
+      2,
+      "one replacement after the injected broker failure"
+    );
+  } finally {
+    await h.dataSink.stop(context);
+  }
+});
+
+await test("Kafka SinkWithResult cancelled synchronous wait cannot emit late success", async () => {
+  const h = makeResultHarness("sync");
+  const cancellation = new AbortController();
+  const context = new MessageContext(cancellation.signal);
+  h.factory.producerInstance.deferDelivery = true;
+  await h.dataSink.start(context);
+  const pending = h.source.emit(context, "cancelled");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  cancellation.abort(new Error("request cancelled"));
+  await pending;
+  h.factory.producerInstance.completeDelivery();
+  await h.dataSink.stop(new Context());
+  assert.deepEqual(h.results.values, []);
+  assert.deepEqual(h.errors.values, []);
+  assert.equal(h.ended[0]?.message, "request cancelled");
+});

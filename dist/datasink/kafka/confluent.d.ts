@@ -1,4 +1,4 @@
-import { OutputDataSink, type Completion, type Consumer, type Context, type MessageContext, type Metrics, type RuntimeEnvironment, type Stream, type TypedSinkStream } from "../../runtime/index.js";
+import { OutputDataSink, type Completion, type Consumer, type Context, type MessageContext, type Metrics, type RuntimeEnvironment, type Stream, type TypedSinkStream, type TypedSinkStreamWithResult } from "../../runtime/index.js";
 export interface DeliveryResult {
     readonly partition: number;
     readonly offset: bigint;
@@ -71,5 +71,6 @@ export declare class KafkaDataSink extends OutputDataSink {
     private kafkaEndpoints;
 }
 export declare function makeKafkaEndpointConsumer<HandlerState, T, R>(stream: TypedSinkStream<T, R>, handler: EndpointHandler<HandlerState, T, R>, factory?: KafkaClientFactory): Consumer<T>;
+export declare function makeKafkaEndpointConsumerWithResult<HandlerState, T, R, E>(stream: TypedSinkStreamWithResult<T, R, E>, handler: EndpointHandler<HandlerState, T, R>, factory?: KafkaClientFactory): Consumer<T>;
 export {};
 //# sourceMappingURL=confluent.d.ts.map
