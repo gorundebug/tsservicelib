@@ -15,6 +15,7 @@ const OWNER = "servicelib.owner";
 const CALL_ID = "servicelib.callId";
 const SDK_METRICS_BIND_ADDRESS_ENVIRONMENT = "TEMPORAL_SDK_METRICS_BIND_ADDRESS";
 let sdkMetricsBindAddress;
+let sdkRuntimeInstalled = false;
 export function temporalCronExpression(expression) {
     return `0 ${expression.trim().split(/\s+/u).join(" ")}`;
 }
@@ -95,7 +96,7 @@ export class TemporalConnector {
         context.signal().throwIfAborted();
         const config = this.config();
         resolveWorkerStopTimeout(config.workerStopTimeout, this.#environment.serviceConfig().shutdownTimeout);
-        installSdkMetricsRuntime();
+        installSdkRuntime();
         const tls = await tlsOptions(config);
         const connection = await abortable(NativeConnection.connect({
             address: config.address,
@@ -514,22 +515,29 @@ function isTemporalConnectorConfig(config) {
 function isTemporalEndpointConfig(config) {
     return config !== undefined && "taskQueue" in config && typeof config.taskQueue === "string";
 }
-function installSdkMetricsRuntime() {
-    const address = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
-    if (address === undefined || address === "")
-        return;
-    if (sdkMetricsBindAddress !== undefined) {
+function installSdkRuntime() {
+    const configuredAddress = process.env[SDK_METRICS_BIND_ADDRESS_ENVIRONMENT]?.trim();
+    const address = configuredAddress === "" ? undefined : configuredAddress;
+    if (sdkRuntimeInstalled) {
         if (sdkMetricsBindAddress !== address) {
-            throw new Error(`Temporal SDK metrics already listen on ${sdkMetricsBindAddress}, cannot also use ${address}`);
+            throw new Error(`Temporal SDK metrics already listen on ${String(sdkMetricsBindAddress)}, cannot also use ${String(address)}`);
         }
         return;
     }
     Runtime.install({
-        telemetryOptions: {
-            metrics: { prometheus: { bindAddress: address, useSecondsForDurations: true } }
-        }
+        // ServiceRuntime owns signal handling and the ordered admission/drain phases.
+        // Temporal's automatic signal handler would race our Worker.shutdown().
+        shutdownSignals: [],
+        ...(address === undefined
+            ? {}
+            : {
+                telemetryOptions: {
+                    metrics: { prometheus: { bindAddress: address, useSecondsForDurations: true } }
+                }
+            })
     });
     sdkMetricsBindAddress = address;
+    sdkRuntimeInstalled = true;
 }
 function temporalTracingIntegration(tracing) {
     if (tracing === undefined ||
