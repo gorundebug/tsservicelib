@@ -701,7 +701,8 @@ await test("Node HTTP source creates spans only for sampled requests", async () 
     await unsampled.text();
     assert.deepEqual(tracing.spans(), []);
 
-    const sampled = await fetch(url(server), {
+    // The endpoint handler may be mounted by an external HTTP router.
+    const sampled = await fetch(url(server) + "/private-subject?token=private-grant", {
       method: "POST",
       headers: { "x-trace": "1" },
       body: "traced"
@@ -724,6 +725,8 @@ await test("Node HTTP source creates spans only for sampled requests", async () 
     assert.equal(attribute(span.attributes, "method"), "POST");
     assert.equal(attribute(span.attributes, "path"), "/v1/processorder");
     assert.equal(attribute(span.attributes, "has_result"), false);
+    assert.ok(!JSON.stringify(spans).includes("private-subject"));
+    assert.ok(!JSON.stringify(spans).includes("private-grant"));
   } finally {
     await source.stop(Context.background());
     await stopServer(server);

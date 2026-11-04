@@ -400,6 +400,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
   readonly #hasResult: boolean;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracer: Tracer | undefined;
+  readonly #pathAttribute: ReturnType<typeof stringAttribute>;
   readonly #tracingEnabled: boolean;
   readonly #tasks = new RuntimeTaskRegistry();
   #pending: RotatingMap<string, HttpResult<HandlerState, ReqT, ResR, T, R, E>> | undefined;
@@ -424,6 +425,8 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
     this.#tracingEnabled = tracing !== undefined;
     this.#tracer = tracing?.tracer(stream.runtimeEnvironment().serviceConfig().name);
     this.#traceAttributes = makeEndpointTraceAttributes(stream, endpoint.name);
+    // Never attach request-specific path identifiers to endpoint traces.
+    this.#pathAttribute = stringAttribute("path", endpoint.path);
     if (this.#hasResult) {
       stream.setResultConsumer({
         consume: (context, value) => this.consumeResult(context, value)
@@ -513,7 +516,7 @@ class NodeHttpEndpointConsumer<HandlerState, ReqT, ResR, T, R, E>
       const started = this.#tracer.start(context, "http.input", [
         ...this.#traceAttributes,
         stringAttribute("method", request.method ?? ""),
-        stringAttribute("path", requestPath(request))
+        this.#pathAttribute
       ]);
       context = started.context;
       span = started.span;
