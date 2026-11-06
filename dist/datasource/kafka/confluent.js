@@ -905,7 +905,9 @@ class ConfluentConsumer {
         this.#codes = module.KafkaJS.ErrorCodes;
         const statistics = metrics === undefined ? undefined : librdkafkaStatisticsOptions(metrics, "consumer");
         this.#consumer = new module.KafkaConsumer({
-            ...statistics,
+            ...(statistics === undefined ? {} : {
+                "statistics.interval.ms": statistics["statistics.interval.ms"]
+            }),
             "bootstrap.servers": brokers.join(","), "group.id": groupId,
             "partition.assignment.strategy": "roundrobin",
             "isolation.level": "read_committed",
@@ -936,6 +938,10 @@ class ConfluentConsumer {
                 }
             }
         }, {});
+        // The native API emits event.stats; stats_cb is a KafkaJS facade option,
+        // not a native global callback accepted by configureCallbacks().
+        if (statistics !== undefined)
+            this.#consumer.on("event.stats", statistics.stats_cb);
         this.#consumer.setDefaultConsumeTimeout(100);
         this.#consumer.on("event.error", (error) => this.fail(error));
         this.#consumer.on("rebalance.error", (error) => this.fail(error));

@@ -8,7 +8,7 @@ import {
   ConfluentKafkaClientFactory, KafkaCheckpointError,
   type CheckpointOffsets, type KafkaConsumer, type KafkaConsumerControl, type KafkaRecord
 } from "@gorundebug/tsservicelib/datasource/kafka";
-import { Context } from "@gorundebug/tsservicelib/runtime";
+import { Context, PrometheusMetricsEngine } from "@gorundebug/tsservicelib/runtime";
 
 const brokers = process.env["SA_TEST_KAFKA_BROKERS"];
 const options = { skip: brokers === undefined ? "set SA_TEST_KAFKA_BROKERS for native acceptance" : false, timeout: 120_000 };
@@ -34,7 +34,10 @@ await test("native checkpoint rewinds/advances committed group and fails closed"
   const producer = kafka.producer();
   const topic = `sa-ts-checkpoint-${randomUUID()}`;
   const owner = new Context();
-  const factory = new ConfluentKafkaClientFactory();
+  // Exercise the native callback boundary with metrics enabled: KafkaJS's
+  // stats_cb option must not leak into native KafkaConsumer configuration.
+  const metrics = new PrometheusMetricsEngine();
+  const factory = new ConfluentKafkaClientFactory(metrics.metrics());
   await admin.connect();
   await producer.connect();
   try {
