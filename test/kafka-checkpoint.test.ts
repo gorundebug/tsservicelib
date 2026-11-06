@@ -135,3 +135,53 @@ await test("two native consumers restore assignment and reject a previous owner'
     await producer.disconnect(); await admin.disconnect();
   }
 });
+
+await test("native broker-managed positions consume and auto-commit both partitions with metrics", options, async () => {
+  assert.ok(brokers);
+  const module = createRequire(import.meta.url)("@confluentinc/kafka-javascript") as typeof ConfluentKafka;
+  const kafka = new module.KafkaJS.Kafka({ kafkaJS: { brokers: brokers.split(",") } });
+  const admin = kafka.admin();
+  const producer = kafka.producer();
+  const topic = `sa-ts-broker-managed-${randomUUID()}`;
+  const owner = new Context();
+  const factory = new ConfluentKafkaClientFactory(new PrometheusMetricsEngine().metrics());
+  const consumer = factory.consumer(brokers.split(","), topic, 5000, {
+    context: owner, restoring: false, restore: () => null
+  });
+  const received: KafkaRecord[] = [];
+  let failure: unknown;
+  await admin.connect();
+  await producer.connect();
+  try {
+    await admin.createTopics({ topics: [{ topic, numPartitions: 2, replicationFactor: 1 }] });
+    for (const partition of [0, 1]) {
+      await producer.send({ topic, messages: Array.from({ length: 16 }, (_, index) => ({
+        partition, value: String(index)
+      })) });
+    }
+    await consumer.connect();
+    await consumer.subscribe(topic);
+    void consumer.run(2, (record, control) => {
+      received.push(record);
+      control.mark(record, "");
+      return Promise.resolve();
+    }).catch((error: unknown) => { failure = error; });
+    await until(() => received.length >= 32 || failure !== undefined).catch((error: unknown) => {
+      throw new Error(`received=${received.length}; failure=${String(failure)}`, { cause: error });
+    });
+    assert.equal(failure, undefined);
+    assert.equal(received.length, 32);
+    const end = performance.now() + 15_000;
+    for (;;) {
+      const offsets = await admin.fetchOffsets({ groupId: topic, topics: [topic] });
+      const partitions = offsets.find((entry) => entry.topic === topic)?.partitions ?? [];
+      if (partitions.length === 2 && partitions.every((entry) => entry.offset === "16")) break;
+      assert.ok(performance.now() < end, `uncommitted broker-managed records: ${JSON.stringify(offsets)}`);
+      await delay(100);
+    }
+  } finally {
+    await close(consumer, owner);
+    await producer.disconnect();
+    await admin.disconnect();
+  }
+});

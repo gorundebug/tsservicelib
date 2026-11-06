@@ -912,7 +912,6 @@ class ConfluentConsumer {
             "partition.assignment.strategy": "roundrobin",
             "isolation.level": "read_committed",
             "enable.auto.commit": true, "enable.auto.offset.store": false,
-            "auto.offset.reset": checkpoint.restoring ? "error" : "earliest",
             ...(connectionTimeoutMs === 0 ? {} : { "socket.timeout.ms": connectionTimeoutMs }),
             ...(security === undefined ? {} : {
                 "security.protocol": security.protocol.toLowerCase(),
@@ -937,7 +936,11 @@ class ConfluentConsumer {
                     }
                 }
             }
-        }, {});
+        }, {
+            // The native constructor replaces default_topic_conf with this object.
+            // Topic-specific options must not be left in the global config.
+            "auto.offset.reset": checkpoint.restoring ? "error" : "earliest"
+        });
         // The native API emits event.stats; stats_cb is a KafkaJS facade option,
         // not a native global callback accepted by configureCallbacks().
         if (statistics !== undefined)
