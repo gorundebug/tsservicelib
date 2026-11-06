@@ -10,6 +10,18 @@ function kafkaJS() {
     confluentKafka ??= require("@confluentinc/kafka-javascript");
     return confluentKafka.KafkaJS;
 }
+export class KafkaCheckpointError extends Error {
+}
+function validateCheckpoint(offsets) {
+    if (offsets === null)
+        return;
+    for (const [partition, next] of offsets) {
+        if (!Number.isSafeInteger(partition) || partition < 0 || partition > 0x7fffffff ||
+            typeof next !== "bigint" || next < 0n || next > BigInt(Number.MAX_SAFE_INTEGER)) {
+            throw new KafkaCheckpointError("Kafka checkpoint partition/next offset is not exactly representable by the native JavaScript client");
+        }
+    }
+}
 export class ConsumerMessage {
     key;
     value;
@@ -39,10 +51,9 @@ export class ConfluentKafkaClientFactory {
     constructor(metrics) {
         this.#metrics = metrics;
     }
-    consumer(brokers, groupId, connectionTimeoutMs, security) {
-        return new ConfluentConsumer(makeKafka(brokers, connectionTimeoutMs, this.#metrics, security).consumer({
-            kafkaJS: { groupId, fromBeginning: true, autoCommit: true, readUncommitted: false }
-        }));
+    consumer(brokers, groupId, connectionTimeoutMs, checkpoint, security) {
+        confluentKafka ??= require("@confluentinc/kafka-javascript");
+        return new ConfluentConsumer(confluentKafka, brokers, groupId, connectionTimeoutMs, checkpoint, this.#metrics, security);
     }
     admin(brokers, connectionTimeoutMs, security) {
         return new ConfluentAdmin(makeKafka(brokers, connectionTimeoutMs, undefined, security).admin());
@@ -126,6 +137,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
     createTopic;
     consumerGroup;
     #partitionCount = 1;
+    #restoring = false;
     #consumer;
     #binding;
     #run;
@@ -168,13 +180,32 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
             return;
         this.validate();
         checkActive();
+        if (this.#run !== undefined)
+            throw new Error(`Kafka endpoint ${this.name} already started`);
         const reconnect = new AbortController();
-        const consumer = await this.connectCurrentConsumer(context, checkActive);
+        const owner = context.withExternalCancellation(reconnect.signal);
         this.#reconnect = reconnect;
         this.#admissionStopped = false;
-        await this.#binding?.start(context);
-        checkActive();
-        this.#run = this.supervise(context, consumer, reconnect.signal);
+        await this.#binding?.start(owner);
+        this.#run = this.startConsumer(owner, () => {
+            checkActive();
+            assertKafkaStartupContext(owner);
+        }, reconnect.signal);
+    }
+    async startConsumer(context, checkActive, signal) {
+        try {
+            const initial = await this.#binding.restoreCheckpoint(context);
+            checkActive();
+            validateCheckpoint(initial);
+            this.#restoring = initial !== null;
+            const consumer = await this.connectCurrentConsumer(context, checkActive);
+            checkActive();
+            await this.supervise(context, consumer, signal);
+        }
+        catch (error) {
+            if (!signal.aborted && !context.cancelled())
+                await this.logReconnectFailure(context, error);
+        }
     }
     async stop(context) {
         await this.stopAdmission(context);
@@ -220,12 +251,13 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
                     if (signal.aborted || context.cancelled())
                         return;
                     await this.logReconnectFailure(context, error);
-                    if (this.#consumer !== undefined)
+                    if (this.#consumer !== undefined || error instanceof KafkaCheckpointError)
                         return;
                     continue;
                 }
             }
             let cleanupFailed = false;
+            let checkpointFailed = false;
             try {
                 await consumer.run(this.#partitionCount, async (record, control) => this.#binding?.handle(context, record, control));
                 if (!signal.aborted) {
@@ -233,6 +265,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
                 }
             }
             catch (error) {
+                checkpointFailed = error instanceof KafkaCheckpointError;
                 if (!signal.aborted)
                     await this.logReconnectFailure(context, error);
             }
@@ -247,7 +280,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
                 }
                 consumer = undefined;
             }
-            if (cleanupFailed)
+            if (cleanupFailed || checkpointFailed)
                 return;
             if (signal.aborted)
                 return;
@@ -263,7 +296,10 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
         const brokers = splitBrokers(config.brokers, dataSource.name);
         const consumer = dataSource
             .factory()
-            .consumer(brokers, this.consumerGroup, config.dialTimeout, kafkaSecurity(config));
+            .consumer(brokers, this.consumerGroup, config.dialTimeout, {
+            context, restoring: this.#restoring,
+            restore: () => this.#binding.restoreCheckpoint(context)
+        }, kafkaSecurity(config));
         this.#consumer = consumer;
         this.#connecting = true;
         try {
@@ -301,7 +337,7 @@ class KafkaSourceEndpoint extends DataSourceEndpoint {
     async logReconnectFailure(context, error) {
         this.runtimeEnvironment()
             .log()
-            .error(context, "Kafka consumer reconnect required", err(errorFromUnknown(error)));
+            .error(context, error instanceof KafkaCheckpointError ? "Kafka checkpoint recovery failed" : "Kafka consumer reconnect required", err(errorFromUnknown(error)));
         if (!context.signal().aborted) {
             try {
                 await this.#binding?.onError(context, errorFromUnknown(error));
@@ -490,7 +526,10 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
     handle(context, record, control) {
         if (!this.#started)
             return Promise.resolve();
-        return this.#tasks.admit(async (signal) => this.handleOnce(context, record, control, signal), context.signal());
+        return this.#tasks.admit(async (signal) => this.handleOnce(MessageContext.fromContext(context).withExternalCancellation(control.signal), record, control, signal), AbortSignal.any([context.signal(), control.signal]));
+    }
+    restoreCheckpoint(context) {
+        return this.#handler.restoreCheckpoint(MessageContext.fromContext(context), this.#streamContext);
     }
     onError(context, error) {
         return this.#handler.onError(MessageContext.fromContext(context), this.#streamContext, error);
@@ -630,7 +669,22 @@ class KafkaEndpointConsumer extends DataSourceEndpointConsumer {
                 this.#active += 1;
                 return;
             }
-            await new Promise((resolve) => this.#waiters.push(resolve));
+            let wake;
+            try {
+                await new Promise((resolve) => {
+                    wake = resolve;
+                    this.#waiters.push(wake);
+                    signal.addEventListener("abort", wake, { once: true });
+                    if (signal.aborted)
+                        wake();
+                });
+            }
+            finally {
+                signal.removeEventListener("abort", wake);
+                const index = this.#waiters.indexOf(wake);
+                if (index >= 0)
+                    this.#waiters.splice(index, 1);
+            }
         }
     }
     async consumeResult(context, value) {
@@ -829,19 +883,302 @@ async function waitForKafkaShutdown(context, operation) {
     if (result.status === "rejected")
         throw result.reason;
 }
+// Use the public native consumer API. The KafkaJS facade catches rebalance/fetch
+// errors and silently retries, which cannot implement strict image recovery.
 class ConfluentConsumer {
     #consumer;
-    #finishRun;
-    #disconnecting;
+    #checkpoint;
+    #codes;
+    #assignments = new Map();
+    #commits = new Set();
+    #tasks = new Set();
+    #topic = "";
+    #generation = 0;
     #stopping = false;
-    #activeBatches = 0;
-    #draining;
-    #finishDraining;
-    constructor(consumer) {
-        this.#consumer = consumer;
+    #failure;
+    #run;
+    #restoring;
+    #disconnecting;
+    constructor(module, brokers, groupId, connectionTimeoutMs, checkpoint, metrics, security) {
+        kafkaSecurityOptions(security); // Validate the same credentials as the other transports.
+        this.#checkpoint = checkpoint;
+        this.#codes = module.KafkaJS.ErrorCodes;
+        const statistics = metrics === undefined ? undefined : librdkafkaStatisticsOptions(metrics, "consumer");
+        this.#consumer = new module.KafkaConsumer({
+            ...statistics,
+            "bootstrap.servers": brokers.join(","), "group.id": groupId,
+            "partition.assignment.strategy": "roundrobin",
+            "isolation.level": "read_committed",
+            "enable.auto.commit": true, "enable.auto.offset.store": false,
+            "auto.offset.reset": checkpoint.restoring ? "error" : "earliest",
+            ...(connectionTimeoutMs === 0 ? {} : { "socket.timeout.ms": connectionTimeoutMs }),
+            ...(security === undefined ? {} : {
+                "security.protocol": security.protocol.toLowerCase(),
+                ...(security.protocol === "PLAINTEXT" ? {} : {
+                    "sasl.mechanisms": security.mechanism,
+                    ...(security.username === undefined ? {} : { "sasl.username": security.username }),
+                    ...(security.password === undefined ? {} : { "sasl.password": security.password })
+                })
+            }),
+            rebalance_cb: (error, partitions) => {
+                this.rebalance(error, partitions);
+            },
+            offset_commit_cb: (error, offsets) => {
+                for (const commit of this.#commits) {
+                    if (error || offsets.some((offset) => offset.topic === this.#topic &&
+                        offset.partition === commit.partition && offset.offset === commit.next)) {
+                        this.#commits.delete(commit);
+                        if (error)
+                            commit.reject(new Error(error.message, { cause: error }));
+                        else
+                            commit.resolve();
+                    }
+                }
+            }
+        }, {});
+        this.#consumer.setDefaultConsumeTimeout(100);
+        this.#consumer.on("event.error", (error) => this.fail(error));
+        this.#consumer.on("rebalance.error", (error) => this.fail(error));
     }
     connect() {
-        return this.#consumer.connect();
+        return new Promise((resolve, reject) => {
+            this.#consumer.connect({}, (error) => { if (error)
+                reject(error);
+            else
+                resolve(); });
+        });
+    }
+    async subscribe(topic) {
+        this.#topic = topic;
+        this.#consumer.subscribe([topic]);
+    }
+    invalidate() {
+        ++this.#generation;
+        const old = [...this.#assignments.values()];
+        this.#assignments.clear();
+        for (const assignment of old)
+            assignment.controller.abort(new Error("Kafka partition revoked"));
+    }
+    fail(failure) {
+        const code = "code" in failure ? failure.code : undefined;
+        let error = failure instanceof Error ? failure : new Error(failure.message, { cause: failure });
+        if (this.#checkpoint.restoring &&
+            (code === this.#codes.ERR_OFFSET_OUT_OF_RANGE || code === this.#codes.ERR__AUTO_OFFSET_RESET)) {
+            error = new KafkaCheckpointError(`Kafka checkpoint lost: ${error.message}`, { cause: error });
+        }
+        this.#failure ??= error;
+        this.invalidate();
+        for (const commit of this.#commits)
+            commit.reject(error);
+        this.#commits.clear();
+    }
+    rebalance(error, partitions) {
+        this.invalidate();
+        const generation = this.#generation;
+        if (error.code === this.#codes.ERR__REVOKE_PARTITIONS) {
+            try {
+                this.#consumer.unassign();
+            }
+            catch (failure) {
+                this.fail(errorFromUnknown(failure));
+            }
+            return;
+        }
+        if (error.code !== this.#codes.ERR__ASSIGN_PARTITIONS) {
+            this.fail(error);
+            return;
+        }
+        // Native callbacks do not apply an implicit assignment on return. The
+        // assignment stays closed while bounded metadata requests validate its cut.
+        const operation = this.restoreAssignment(generation, partitions);
+        this.#restoring = operation;
+        void operation.catch((failure) => {
+            if (generation !== this.#generation || this.#stopping)
+                return;
+            this.fail(new KafkaCheckpointError(`Kafka checkpoint restoration failed: ${errorFromUnknown(failure).message}`, { cause: failure }));
+            try {
+                this.#consumer.unassign();
+            }
+            catch { /* admission is already closed */ }
+        }).finally(() => { if (this.#restoring === operation)
+            this.#restoring = undefined; });
+    }
+    async restoreAssignment(generation, partitions) {
+        const selected = await this.#checkpoint.restore();
+        validateCheckpoint(selected);
+        if ((selected !== null) !== this.#checkpoint.restoring)
+            throw new KafkaCheckpointError("Kafka recovery mode changed during lifecycle");
+        // Copy the provider's map before the first asynchronous metadata request.
+        const offsets = selected === null ? null : new Map(selected);
+        const assignment = [];
+        for (const partition of partitions) {
+            if (generation !== this.#generation || this.#stopping || this.#failure || this.#checkpoint.context.cancelled())
+                return;
+            if (partition.topic !== this.#topic)
+                throw new KafkaCheckpointError("Kafka assigned an unexpected topic");
+            if (offsets === null) {
+                assignment.push(partition);
+                continue;
+            }
+            const next = offsets.get(partition.partition);
+            if (next === undefined)
+                throw new KafkaCheckpointError("Kafka checkpoint does not cover assigned partition");
+            const bounds = await new Promise((resolve, reject) => {
+                this.#consumer.queryWatermarkOffsets(partition.topic, partition.partition, 5000, (error, value) => { if (error)
+                    reject(error);
+                else
+                    resolve(value); });
+            });
+            if (!Number.isSafeInteger(bounds.lowOffset) || !Number.isSafeInteger(bounds.highOffset) ||
+                bounds.lowOffset < 0 || next < BigInt(bounds.lowOffset) || next > BigInt(bounds.highOffset))
+                throw new KafkaCheckpointError("Kafka checkpoint is outside retained log bounds");
+            assignment.push({ ...partition, offset: Number(next) });
+        }
+        if (generation !== this.#generation || this.#stopping || this.#failure || this.#checkpoint.context.cancelled())
+            return;
+        // Let already submitted old-generation commits settle before installing
+        // a new checkpoint on this same native consumer.
+        await Promise.allSettled([...this.#commits].map((commit) => commit.done));
+        if (generation !== this.#generation || this.#stopping || this.#failure || this.#checkpoint.context.cancelled())
+            return;
+        this.#consumer.assign(assignment);
+        for (const partition of partitions)
+            this.#assignments.set(partition.partition, { controller: new AbortController() });
+    }
+    run(concurrency, handler) {
+        if (this.#run !== undefined)
+            return Promise.reject(new Error("Kafka consumer already running"));
+        this.#run = this.consume(concurrency, handler);
+        return this.#run;
+    }
+    async consume(_concurrency, handler) {
+        try {
+            while ((!this.#stopping || this.#tasks.size > 0) && !this.#failure && !this.#checkpoint.context.cancelled()) {
+                const messages = await new Promise((resolve, reject) => {
+                    // Keep the previous KafkaJS facade's 32-record fetch batch. Per-stream
+                    // concurrency remains the endpoint handler's existing control.
+                    this.#consumer.consume(32, (error, values) => { if (error)
+                        reject(error);
+                    else
+                        resolve(values); });
+                });
+                // Keep polling while accepted callbacks drain: native asynchronous
+                // commit completion is dispatched by consumer polling.
+                if (this.#stopping)
+                    continue;
+                const partitions = new Map();
+                for (const message of messages) {
+                    if (message.topic !== this.#topic || !this.#assignments.has(message.partition))
+                        continue;
+                    const values = partitions.get(message.partition) ?? [];
+                    values.push(message);
+                    partitions.set(message.partition, values);
+                }
+                for (const [partition, values] of partitions) {
+                    const lease = this.#assignments.get(partition);
+                    this.#consumer.pause([{ topic: this.#topic, partition }]);
+                    const task = this.deliver(values, lease, handler);
+                    this.#tasks.add(task);
+                    void task.catch((error) => {
+                        if (this.current(partition, lease))
+                            this.fail(errorFromUnknown(error));
+                    }).finally(() => {
+                        this.#tasks.delete(task);
+                        if (this.current(partition, lease) && !this.#stopping) {
+                            try {
+                                this.#consumer.resume([{ topic: this.#topic, partition }]);
+                            }
+                            catch (error) {
+                                this.fail(errorFromUnknown(error));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        catch (error) {
+            this.fail(errorFromUnknown(error));
+        }
+        if (this.#failure || this.#checkpoint.context.cancelled())
+            this.invalidate();
+        await Promise.allSettled([...this.#tasks]);
+        if (this.#failure)
+            throw this.#failure;
+    }
+    current(partition, lease) {
+        return !this.#failure && !lease.controller.signal.aborted &&
+            !this.#checkpoint.context.cancelled() && this.#assignments.get(partition) === lease;
+    }
+    async deliver(messages, lease, handler) {
+        for (const message of messages) {
+            if (!this.current(message.partition, lease))
+                return;
+            if (!Number.isSafeInteger(message.offset) || !Number.isSafeInteger(message.offset + 1))
+                throw new KafkaCheckpointError("Kafka native offset cannot be represented exactly");
+            const record = nativeKafkaRecord(message);
+            let marked;
+            let committed = false;
+            const assertCurrent = () => {
+                if (!this.current(message.partition, lease))
+                    throw new Error("Kafka message belongs to a revoked assignment");
+            };
+            const commit = async (metadata) => {
+                assertCurrent();
+                let resolve;
+                let reject;
+                const done = new Promise((accept, fail) => { resolve = accept; reject = fail; });
+                const pending = { partition: message.partition, next: message.offset + 1, done, resolve, reject };
+                this.#commits.add(pending);
+                try {
+                    this.#consumer.commit({ topic: message.topic, partition: message.partition,
+                        offset: message.offset + 1, ...(metadata === undefined ? {} : { metadata }) });
+                }
+                catch (error) {
+                    this.#commits.delete(pending);
+                    reject(errorFromUnknown(error));
+                }
+                await done;
+                committed = true;
+            };
+            const control = {
+                signal: lease.controller.signal,
+                mark: (candidate, metadata) => {
+                    if (candidate !== record)
+                        throw new Error("Kafka control belongs to another message");
+                    assertCurrent();
+                    marked = metadata;
+                },
+                commit: async (candidate) => {
+                    if (candidate !== record)
+                        throw new Error("Kafka control belongs to another message");
+                    await commit();
+                }
+            };
+            await handler(record, control);
+            if (!this.current(message.partition, lease))
+                return;
+            if (committed)
+                continue;
+            if (marked === undefined) {
+                await new Promise((resolve, reject) => this.#consumer.seek({ topic: message.topic,
+                    partition: message.partition, offset: message.offset }, 5000, (error) => { if (error)
+                    reject(error);
+                else
+                    resolve(); }));
+                return;
+            }
+            if (marked.length > 0)
+                await commit(marked);
+            else
+                this.#consumer.offsetsStore([{ topic: message.topic, partition: message.partition, offset: message.offset + 1 }]);
+        }
+    }
+    async stop(context) {
+        this.#stopping = true;
+        const partitions = [...this.#assignments.keys()].map((partition) => ({ topic: this.#topic, partition }));
+        if (partitions.length > 0)
+            this.#consumer.pause(partitions);
+        await waitForKafkaShutdown(context, this.#run ?? Promise.resolve());
     }
     disconnect() {
         if (this.#disconnecting === undefined) {
@@ -851,139 +1188,33 @@ class ConfluentConsumer {
         }
         return this.#disconnecting;
     }
-    subscribe(topic) {
-        return this.#consumer.subscribe({ topic });
-    }
-    async stop(context) {
-        // The native KafkaJS stop() is not implemented. Do not disconnect until
-        // accepted batches finish: their final offset commits need the connection.
-        this.#stopping = true;
-        this.#draining ??= new Promise((resolve) => {
-            this.#finishDraining = resolve;
-        });
-        this.finishIfDrained();
-        await waitForKafkaShutdown(context, this.#draining);
-    }
-    finishIfDrained() {
-        if (!this.#stopping || this.#activeBatches !== 0)
-            return;
-        this.#finishDraining?.();
-        this.#finishDraining = undefined;
-        this.finishRun();
-    }
-    isStopping() {
-        return this.#stopping;
-    }
     async disconnectOnce() {
-        try {
-            await this.#consumer.disconnect();
-        }
-        finally {
-            this.finishRun();
-        }
-    }
-    async run(concurrency, handler) {
-        if (this.#finishRun !== undefined)
-            throw new Error("Kafka consumer is already running");
-        let finish;
-        const lifetime = new Promise((resolve) => {
-            finish = resolve;
-        });
-        this.#finishRun = finish;
-        try {
-            await this.#consumer.run({
-                partitionsConsumedConcurrently: Math.max(1, concurrency),
-                eachBatchAutoResolve: false,
-                eachBatch: async (payload) => {
-                    if (this.#stopping) {
-                        payload.pause();
-                        return;
-                    }
-                    this.#activeBatches += 1;
-                    try {
-                        const { batch } = payload;
-                        for (const message of batch.messages) {
-                            if (this.isStopping() || !payload.isRunning() || payload.isStale())
-                                break;
-                            const record = kafkaRecord(batch.topic, batch.partition, message);
-                            const control = new ConfluentMessageControl(this.#consumer, record, (offset) => {
-                                payload.resolveOffset(offset);
-                            }, async () => payload.commitOffsetsIfNecessary());
-                            await handler(record, control);
-                            if (!(await control.complete()))
-                                break;
-                            await payload.heartbeat();
-                        }
-                    }
-                    finally {
-                        this.#activeBatches -= 1;
-                        this.finishIfDrained();
-                    }
-                }
-            });
-            await lifetime;
-        }
-        finally {
-            if (this.#finishRun === finish)
-                this.#finishRun = undefined;
-        }
-    }
-    finishRun() {
-        this.#finishRun?.();
+        this.#stopping = true;
+        this.invalidate();
+        for (const commit of this.#commits)
+            commit.reject(new Error("Kafka consumer disconnected"));
+        this.#commits.clear();
+        await Promise.allSettled([...(this.#run ? [this.#run] : []), ...(this.#restoring ? [this.#restoring] : [])]);
+        if (!this.#consumer.isConnected())
+            return;
+        await new Promise((resolve, reject) => this.#consumer.disconnect((error) => {
+            if (error)
+                reject(error);
+            else
+                resolve();
+        }));
     }
 }
-/**
- * The KafkaJS-compatible runtime stores an eachMessage offset only when its
- * callback completes successfully. Keep that decision local to the message:
- * MarkMessage permits the callback to complete, while an unmarked message is
- * rejected so the client seeks it again. The published 1.9 runtime does not
- * implement its declared storeOffsets method; non-empty metadata is therefore
- * committed explicitly instead of being silently discarded.
- */
-class ConfluentMessageControl {
-    #consumer;
-    #record;
-    #resolveOffset;
-    #commitOffsetsIfNecessary;
-    #marked = false;
-    #committed = false;
-    #metadata = "";
-    constructor(consumer, record, resolveOffset, commitOffsetsIfNecessary) {
-        this.#consumer = consumer;
-        this.#record = record;
-        this.#resolveOffset = resolveOffset;
-        this.#commitOffsetsIfNecessary = commitOffsetsIfNecessary;
+function nativeKafkaRecord(message) {
+    const headers = new Map();
+    for (const header of message.headers ?? []) {
+        for (const [key, value] of Object.entries(header))
+            if (value !== undefined)
+                headers.set(key, Buffer.from(value));
     }
-    mark(record, metadata) {
-        this.requireRecord(record);
-        this.#marked = true;
-        this.#metadata = metadata;
-    }
-    async commit(record) {
-        this.requireRecord(record);
-        await this.#consumer.commitOffsets([nextOffset(record)]);
-        this.#resolveOffset(String(record.offset));
-        this.#committed = true;
-    }
-    async complete() {
-        if (this.#committed)
-            return true;
-        if (!this.#marked)
-            return false;
-        if (this.#metadata.length > 0) {
-            await this.#consumer.commitOffsets([nextOffset(this.#record, this.#metadata)]);
-            this.#resolveOffset(String(this.#record.offset));
-            return true;
-        }
-        this.#resolveOffset(String(this.#record.offset));
-        await this.#commitOffsetsIfNecessary();
-        return true;
-    }
-    requireRecord(record) {
-        if (record !== this.#record) {
-            throw new Error("Kafka consumer control belongs to another message");
-        }
-    }
+    return { topic: message.topic, partition: message.partition, offset: BigInt(message.offset),
+        key: message.key === null || message.key === undefined ? undefined : Buffer.from(message.key),
+        value: message.value === null ? new Uint8Array() : new Uint8Array(message.value), headers };
 }
 class ConfluentAdmin {
     #admin;
@@ -1030,29 +1261,5 @@ function metadataTopics(value) {
         }
         return { name: topic.name, partitions: topic.partitions };
     });
-}
-function kafkaRecord(topic, partition, message) {
-    const headers = new Map();
-    for (const [name, raw] of Object.entries(message.headers ?? {})) {
-        const first = Array.isArray(raw) ? raw[0] : raw;
-        if (first !== undefined)
-            headers.set(name, Buffer.from(first));
-    }
-    return {
-        topic,
-        partition,
-        offset: BigInt(message.offset),
-        key: message.key === null ? undefined : new Uint8Array(message.key),
-        value: message.value === null ? new Uint8Array() : new Uint8Array(message.value),
-        headers
-    };
-}
-function nextOffset(record, metadata) {
-    return {
-        topic: record.topic,
-        partition: record.partition,
-        offset: String(record.offset + 1n),
-        ...(metadata === undefined ? {} : { metadata })
-    };
 }
 //# sourceMappingURL=confluent.js.map

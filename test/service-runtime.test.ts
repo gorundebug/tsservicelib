@@ -429,3 +429,64 @@ await test("stop during startup cancels admission and rolls back every started c
   assert.equal(tasks.accepting(), false);
   assert.deepEqual(events, ["start:first", "start:second", "stop:first"]);
 });
+
+await test("graph-only startup keeps sources and managed/HTTP admission closed", async () => {
+  const context = Context.background();
+  const events: string[] = [];
+  const runtime = new ServiceRuntime(makeTestEnvironment([]));
+  const managed = {
+    ...lifecycle("managed", events),
+    startAdmission: async (): Promise<void> => {
+      events.push("admission:managed");
+    },
+    stopAdmission: async (): Promise<void> => {}
+  };
+  runtime.register({ category: "managedDataConnector", name: "managed", lifecycle: managed });
+  runtime.register({
+    category: "storage",
+    name: "storage",
+    lifecycle: lifecycle("storage", events)
+  });
+  runtime.register({ category: "dataSink", name: "sink", lifecycle: lifecycle("sink", events) });
+  runtime.register({
+    category: "dataSource",
+    name: "source",
+    lifecycle: lifecycle("source", events, true)
+  });
+  runtime.register({
+    category: "httpServer",
+    name: "http",
+    lifecycle: lifecycle("http", events, true)
+  });
+  await runtime.startGraph(context);
+  assert.deepEqual(events, ["start:managed", "start:storage", "start:sink"]);
+  const before = [...events];
+  await assert.rejects(runtime.startGraph(context), /cannot start/);
+  await assert.rejects(runtime.start(context), /cannot start/);
+  assert.deepEqual(events, before);
+  await runtime.stop(context);
+  assert.deepEqual(events, [...before, "stop:storage", "stop:sink", "stop:managed"]);
+});
+
+await test("graph-only startup failure rolls back without opening sources", async () => {
+  const events: string[] = [];
+  const runtime = new ServiceRuntime(makeTestEnvironment([]));
+  runtime.register({
+    category: "storage",
+    name: "storage",
+    lifecycle: lifecycle("storage", events)
+  });
+  runtime.register({
+    category: "dataSink",
+    name: "sink",
+    lifecycle: lifecycle("sink", events, true)
+  });
+  runtime.register({
+    category: "dataSource",
+    name: "source",
+    lifecycle: lifecycle("source", events)
+  });
+  await assert.rejects(runtime.startGraph(Context.background()), /failed:sink/);
+  assert.deepEqual(events, ["start:storage", "start:sink", "stop:storage"]);
+  assert.equal(runtime.state(), "stopped");
+});

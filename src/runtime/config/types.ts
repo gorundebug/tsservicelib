@@ -386,7 +386,7 @@ export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
   readonly maximumAttempts: number;
 }
 
-export type CustomEndpointConfig = EndpointConfig & FunctionConfig;
+export type CustomEndpointConfig = EndpointConfig & FunctionConfig & { readonly enabled: boolean };
 
 export type AnyEndpointConfig =
   | HttpEndpointConfig
@@ -719,7 +719,7 @@ export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocume
   readonly maxConcurrentWorkflowTasks?: number | undefined;
 }
 
-export type CustomEndpointConfigDocument = EndpointConfigDocumentBase;
+export type CustomEndpointConfigDocument = EndpointConfigDocumentBase & { readonly enabled?: boolean | undefined };
 
 export interface PoolConfigDocument {
   readonly name: string;

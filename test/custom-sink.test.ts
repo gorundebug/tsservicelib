@@ -66,6 +66,7 @@ const connectorConfig: CustomDataConnectorConfig = {
   properties: {}
 };
 const endpointConfig: CustomEndpointConfig = {
+  enabled: false,
   id: 100,
   name: "customSink",
   idDataConnector: 10,

@@ -8,7 +8,12 @@ export declare class ServiceRuntime {
     tasks(): RuntimeTaskRegistry;
     state(): "created" | "starting" | "running" | "stopping" | "stopped";
     register(component: RuntimeComponent): void;
+    /** Start resources and sinks without datasource, managed or HTTP admission.
+     * Choose startGraph OR start once per lifecycle, then stop either mode.
+     */
+    startGraph(context: Context): Promise<void>;
     start(context: Context): Promise<void>;
+    private startMode;
     private startOnce;
     stop(context: Context, drainTimeoutMs?: number): Promise<void>;
     private stopOnce;

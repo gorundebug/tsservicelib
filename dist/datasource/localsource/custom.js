@@ -1,3 +1,4 @@
+import { requireCustomEndpointConfig } from "../../runtime/config/custom.js";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import { applyDataSourceEndpointTracing, DataConnectorType, DataSourceEndpoint, DataSourceEndpointConsumer, FunctionCollector, InputDataSource, RotatingMap, RuntimeTaskRegistry, err, errorFromUnknown, makeStreamContext, newStreamId, spanError, str, stringAttribute } from "../../runtime/index.js";
 const PENDING_ROTATION_INTERVAL_MS = 30_000;
@@ -82,6 +83,8 @@ class CustomSourceEndpoint extends DataSourceEndpoint {
         return this.#binding?.handle(context, value);
     }
     async start(context) {
+        if (!requireCustomEndpointConfig(this.config()).enabled)
+            return;
         if (this.#started)
             throw new Error(`custom endpoint ${this.name} is already started`);
         const binding = this.#binding;

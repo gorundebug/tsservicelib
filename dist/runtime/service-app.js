@@ -97,6 +97,15 @@ export class ServiceApp {
     metricsEngine() {
         return this.#metricsEngine;
     }
+    /** Run the graph explicitly without opening sources or HTTP admission.
+     * Choose startGraph OR start once per lifecycle; stop releases either mode.
+     */
+    startGraph(context) {
+        if (this.#runtime.state() === "created")
+            this.#ownerContext = context;
+        this.prepare();
+        return this.#runtime.startGraph(context);
+    }
     start(context) {
         if (this.#runtime.state() === "created")
             this.#ownerContext = context;

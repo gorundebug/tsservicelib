@@ -253,7 +253,9 @@ export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
     readonly activityHeartbeatTimeout: number;
     readonly maximumAttempts: number;
 }
-export type CustomEndpointConfig = EndpointConfig & FunctionConfig;
+export type CustomEndpointConfig = EndpointConfig & FunctionConfig & {
+    readonly enabled: boolean;
+};
 export type AnyEndpointConfig = HttpEndpointConfig | GrpcEndpointConfig | KafkaEndpointConfig | CronEndpointConfig | TemporalEndpointConfig | CustomEndpointConfig;
 export interface PoolConfig {
     readonly name: string;
@@ -528,7 +530,9 @@ export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocume
     readonly maxConcurrentActivities?: number | undefined;
     readonly maxConcurrentWorkflowTasks?: number | undefined;
 }
-export type CustomEndpointConfigDocument = EndpointConfigDocumentBase;
+export type CustomEndpointConfigDocument = EndpointConfigDocumentBase & {
+    readonly enabled?: boolean | undefined;
+};
 export interface PoolConfigDocument {
     readonly name: string;
     readonly executorsCount: number;

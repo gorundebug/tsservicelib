@@ -17,7 +17,7 @@ import {
   stringSerdeType,
   type Consumer,
   type DataConnectorConfig,
-  type EndpointConfig,
+  type CustomEndpointConfig,
   type InputStreamConfig,
   type StreamConfig,
   type StreamContext,
@@ -64,7 +64,8 @@ const connector: DataConnectorConfig = {
   type: 4,
   implementation: "custom"
 };
-const endpoint: EndpointConfig = {
+const endpoint: CustomEndpointConfig = {
+  enabled: true,
   id: 100,
   name: "customInput",
   properties: {},
@@ -183,10 +184,10 @@ await test("custom source preserves the Go handler lifecycle and result correlat
   assert.equal(producer.stopped, true);
 });
 
-function makeLifecycleHarness(producer: DataProducer<string> = new Producer()) {
+function makeLifecycleHarness(producer: DataProducer<string> = new Producer(), enabled = true) {
   const environment = makeTestEnvironment([inputConfig, resultConfig], {
     dataConnectors: [connector],
-    endpoints: [endpoint]
+    endpoints: [{ ...endpoint, enabled } as CustomEndpointConfig]
   });
   environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
   const input = makeInputStream<string, string, Error>(inputConfig, environment);
@@ -313,4 +314,15 @@ await test("custom source drain timeout preserves the running producer until ret
     await retry;
     await harness.dataSource.stop(owner);
   }
+});
+
+await test("disabled custom source does not start or stop the producer", async () => {
+  const producer = new Producer();
+  const { dataSource } = makeLifecycleHarness(producer, false);
+  const context = Context.background();
+  await dataSource.start(context);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(producer.started, false);
+  await dataSource.stop(context);
+  assert.equal(producer.stopped, false);
 });

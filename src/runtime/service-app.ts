@@ -164,6 +164,15 @@ export class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     return this.#metricsEngine;
   }
 
+  /** Run the graph explicitly without opening sources or HTTP admission.
+   * Choose startGraph OR start once per lifecycle; stop releases either mode.
+   */
+  public startGraph(context: Context): Promise<void> {
+    if (this.#runtime.state() === "created") this.#ownerContext = context;
+    this.prepare();
+    return this.#runtime.startGraph(context);
+  }
+
   public start(context: Context): Promise<void> {
     if (this.#runtime.state() === "created") this.#ownerContext = context;
     this.prepare();
@@ -300,7 +309,10 @@ function makeRuntimePools(
   return { task, priority };
 }
 
-function reportAsyncFailure(logger: Logger, message: string): (error: unknown, context: Context) => void {
+function reportAsyncFailure(
+  logger: Logger,
+  message: string
+): (error: unknown, context: Context) => void {
   return (error: unknown, context: Context): void => {
     try {
       logger.error(context, message, err(errorFromUnknown(error)));

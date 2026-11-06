@@ -25,6 +25,10 @@ export declare class ServiceApp<T extends CanonicalConfig = CanonicalConfig> {
     environment(): ServiceEnvironment<T>;
     runtime(): ServiceRuntime;
     metricsEngine(): ServiceMetricsEngine;
+    /** Run the graph explicitly without opening sources or HTTP admission.
+     * Choose startGraph OR start once per lifecycle; stop releases either mode.
+     */
+    startGraph(context: Context): Promise<void>;
     start(context: Context): Promise<void>;
     stop(context: Context, drainTimeoutMs?: number): Promise<void>;
     private prepare;

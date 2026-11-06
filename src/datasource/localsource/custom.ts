@@ -1,3 +1,4 @@
+import { requireCustomEndpointConfig } from "../../runtime/config/custom.js";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
 import {
   applyDataSourceEndpointTracing,
@@ -176,6 +177,7 @@ class CustomSourceEndpoint<T> extends DataSourceEndpoint implements Consumer<T> 
   }
 
   public async start(context: Context): Promise<void> {
+    if (!requireCustomEndpointConfig(this.config()).enabled) return;
     if (this.#started) throw new Error(`custom endpoint ${this.name} is already started`);
     const binding = this.#binding;
     if (binding === undefined) throw new Error(`custom endpoint ${this.name} has no consumer`);

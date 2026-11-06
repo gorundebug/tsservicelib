@@ -81,23 +81,35 @@ export class ServiceRuntime {
     this.#components.push(component);
   }
 
+  /** Start resources and sinks without datasource, managed or HTTP admission.
+   * Choose startGraph OR start once per lifecycle, then stop either mode.
+   */
+  public startGraph(context: Context): Promise<void> {
+    return this.startMode(context, false);
+  }
+
   public start(context: Context): Promise<void> {
+    return this.startMode(context, true);
+  }
+
+  private startMode(context: Context, admission: boolean): Promise<void> {
     if (this.#state !== "created") {
       return Promise.reject(new Error(`runtime cannot start from state ${this.#state}`));
     }
     this.#state = "starting";
     this.#startupPending = true;
     const startupContext = context.withExternalCancellation(this.#startupController.signal);
-    this.#startPromise = this.startOnce(startupContext);
+    this.#startPromise = this.startOnce(startupContext, admission);
     return this.#startPromise;
   }
 
-  private async startOnce(context: Context): Promise<void> {
+  private async startOnce(context: Context, admission: boolean): Promise<void> {
     try {
       await this.#environment.buildRuntimeStreams();
       context.signal().throwIfAborted();
       this.#environment.validateRuntimeTopology();
       for (const category of START_ORDER) {
+        if (!admission && (category === "dataSource" || category === "httpServer")) continue;
         if (category === "dataSource") {
           for (const component of this.#started.filter(
             (item) => item.category === "managedDataConnector"

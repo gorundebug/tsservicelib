@@ -791,7 +791,7 @@ function parseEndpoint(source: RecordValue, path: string): AnyEndpointConfig {
           "Skip"
         ] as const) ?? "Skip"
     };
-  return { ...common, ...functions };
+  return { ...common, ...functions, enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? false };
 }
 
 const linkKeys = new Set(["from", "to", "callSemantics", "poolName", "priority", "async"]);

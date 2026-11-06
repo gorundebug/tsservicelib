@@ -7,7 +7,17 @@ export interface KafkaRecord {
     readonly value: Uint8Array;
     readonly headers: ReadonlyMap<string, Uint8Array>;
 }
+export type CheckpointOffsets = ReadonlyMap<number, bigint>;
+export declare class KafkaCheckpointError extends Error {
+}
+/** Explicit transport input; the provider only reads already restored state. */
+export interface KafkaCheckpointRecovery {
+    readonly context: Context;
+    readonly restoring: boolean;
+    readonly restore: () => CheckpointOffsets | null | Promise<CheckpointOffsets | null>;
+}
 export interface KafkaConsumerControl {
+    readonly signal: AbortSignal;
     mark(record: KafkaRecord, metadata: string): void;
     commit(record: KafkaRecord): Promise<void>;
 }
@@ -37,7 +47,7 @@ export interface KafkaAdmin {
     disconnect(): Promise<void>;
 }
 export interface KafkaClientFactory {
-    consumer(brokers: readonly string[], groupId: string, connectionTimeoutMs: number, security?: KafkaSecurity): KafkaConsumer;
+    consumer(brokers: readonly string[], groupId: string, connectionTimeoutMs: number, checkpoint: KafkaCheckpointRecovery, security?: KafkaSecurity): KafkaConsumer;
     admin(brokers: readonly string[], connectionTimeoutMs: number, security?: KafkaSecurity): KafkaAdmin;
 }
 interface KafkaSecurity {
@@ -49,7 +59,7 @@ interface KafkaSecurity {
 export declare class ConfluentKafkaClientFactory implements KafkaClientFactory {
     #private;
     constructor(metrics?: Metrics);
-    consumer(brokers: readonly string[], groupId: string, connectionTimeoutMs: number, security?: KafkaSecurity): KafkaConsumer;
+    consumer(brokers: readonly string[], groupId: string, connectionTimeoutMs: number, checkpoint: KafkaCheckpointRecovery, security?: KafkaSecurity): KafkaConsumer;
     admin(brokers: readonly string[], connectionTimeoutMs: number, security?: KafkaSecurity): KafkaAdmin;
 }
 export type ResultCallback<HandlerState, T, R, E> = (context: MessageContext, stream: StreamContext<T, R, E>, handlerState: HandlerState, value: Readonly<R>) => boolean | Promise<boolean>;
@@ -58,6 +68,7 @@ export interface ResultContext<HandlerState, T, R, E> {
     done(): void;
 }
 export interface EndpointHandler<HandlerState, T, R, E> {
+    restoreCheckpoint(context: MessageContext, stream: StreamContext<T, R, E>): CheckpointOffsets | null | Promise<CheckpointOffsets | null>;
     /** Transport errors have no message state and do not select retry/ACK policy. */
     onError(context: MessageContext, stream: StreamContext<T, R, E>, error: Error): Completion;
     concurrency(stream: StreamContext<T, R, E>): number;

@@ -180,6 +180,7 @@ class ReconnectingFactory implements KafkaClientFactory {
 }
 
 class Control implements KafkaConsumerControl {
+  public readonly signal = new AbortController().signal;
   public readonly marked: string[] = [];
   public commits = 0;
   public mark(record: KafkaRecord, metadata: string): void {
@@ -200,6 +201,7 @@ class Handler implements EndpointHandler<undefined, string, string, Error> {
   public readonly events: string[] = [];
   public beginStreamId: string | undefined;
   public consumeStreamId: string | undefined;
+  public restoreCheckpoint(): ReadonlyMap<number, bigint> | null { return null; }
   public concurrency(): number {
     return 1;
   }
@@ -386,7 +388,10 @@ await test("Kafka message and pending-store contexts inherit the source owner", 
   const owner = new MessageContext(cancellation.signal).bounded(60_000).withSampling(true);
   await dataSource.start(owner);
   try {
-    assert.equal(rotations.mock.calls[0]?.arguments[0], owner);
+    const rotationOwner = rotations.mock.calls[0]?.arguments[0];
+    assert.ok(rotationOwner);
+    assert.equal(rotationOwner.deadline(), owner.deadline());
+    assert.equal(rotationOwner.cancelled(), false);
     const control = new Control();
     await factory.consumerInstance.feed(record, control);
     const received = begin.mock.calls[0]?.arguments[0];
@@ -397,6 +402,7 @@ await test("Kafka message and pending-store contexts inherit the source owner", 
     const failure = new Error("source owner cancelled");
     cancellation.abort(failure);
     assert.equal(received.cancelled(), true);
+    assert.equal(rotationOwner.cancelled(), true);
     assert.equal(received.signal().reason, failure);
     const next = new Control();
     await assert.rejects(factory.consumerInstance.feed(record, next),
@@ -647,7 +653,7 @@ await test("Kafka startup deadline is not reported as a shutdown timeout", async
 
 for (const kind of ["admin", "consumer"] as const) {
   await test(`Kafka failed ${kind} connection preserves primary error and retries failed cleanup`, async (t) => {
-    const { dataSource, factory } = makeContextHarness();
+    const { dataSource, factory, handler } = makeContextHarness();
     const client = kind === "admin" ? factory.adminInstance : factory.consumerInstance;
     const failure = new Error(`${kind} connect failed`);
     const cleanupFailure = new Error(`${kind} cleanup failed`);
@@ -658,7 +664,19 @@ for (const kind of ["admin", "consumer"] as const) {
       if (!allowCleanup) throw cleanupFailure;
       await disconnect();
     });
-    await assert.rejects(dataSource.start(new Context()), (error) => error === failure);
+    if (kind === "admin") {
+      await assert.rejects(dataSource.start(new Context()), (error) => error === failure);
+    } else {
+      const reported = Promise.withResolvers<Error>();
+      const errors: Error[] = [];
+      t.mock.method(handler, "onError", (_context: MessageContext, _stream: StreamContext<string, string, Error>, error: Error) => {
+        errors.push(error);
+        if (error === failure) reported.resolve(error);
+      });
+      await dataSource.start(new Context());
+      assert.equal(await reported.promise, failure);
+      assert.deepEqual(errors, [cleanupFailure, failure]);
+    }
     assert.ok(close.mock.calls.length >= 1);
     await assert.rejects(dataSource.start(new Context()), /already started/);
     allowCleanup = true;
@@ -678,13 +696,14 @@ await test("Kafka stop during startup prevents a late connection from starting c
   t.mock.method(consumer, "connect", async () => { entered.resolve(undefined); await release.promise; await connect(); });
   const runs = t.mock.method(consumer, "run");
   const starting = dataSource.start(new Context());
-  const rejected = assert.rejects(starting, /stopped during startup/);
+
   try {
     await entered.promise;
+    await starting;
     await assert.rejects(dataSource.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
   } finally {
     release.resolve(undefined);
-    await rejected;
+    await starting;
     await dataSource.stop(new Context().bounded(2_000));
   }
   assert.equal(consumer.connected, false);

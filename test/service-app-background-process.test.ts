@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-for (const kind of ["fifo", "priority", "delay", "parallel"] as const) {
-  for (const brokenLogger of [false, true]) {
-    await test(`ServiceApp ${kind} keeps background failure fatal, brokenLogger=${String(brokenLogger)}`, () => {
-      const child = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
+for (const graphOnly of [false, true]) {
+  for (const kind of ["fifo", "priority", "delay", "parallel"] as const) {
+    for (const brokenLogger of [false, true]) {
+      await test(`ServiceApp ${graphOnly ? "graph" : "full"} ${kind} keeps background failure fatal, brokenLogger=${String(brokenLogger)}`, () => {
+        const child = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `
         import { Context, MessageContext, ServiceApp, RuntimeConfig, RuntimeConfigStore,
           NoopMetricsEngine, noopLogger } from '@gorundebug/tsservicelib/runtime';
         const kind = ${JSON.stringify(kind)};
@@ -33,7 +34,7 @@ for (const kind of ["fifo", "priority", "delay", "parallel"] as const) {
         }};
         const app = new ServiceApp(new RuntimeConfigStore(new RuntimeConfig(config)), 1,
           {logger, metricsEngine: new NoopMetricsEngine()});
-        await app.start(new MessageContext().withStreamId('service-owner'));
+        await app.${graphOnly ? "startGraph" : "start"}(new MessageContext().withStreamId('service-owner'));
         const callback = () => { throw new Error('service-background-original'); };
         const context = new MessageContext().withStreamId('task-owner');
         if (kind === 'fifo') app.environment().taskPool('workers').addTask(context, callback);
@@ -42,15 +43,16 @@ for (const kind of ["fifo", "priority", "delay", "parallel"] as const) {
         else app.runtime().tasks().admitDetachedWithContext(context, async () => callback());
         setTimeout(() => console.log('unexpected-process-survival'), 50);
       `
-        ],
-        { encoding: "utf8", timeout: 3000 }
-      );
-      assert.equal(child.error, undefined);
-      assert.equal(child.signal, null);
-      assert.equal(child.status, 1, `${child.stdout}\n${child.stderr}`);
-      assert.match(child.stderr, /service-background-original/);
-      assert.match(child.stdout, /error-owner:task-owner/);
-      assert.doesNotMatch(child.stdout, /unexpected-process-survival/);
-    });
+          ],
+          { encoding: "utf8", timeout: 3000 }
+        );
+        assert.equal(child.error, undefined);
+        assert.equal(child.signal, null);
+        assert.equal(child.status, 1, `${child.stdout}\n${child.stderr}`);
+        assert.match(child.stderr, /service-background-original/);
+        assert.match(child.stdout, /error-owner:task-owner/);
+        assert.doesNotMatch(child.stdout, /unexpected-process-survival/);
+      });
+    }
   }
 }

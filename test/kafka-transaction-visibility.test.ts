@@ -26,6 +26,7 @@ import { makeTestEnvironment } from "./support/environment.js";
 
 class Handler implements EndpointHandler<undefined, string, string, Error> {
   public readonly errors: Error[] = [];
+  public restoreCheckpoint(): ReadonlyMap<number, bigint> | null { return null; }
   public concurrency(): number {
     return 2;
   }
