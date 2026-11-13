@@ -9,6 +9,38 @@ import {
   makeServiceMetricsEngine
 } from "@gorundebug/tsservicelib/runtime";
 
+await test("endpoint protocol labels export in both registration orders", async () => {
+  for (const protocols of [
+    ["", "grpc"],
+    ["grpc", ""]
+  ]) {
+    const metrics = new PrometheusMetrics();
+    for (const prefix of ["datasource_endpoint", "datasink_endpoint"]) {
+      for (const protocol of protocols) {
+        metrics
+          .scope(prefix, { connector: "connector", endpoint: protocol || "http", protocol })
+          .counter("messages_total", "Processed messages")
+          .inc(Context.background());
+      }
+    }
+    const engine = new PrometheusMetricsEngine(metrics);
+    const output = await engine.render();
+    for (const prefix of ["datasource_endpoint", "datasink_endpoint"]) {
+      assert.ok(
+        output.includes(
+          `${prefix}_messages_total{connector="connector",endpoint="http",protocol=""} 1`
+        )
+      );
+      assert.ok(
+        output.includes(
+          `${prefix}_messages_total{connector="connector",endpoint="grpc",protocol="grpc"} 1`
+        )
+      );
+    }
+    await engine.shutdown(Context.background());
+  }
+});
+
 await test("Prometheus metrics render canonical scoped families and observations", async () => {
   const metrics = new PrometheusMetrics();
   const first = metrics.scope("datasource_endpoint", {
