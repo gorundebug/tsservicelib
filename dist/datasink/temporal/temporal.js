@@ -58,15 +58,17 @@ class TemporalSinkConsumer {
     stream;
     handler;
     withResult;
+    options;
     #traceAttributes;
     #tracer;
-    constructor(sinkEndpoint, dataSink, connector, stream, handler, withResult) {
+    constructor(sinkEndpoint, dataSink, connector, stream, handler, withResult, options) {
         this.sinkEndpoint = sinkEndpoint;
         this.dataSink = dataSink;
         this.connector = connector;
         this.stream = stream;
         this.handler = handler;
         this.withResult = withResult;
+        this.options = options;
         this.#tracer = stream
             .runtimeEnvironment()
             .tracing()
@@ -108,7 +110,9 @@ class TemporalSinkConsumer {
                 firedAtUnixMillis: 0,
                 payload: this.stream.inputSerde().serialize(value)
             };
-            const result = await this.connector.submitEndpoint(context, this.sinkEndpoint.id, envelope, this.withResult);
+            const result = this.options === undefined
+                ? await this.connector.submitEndpoint(context, this.sinkEndpoint.id, envelope, this.withResult)
+                : await this.connector.submitEndpointWithOptions(context, this.sinkEndpoint.id, envelope, this.withResult, this.options(context, value));
             if (this.withResult) {
                 const resultStream = this.stream;
                 await resultStream.consumeResult(context, resultStream.serde().deserialize(result.payload));
@@ -128,19 +132,19 @@ class TemporalSinkConsumer {
         }
     }
 }
-export function makeTemporalSinkEndpointConsumer(stream) {
-    return makeTemporalSinkEndpointConsumerWithHandler(stream, new DirectTemporalEndpointHandler());
+export function makeTemporalSinkEndpointConsumer(stream, options) {
+    return makeTemporalSinkEndpointConsumerWithHandler(stream, new DirectTemporalEndpointHandler(), options);
 }
-export function makeTemporalSinkEndpointConsumerWithHandler(stream, handler) {
-    return makeSinkConsumer(stream, handler, false);
+export function makeTemporalSinkEndpointConsumerWithHandler(stream, handler, options) {
+    return makeSinkConsumer(stream, handler, false, options);
 }
-export function makeTemporalSinkEndpointConsumerWithResult(stream) {
-    return makeTemporalSinkEndpointConsumerWithResultHandler(stream, new DirectTemporalEndpointHandler());
+export function makeTemporalSinkEndpointConsumerWithResult(stream, options) {
+    return makeTemporalSinkEndpointConsumerWithResultHandler(stream, new DirectTemporalEndpointHandler(), options);
 }
-export function makeTemporalSinkEndpointConsumerWithResultHandler(stream, handler) {
-    return makeSinkConsumer(stream, handler, true);
+export function makeTemporalSinkEndpointConsumerWithResultHandler(stream, handler, options) {
+    return makeSinkConsumer(stream, handler, true, options);
 }
-function makeSinkConsumer(stream, handler, withResult) {
+function makeSinkConsumer(stream, handler, withResult, options) {
     const environment = stream.runtimeEnvironment();
     const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
     if (endpointConfig === undefined) {
@@ -153,7 +157,7 @@ function makeSinkConsumer(stream, handler, withResult) {
         throw new Error(`Temporal endpoint ${endpointConfig.name} has an invalid runtime type`);
     }
     const endpoint = existing ?? new DataSinkEndpoint(dataSink, endpointConfig.id);
-    const consumer = new TemporalSinkConsumer(endpoint, dataSink, connector, stream, handler, withResult);
+    const consumer = new TemporalSinkConsumer(endpoint, dataSink, connector, stream, handler, withResult, options);
     connector.registerEndpointSubmission(endpointConfig.id);
     endpoint.addEndpointConsumer(consumer);
     if (existing === undefined)

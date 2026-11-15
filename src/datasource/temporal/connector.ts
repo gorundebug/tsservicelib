@@ -51,6 +51,8 @@ import {
   temporalWorkflowClientInterceptor
 } from "./context-propagation.js";
 
+import { resolveSubmissionQueue, type SubmissionOptions } from "./submission-options.js";
+
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
 const CALL_ID = "servicelib.callId";
@@ -335,6 +337,16 @@ export class TemporalConnector implements ManagedDataConnector {
     envelope: EndpointEnvelope,
     waitForResult: boolean
   ): Promise<EndpointResult> {
+    return this.submitEndpointWithOptions(context, endpointId, envelope, waitForResult, {});
+  }
+
+  public async submitEndpointWithOptions(
+    context: MessageContext,
+    endpointId: number,
+    envelope: EndpointEnvelope,
+    waitForResult: boolean,
+    options: SubmissionOptions
+  ): Promise<EndpointResult> {
     if (!this.#started) throw new Error(`Temporal connector ${this.name} is not started`);
     const registration = this.#endpoints.get(endpointId);
     if (registration === undefined) {
@@ -342,6 +354,11 @@ export class TemporalConnector implements ManagedDataConnector {
     }
     const config = this.endpointConfig(endpointId);
     if (!config.enabled) throw new Error(`Temporal endpoint ${config.name} is disabled`);
+    const taskQueue = resolveSubmissionQueue(
+      config.taskQueue,
+      config.temporalExecutionType,
+      options
+    );
     if (envelope.messageId === "") throw new Error("Temporal endpoint message ID is empty");
     const request = endpointRequest(
       registration,
@@ -351,6 +368,9 @@ export class TemporalConnector implements ManagedDataConnector {
       this.#metricsEnabled,
       this.#tracingEnabled
     );
+    const routedRequest = options.scheduleToStartTimeout
+      ? { ...request, activityScheduleToStartTimeout: options.scheduleToStartTimeout }
+      : request;
     const workflowType =
       config.temporalExecutionType === "Workflow"
         ? registration.workflowType
@@ -360,9 +380,9 @@ export class TemporalConnector implements ManagedDataConnector {
       context,
       () =>
         this.client().workflow.start(workflowType, {
-          args: [request],
+          args: [routedRequest],
           workflowId: temporalEndpointWorkflowId(this.name, config.name, envelope.messageId),
-          taskQueue: config.taskQueue,
+          taskQueue,
           ...(config.workflowExecutionTimeout > 0
             ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
             : {}),
@@ -373,7 +393,13 @@ export class TemporalConnector implements ManagedDataConnector {
         }),
       this.#tracingEnabled
     );
-    await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId);
+    await validateWorkflowOwnership(
+      handle,
+      workflowType,
+      owner,
+      envelope.messageId,
+      options.taskQueue
+    );
     if (!waitForResult) return { payload: new Uint8Array() };
     const result = (await handle.result()) as EndpointWireResult;
     return { payload: bytesFromWire(result.payload) };
@@ -679,11 +705,15 @@ async function validateWorkflowOwnership(
   handle: WorkflowHandle,
   workflowType: string,
   owner: string,
-  messageId: string
+  messageId: string,
+  expectedQueue?: string
 ): Promise<void> {
   const description = await handle.describe();
   if (description.type !== workflowType) throw new Error("Temporal workflow ownership collision");
   validateMemo(description.memo, owner, messageId);
+  if (expectedQueue && description.taskQueue !== expectedQueue) {
+    throw new Error("Temporal workflow task queue collision");
+  }
 }
 
 function validateMemo(

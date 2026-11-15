@@ -23,6 +23,7 @@ import {
   type TemporalConnector
 } from "../../datasource/temporal/connector.js";
 import type { EndpointEnvelope } from "../../datasource/temporal/contracts.js";
+import type { SubmissionOptionsProvider } from "../../datasource/temporal/submission-options.js";
 
 class TemporalDataSink extends OutputDataSink {
   readonly #active = new Set<Promise<void>>();
@@ -120,7 +121,8 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
     private readonly connector: TemporalConnector,
     private readonly stream: TypedSinkStream<T, E> | TypedSinkStreamWithResult<T, R, E>,
     private readonly handler: TemporalEndpointHandler<State, T>,
-    private readonly withResult: boolean
+    private readonly withResult: boolean,
+    private readonly options?: SubmissionOptionsProvider<T>
   ) {
     this.#tracer = stream
       .runtimeEnvironment()
@@ -168,12 +170,21 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
         firedAtUnixMillis: 0,
         payload: this.stream.inputSerde().serialize(value)
       };
-      const result = await this.connector.submitEndpoint(
-        context,
-        this.sinkEndpoint.id,
-        envelope,
-        this.withResult
-      );
+      const result =
+        this.options === undefined
+          ? await this.connector.submitEndpoint(
+              context,
+              this.sinkEndpoint.id,
+              envelope,
+              this.withResult
+            )
+          : await this.connector.submitEndpointWithOptions(
+              context,
+              this.sinkEndpoint.id,
+              envelope,
+              this.withResult,
+              this.options(context, value)
+            );
       if (this.withResult) {
         const resultStream = this.stream as TypedSinkStreamWithResult<T, R, E>;
         await resultStream.consumeResult(context, resultStream.serde().deserialize(result.payload));
@@ -190,40 +201,49 @@ class TemporalSinkConsumer<State, T, R, E> implements Consumer<T>, OutputEndpoin
   }
 }
 
-export function makeTemporalSinkEndpointConsumer<T, E>(stream: TypedSinkStream<T, E>): Consumer<T> {
+export function makeTemporalSinkEndpointConsumer<T, E>(
+  stream: TypedSinkStream<T, E>,
+  options?: SubmissionOptionsProvider<T>
+): Consumer<T> {
   return makeTemporalSinkEndpointConsumerWithHandler(
     stream,
-    new DirectTemporalEndpointHandler<T>()
+    new DirectTemporalEndpointHandler<T>(),
+    options
   );
 }
 
 export function makeTemporalSinkEndpointConsumerWithHandler<State, T, E>(
   stream: TypedSinkStream<T, E>,
-  handler: TemporalEndpointHandler<State, T>
+  handler: TemporalEndpointHandler<State, T>,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
-  return makeSinkConsumer<State, T, never, E>(stream, handler, false);
+  return makeSinkConsumer<State, T, never, E>(stream, handler, false, options);
 }
 
 export function makeTemporalSinkEndpointConsumerWithResult<T, R, E>(
-  stream: TypedSinkStreamWithResult<T, R, E>
+  stream: TypedSinkStreamWithResult<T, R, E>,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
   return makeTemporalSinkEndpointConsumerWithResultHandler(
     stream,
-    new DirectTemporalEndpointHandler<T>()
+    new DirectTemporalEndpointHandler<T>(),
+    options
   );
 }
 
 export function makeTemporalSinkEndpointConsumerWithResultHandler<State, T, R, E>(
   stream: TypedSinkStreamWithResult<T, R, E>,
-  handler: TemporalEndpointHandler<State, T>
+  handler: TemporalEndpointHandler<State, T>,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
-  return makeSinkConsumer(stream, handler, true);
+  return makeSinkConsumer(stream, handler, true, options);
 }
 
 function makeSinkConsumer<State, T, R, E>(
   stream: TypedSinkStream<T, E> | TypedSinkStreamWithResult<T, R, E>,
   handler: TemporalEndpointHandler<State, T>,
-  withResult: boolean
+  withResult: boolean,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
   const environment = stream.runtimeEnvironment();
   const endpointConfig = environment.runtimeConfig().endpointById(stream.endpointId());
@@ -243,7 +263,8 @@ function makeSinkConsumer<State, T, R, E>(
     connector,
     stream,
     handler,
-    withResult
+    withResult,
+    options
   );
   connector.registerEndpointSubmission(endpointConfig.id);
   endpoint.addEndpointConsumer(consumer);

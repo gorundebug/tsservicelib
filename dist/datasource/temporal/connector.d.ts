@@ -2,6 +2,7 @@ import type { Context, MessageContext } from "../../runtime/context.js";
 import type { ManagedDataConnector } from "../../runtime/data-connector.js";
 import type { RuntimeEnvironment } from "../../runtime/environment/index.js";
 import { type EndpointEnvelope, type EndpointResult } from "./contracts.js";
+import { type SubmissionOptions } from "./submission-options.js";
 export declare function temporalCronExpression(expression: string): string;
 export type TemporalConnectorEndpointHandler = (envelope: EndpointEnvelope, context: MessageContext, cancellationSignal?: AbortSignal) => Promise<EndpointResult>;
 export interface TemporalConnectorOptions {
@@ -29,6 +30,7 @@ export declare class TemporalConnector implements ManagedDataConnector {
     stopAdmission(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
     submitEndpoint(context: MessageContext, endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean): Promise<EndpointResult>;
+    submitEndpointWithOptions(context: MessageContext, endpointId: number, envelope: EndpointEnvelope, waitForResult: boolean, options: SubmissionOptions): Promise<EndpointResult>;
     private queueActivities;
     private queuePolicy;
     private activityDiagnostics;

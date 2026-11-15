@@ -6,6 +6,11 @@ import type { Consumer } from "../../runtime/stream.js";
 import type { TypedSinkStream, TypedSinkStreamWithResult } from "../../runtime/data-sink.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import {
+  resolveSubmissionQueue,
+  type SubmissionOptions,
+  type SubmissionOptionsProvider
+} from "./submission-options.js";
+import {
   temporalDirectWorkflowType,
   temporalEndpointActivityType,
   temporalEndpointWorkflowId,
@@ -17,21 +22,24 @@ import {
 
 /** Attach a plain Temporal sink to a graph executing inside a Workflow isolate. */
 export function makeTemporalWorkflowSinkEndpointConsumer<T, E>(
-  stream: TypedSinkStream<T, E>
+  stream: TypedSinkStream<T, E>,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
-  return makeWorkflowSinkConsumer<T, never, E>(stream, false);
+  return makeWorkflowSinkConsumer<T, never, E>(stream, false, options);
 }
 
 /** Attach a result-producing Temporal sink to a Workflow graph. */
 export function makeTemporalWorkflowSinkEndpointConsumerWithResult<T, R, E>(
-  stream: TypedSinkStreamWithResult<T, R, E>
+  stream: TypedSinkStreamWithResult<T, R, E>,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
-  return makeWorkflowSinkConsumer(stream, true);
+  return makeWorkflowSinkConsumer(stream, true, options);
 }
 
 function makeWorkflowSinkConsumer<T, R, E>(
   stream: TypedSinkStream<T, E> | TypedSinkStreamWithResult<T, R, E>,
-  withResult: boolean
+  withResult: boolean,
+  options?: SubmissionOptionsProvider<T>
 ): Consumer<T> {
   const environment = stream.runtimeEnvironment();
   const endpoint = environment.runtimeConfig().endpointById(stream.endpointId());
@@ -69,7 +77,8 @@ function makeWorkflowSinkConsumer<T, R, E>(
         environment.runtimeConfig().config(),
         metricsEnabled,
         tracingEnabled,
-        envelope
+        envelope,
+        options?.(context, value) ?? {}
       );
       if (withResult) {
         const resultStream = stream as TypedSinkStreamWithResult<T, R, E>;
@@ -90,8 +99,14 @@ async function executeEndpoint(
   runtimeConfig: CanonicalConfig,
   metricsEnabled: boolean,
   tracingEnabled: boolean,
-  envelope: EndpointWireEnvelope
+  envelope: EndpointWireEnvelope,
+  options: SubmissionOptions
 ): Promise<EndpointWireResult> {
+  const taskQueue = resolveSubmissionQueue(
+    endpoint.taskQueue,
+    endpoint.temporalExecutionType,
+    options
+  );
   const request: EndpointWorkflowRequest = {
     executionType: endpoint.temporalExecutionType,
     runtimeConfig,
@@ -105,7 +120,10 @@ async function executeEndpoint(
   };
   if (endpoint.temporalExecutionType === "Activity") {
     return scheduleActivity<EndpointWireResult>(request.activityType, [envelope], {
-      taskQueue: endpoint.taskQueue,
+      taskQueue,
+      ...(options.scheduleToStartTimeout
+        ? { scheduleToStartTimeout: options.scheduleToStartTimeout }
+        : {}),
       startToCloseTimeout: endpoint.activityStartToCloseTimeout,
       ...(endpoint.activityHeartbeatTimeout > 0
         ? { heartbeatTimeout: endpoint.activityHeartbeatTimeout }
@@ -119,7 +137,7 @@ async function executeEndpoint(
     {
       args: [request],
       workflowId: temporalEndpointWorkflowId(connectorName, endpoint.name, envelope.messageId),
-      taskQueue: endpoint.taskQueue,
+      taskQueue,
       ...(endpoint.workflowExecutionTimeout > 0
         ? { workflowExecutionTimeout: endpoint.workflowExecutionTimeout }
         : {})

@@ -78,6 +78,7 @@ export interface EndpointWireResult {
 }
 
 export interface EndpointWorkflowRequest {
+  readonly activityScheduleToStartTimeout?: number;
   readonly executionType: TemporalExecutionType;
   readonly runtimeConfig: CanonicalConfig;
   readonly telemetry?: {

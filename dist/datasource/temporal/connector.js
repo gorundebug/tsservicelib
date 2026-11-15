@@ -10,6 +10,7 @@ import { err, str } from "../../runtime/environment/index.js";
 import { normalizeTemporalPriority } from "../../runtime/schedule.js";
 import { ENDPOINT_WORKFLOW_TYPE, temporalDirectWorkflowType, temporalEndpointActivityType, temporalEndpointWorkflowId, temporalIdentityName } from "./contracts.js";
 import { currentTemporalActivityMessageContext, runWithTemporalSubmissionContext, temporalActivityInterceptors, temporalWorkflowClientInterceptor } from "./context-propagation.js";
+import { resolveSubmissionQueue } from "./submission-options.js";
 const MANAGED_BY = "servicelib.managedBy";
 const OWNER = "servicelib.owner";
 const CALL_ID = "servicelib.callId";
@@ -232,6 +233,9 @@ export class TemporalConnector {
         }
     }
     async submitEndpoint(context, endpointId, envelope, waitForResult) {
+        return this.submitEndpointWithOptions(context, endpointId, envelope, waitForResult, {});
+    }
+    async submitEndpointWithOptions(context, endpointId, envelope, waitForResult, options) {
         if (!this.#started)
             throw new Error(`Temporal connector ${this.name} is not started`);
         const registration = this.#endpoints.get(endpointId);
@@ -241,17 +245,21 @@ export class TemporalConnector {
         const config = this.endpointConfig(endpointId);
         if (!config.enabled)
             throw new Error(`Temporal endpoint ${config.name} is disabled`);
+        const taskQueue = resolveSubmissionQueue(config.taskQueue, config.temporalExecutionType, options);
         if (envelope.messageId === "")
             throw new Error("Temporal endpoint message ID is empty");
         const request = endpointRequest(registration, config, envelope, this.#environment.runtimeConfig().config(), this.#metricsEnabled, this.#tracingEnabled);
+        const routedRequest = options.scheduleToStartTimeout
+            ? { ...request, activityScheduleToStartTimeout: options.scheduleToStartTimeout }
+            : request;
         const workflowType = config.temporalExecutionType === "Workflow"
             ? registration.workflowType
             : ENDPOINT_WORKFLOW_TYPE;
         const owner = endpointOwner(this.name, config.name);
         const handle = await runWithTemporalSubmissionContext(context, () => this.client().workflow.start(workflowType, {
-            args: [request],
+            args: [routedRequest],
             workflowId: temporalEndpointWorkflowId(this.name, config.name, envelope.messageId),
-            taskQueue: config.taskQueue,
+            taskQueue,
             ...(config.workflowExecutionTimeout > 0
                 ? { workflowExecutionTimeout: config.workflowExecutionTimeout }
                 : {}),
@@ -260,7 +268,7 @@ export class TemporalConnector {
             memo: ownershipMemo(owner, envelope.messageId),
             priority: { priorityKey: request.priority }
         }), this.#tracingEnabled);
-        await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId);
+        await validateWorkflowOwnership(handle, workflowType, owner, envelope.messageId, options.taskQueue);
         if (!waitForResult)
             return { payload: new Uint8Array() };
         const result = (await handle.result());
@@ -498,11 +506,14 @@ function bytesFromWire(value) {
 function ownershipMemo(owner, messageId) {
     return { [MANAGED_BY]: "servicelib", [OWNER]: owner, [CALL_ID]: messageId };
 }
-async function validateWorkflowOwnership(handle, workflowType, owner, messageId) {
+async function validateWorkflowOwnership(handle, workflowType, owner, messageId, expectedQueue) {
     const description = await handle.describe();
     if (description.type !== workflowType)
         throw new Error("Temporal workflow ownership collision");
     validateMemo(description.memo, owner, messageId);
+    if (expectedQueue && description.taskQueue !== expectedQueue) {
+        throw new Error("Temporal workflow task queue collision");
+    }
 }
 function validateMemo(memo, owner, messageId) {
     if (memo?.[MANAGED_BY] !== "servicelib" || memo[OWNER] !== owner || memo[CALL_ID] !== messageId) {

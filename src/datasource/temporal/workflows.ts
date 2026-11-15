@@ -149,6 +149,7 @@ export function scheduledEnvelope(envelope: EndpointWireEnvelope): EndpointWireE
 }
 
 function activityOptions(request: EndpointWorkflowRequest): {
+  readonly scheduleToStartTimeout?: number;
   readonly startToCloseTimeout: number;
   readonly heartbeatTimeout?: number;
   readonly retry: { readonly maximumAttempts: number };
@@ -158,6 +159,9 @@ function activityOptions(request: EndpointWorkflowRequest): {
     throw new Error("Temporal Activity adapter requires a positive start-to-close timeout");
   }
   return {
+    ...(request.activityScheduleToStartTimeout
+      ? { scheduleToStartTimeout: request.activityScheduleToStartTimeout }
+      : {}),
     startToCloseTimeout: request.activityStartToCloseTimeout,
     ...(request.activityHeartbeatTimeout > 0
       ? { heartbeatTimeout: request.activityHeartbeatTimeout }
