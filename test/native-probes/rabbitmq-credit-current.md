@@ -119,3 +119,40 @@ the source diagnostic before supported generation. Existing native source code a
 tests are experimental capability evidence, not a supported product source. Sink
 exports and delivery semantics remain supported. Historical whole-graph examples
 do not override this direction restriction.
+
+
+## Independent held-handler check — 2026-11-18
+
+Rechecked npm stable: `rabbitmq-amqp-js-client@1.0.0`. The GitHub PR API
+returned HTTP 403 (rate limit), so this check does not establish a new PR status.
+
+Ran `rabbitmq-credit-held-handler.cjs` directly against the existing local
+RabbitMQ test broker, without the Service Architect adapter. The public client
+API created a unique queue, published 2,000 small messages, then consumed with
+an async callback awaiting an unresolved Promise before accepting each delivery.
+No private receiver access or transport modifications were used.
+
+Observed before releasing the Promise:
+
+```json
+{"published":2000,"received":2000,"completed":0,"accepted":0}
+```
+
+After releasing it, all 2,000 callbacks completed and accepted their deliveries.
+The temporary queue was deleted and the connections were closed. This was a
+small functional probe, not a throughput or memory benchmark.
+
+This confirms that withholding acceptance and awaiting inside the callback do
+not bound delivery to unfinished business handlers. In the installed source,
+`Consumer.start()` ignores the handler return value; rhea replenishes receiver
+credit on message arrival rather than business completion. Its 1,000-credit
+window therefore is not a 1,000-unacknowledged-message limit.
+
+Receiving is supported by the client. The SA Input gate is a product decision
+about bounded async consumption, not absence of RabbitMQ consumption support.
+Local concurrency limits alone leave the received backlog growing. Releasing
+excess deliveries or closing/reopening consumers is not equivalent to pausing:
+it introduces redelivery/churn and, for quorum queues, delivery-limit concerns.
+A public credit/flow-control mechanism is the clean route; generic support need
+not require a particular `pause()` method if another public mechanism provides
+that bound. No runtime or capability changes were made by this check.

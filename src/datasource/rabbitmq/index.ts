@@ -216,6 +216,10 @@ class SourceEndpoint extends DataSourceEndpoint {
   }
 }
 
+// Experimental: the TypeScript generator keeps RabbitMQ source.supported=false
+// until the upstream receive-credit fix is released and integrated. See PR #94:
+// https://github.com/coders51/rabbitmq-amqp-js-client/pull/94
+// Integration requirements are documented beside createConsumer in worker.ts.
 export class RabbitMQDataSource extends InputDataSource {
   public constructor(id: number, environment: RuntimeEnvironment) {
     super(id, environment);
