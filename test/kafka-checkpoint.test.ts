@@ -185,3 +185,55 @@ await test("native broker-managed positions consume and auto-commit both partiti
     await admin.disconnect();
   }
 });
+
+for (const restoring of [false, true]) {
+  await test(`native failed partition stays fenced while healthy partition commits: restore=${String(restoring)}`, options, async () => {
+    assert.ok(brokers);
+    const module = createRequire(import.meta.url)("@confluentinc/kafka-javascript") as typeof ConfluentKafka;
+    const kafka = new module.KafkaJS.Kafka({ kafkaJS: { brokers: brokers.split(",") } });
+    const admin = kafka.admin();
+    const producer = kafka.producer();
+    const topic = `sa-ts-failure-${randomUUID()}`;
+    const owner = new Context();
+    const consumer = new ConfluentKafkaClientFactory().consumer(brokers.split(","), topic, 5000, {
+      context: owner, restoring, restore: () => restoring ? new Map([[0, 0n], [1, 0n]]) : null
+    });
+    const seen: KafkaRecord[] = [];
+    let failedHandle: { record: KafkaRecord; control: KafkaConsumerControl } | undefined;
+    let healthyCommitted = false;
+    let runFailure: unknown;
+    await admin.connect(); await producer.connect();
+    try {
+      await admin.createTopics({ topics: [{ topic, numPartitions: 2, replicationFactor: 1 }] });
+      for (const partition of [0, 1]) await producer.send({ topic,
+        messages: Array.from({ length: 40 }, (_, i) => ({ partition, value: String(i) })) });
+      await consumer.connect(); await consumer.subscribe(topic);
+      void consumer.run(2, async (record, control) => {
+        seen.push(record);
+        if (record.partition === 0) {
+          failedHandle = { record, control };
+          throw new Error("business failure");
+        }
+        await control.commit(record);
+        if (record.offset === 39n) healthyCommitted = true;
+      }).catch((error: unknown) => { runFailure = error; });
+      await until(() => (healthyCommitted && !!failedHandle?.control.signal.aborted) || runFailure !== undefined);
+      assert.equal(runFailure, undefined);
+      assert.ok(failedHandle);
+      assert.throws(() => failedHandle!.control.mark(failedHandle!.record, ""), /revoked assignment/);
+      await assert.rejects(failedHandle.control.commit(failedHandle.record), /revoked assignment/);
+      await producer.send({ topic, messages: [{ partition: 0, value: "after-failure" }] });
+      await delay(300);
+      assert.equal(seen.filter((r) => r.partition === 0).length, 1);
+      const offsets = await admin.fetchOffsets({ groupId: topic, topics: [topic] });
+      const partitions = offsets.find((entry) => entry.topic === topic)!.partitions;
+      assert.equal(partitions.find((entry) => entry.partition === 1)!.offset, "40");
+      const failedPosition = partitions.find((entry) => entry.partition === 0);
+      // Kafka omits a partition for which this group has never committed.
+      assert.ok(failedPosition === undefined || BigInt(failedPosition.offset) <= 0n);
+    } finally {
+      await close(consumer, owner);
+      await producer.disconnect(); await admin.disconnect();
+    }
+  });
+}

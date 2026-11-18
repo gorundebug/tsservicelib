@@ -28,6 +28,10 @@
       "types": "./dist/datasource/kafka/index.d.ts",
       "import": "./dist/datasource/kafka/index.js"
     },
+    "./datasource/nats": {
+      "types": "./dist/datasource/nats/index.d.ts",
+      "import": "./dist/datasource/nats/index.js"
+    },
     "./datasource/grpc": {
       "types": "./dist/datasource/grpc/index.d.ts",
       "import": "./dist/datasource/grpc/index.js"
@@ -59,6 +63,10 @@
     "./datasink/kafka": {
       "types": "./dist/datasink/kafka/index.d.ts",
       "import": "./dist/datasink/kafka/index.js"
+    },
+    "./datasink/nats": {
+      "types": "./dist/datasink/nats/index.d.ts",
+      "import": "./dist/datasink/nats/index.js"
     },
     "./datasink/grpc": {
       "types": "./dist/datasink/grpc/index.d.ts",
@@ -135,12 +143,38 @@
     "./runtime/testtracing": {
       "types": "./dist/runtime/testtracing/index.d.ts",
       "import": "./dist/runtime/testtracing/index.js"
+    },
+    "./datasource/rabbitmq": {
+      "types": "./dist/datasource/rabbitmq/index.d.ts",
+      "import": "./dist/datasource/rabbitmq/index.js"
+    },
+    "./datasink/rabbitmq": {
+      "types": "./dist/datasink/rabbitmq/index.d.ts",
+      "import": "./dist/datasink/rabbitmq/index.js"
+    },
+    "./datasource/redisstreams": {
+      "types": "./dist/datasource/redisstreams/index.d.ts",
+      "import": "./dist/datasource/redisstreams/index.js"
+    },
+    "./datasink/redisstreams": {
+      "types": "./dist/datasink/redisstreams/index.d.ts",
+      "import": "./dist/datasink/redisstreams/index.js"
+    },
+    "./datasource/pulsar": {
+      "types": "./dist/datasource/pulsar/index.d.ts",
+      "import": "./dist/datasource/pulsar/index.js"
+    },
+    "./datasink/pulsar": {
+      "types": "./dist/datasink/pulsar/index.d.ts",
+      "import": "./dist/datasink/pulsar/index.js"
     }
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "README.redisstreams.md",
+    "LICENSE",
+    "README.pulsar.md"
   ],
   "scripts": {
     "build": "tsc --build tsconfig.build.json && node scripts/copy-status-assets.mjs dist",
@@ -160,10 +194,11 @@
     "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
   },
   "dependencies": {
-    "@types/ms": "2.1.0",
     "@bufbuild/protobuf": "2.14.0",
     "@confluentinc/kafka-javascript": "1.9.0",
     "@grpc/grpc-js": "1.14.4",
+    "@nats-io/jetstream": "3.5.0",
+    "@nats-io/transport-node": "3.5.0",
     "@noble/hashes": "2.3.0",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/api-logs": "0.221.0",
@@ -183,8 +218,12 @@
     "@temporalio/interceptors-opentelemetry": "1.21.1",
     "@temporalio/worker": "1.21.1",
     "@temporalio/workflow": "1.21.1",
+    "@types/ms": "2.1.0",
     "croner": "10.0.1",
     "prom-client": "15.1.3",
+    "pulsar-client": "1.18.0",
+    "rabbitmq-amqp-js-client": "1.0.0",
+    "redis": "6.3.1",
     "yaml": "2.9.0"
   },
   "devDependencies": {

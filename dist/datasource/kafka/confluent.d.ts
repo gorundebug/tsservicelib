@@ -30,6 +30,12 @@ export declare class ConsumerMessage {
     readonly offset: bigint;
     constructor(record: KafkaRecord, control: KafkaConsumerControl);
     markMessage(metadata?: string): void;
+    /**
+     * The default native adapter waits for an offset-commit observation for this
+     * next offset and rechecks assignment ownership. The native callback carries
+     * no request ID: identical auto/explicit positions cannot be distinguished.
+     * Cancellation/revocation cannot undo an already submitted broker operation.
+     */
     commit(): Promise<void>;
 }
 export interface KafkaConsumer {

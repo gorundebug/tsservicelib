@@ -4,10 +4,13 @@ import type { KafkaJS } from "@confluentinc/kafka-javascript";
 import type * as ConfluentKafka from "@confluentinc/kafka-javascript";
 
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
+import { settleWithinDeadline } from "../../runtime/lifecycle.js";
 import {
   DataSinkEndpoint,
   OutputDataSink,
   RuntimeTaskRegistry,
+  RuntimeDrainTimeoutError,
+  ContextDeadlineExceededError,
   err,
   errorFromUnknown,
   requireKafkaDataConnectorConfig,
@@ -295,6 +298,7 @@ export class KafkaDataSink extends OutputDataSink {
   #producer: KafkaProducer | undefined;
   #producerRecovery: Promise<void> | undefined;
   #started = false;
+  #shutdown: Promise<void> | undefined;
 
   public constructor(
     connectorId: number,
@@ -320,7 +324,7 @@ export class KafkaDataSink extends OutputDataSink {
 
   public async start(context: Context): Promise<void> {
     void context;
-    if (this.#started) {
+    if (this.#started || this.#shutdown !== undefined) {
       throw new Error(`Kafka data sink ${this.name} is already started`);
     }
     this.#started = true;
@@ -372,18 +376,36 @@ export class KafkaDataSink extends OutputDataSink {
   }
 
   public async stop(context: Context): Promise<void> {
-    if (!this.#started) return;
-    this.#started = false;
+    if (this.#shutdown === undefined) {
+      if (!this.#started) return;
+      this.#started = false;
+      this.#deliveries.stopAdmission();
+      this.#shutdown = this.drain(context);
+      // Keep the operation owned even when every caller has expired.
+      void this.#shutdown.catch(() => undefined);
+    }
+    const budget = context.remainingMs();
+    const [result] = await settleWithinDeadline(context, [this.#shutdown]);
+    if (result === undefined) {
+      if (context.signal().aborted && !(context.signal().reason instanceof ContextDeadlineExceededError)) {
+        throw errorFromUnknown(context.signal().reason);
+      }
+      throw new RuntimeDrainTimeoutError(budget ?? 0);
+    }
+    if (result.status === "rejected") throw result.reason;
+  }
+
+  private async drain(context: Context): Promise<void> {
     for (const endpoint of this.kafkaEndpoints()) await endpoint.stop(context);
-    this.#deliveries.stopAdmission();
+    await this.#deliveries.drain();
+    await this.#producerRecovery;
     const producer = this.#producer;
     if (producer === undefined) return;
     try {
-      await this.#deliveries.drain(context.remainingMs());
-      await producer.flush(context.remainingMs());
+      await producer.flush();
     } finally {
-      this.#producer = undefined;
       await producer.disconnect();
+      this.#producer = undefined;
     }
   }
 

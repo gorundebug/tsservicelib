@@ -12,6 +12,7 @@ const requiredExports = [
   "./datasource",
   "./datasource/http",
   "./datasource/kafka",
+  "./datasource/nats",
   "./datasource/grpc",
   "./datasource/cron",
   "./datasource/temporal",
@@ -20,6 +21,7 @@ const requiredExports = [
   "./datasink",
   "./datasink/http",
   "./datasink/kafka",
+  "./datasink/nats",
   "./datasink/grpc",
   "./datasink/localsink",
   "./datasink/temporal",
@@ -38,13 +40,19 @@ const requiredExports = [
   "./runtime/telemetry",
   "./runtime/testmetrics",
   "./runtime/testlog",
-  "./runtime/testtracing"
+  "./runtime/testtracing",
+  "./datasource/rabbitmq",
+  "./datasink/rabbitmq",
+  "./datasource/redisstreams",
+  "./datasink/redisstreams",
+  "./datasource/pulsar",
+  "./datasink/pulsar"
 ];
 
 assert.equal(packageJson.type, "module", "the published package must be ESM");
 assert.deepEqual(
   packageJson.files,
-  ["dist", "README.md", "LICENSE"],
+  ["dist", "README.md", "README.redisstreams.md", "LICENSE", "README.pulsar.md"],
   "only distributable runtime files and public documentation may be packed"
 );
 assert.deepEqual(

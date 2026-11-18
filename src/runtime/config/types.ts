@@ -253,7 +253,12 @@ export const DataConnectorType = {
   Kafka: 3,
   Custom: 4,
   Cron: 5,
-  Temporal: 6
+  Temporal: 6,
+  NATS: 7,
+  JetStream: 8,
+  RabbitMQ: 9,
+  RedisStreams: 10,
+  Pulsar: 11
 } as const;
 
 export type DataConnectorType = (typeof DataConnectorType)[keyof typeof DataConnectorType];
@@ -285,6 +290,34 @@ export interface KafkaDataConnectorConfig extends DataConnectorConfig {
   readonly password?: string | undefined;
 }
 
+export interface NATSDataConnectorConfig extends DataConnectorConfig {
+  readonly type: 7 | 8;
+  readonly servers: readonly string[];
+  /** Integer milliseconds, default 2000. */
+  readonly connectTimeoutMs: number;
+  /** Integer milliseconds, default 5000. */
+  readonly operationTimeoutMs: number;
+  readonly username?: string | undefined;
+  readonly password?: string | undefined;
+  readonly token?: string | undefined;
+  readonly credentialsFile?: string | undefined;
+  readonly tlsEnabled?: boolean | undefined;
+  readonly tlsServerName?: string | undefined;
+  readonly tlsCaFile?: string | undefined;
+  readonly tlsCertFile?: string | undefined;
+  readonly tlsKeyFile?: string | undefined;
+}
+
+export interface NATSEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly subject: string;
+  readonly queueGroup?: string | undefined;
+  readonly streamName?: string | undefined;
+  readonly durableName?: string | undefined;
+  readonly createStream: boolean;
+  readonly createConsumer: boolean;
+}
+
 export interface CustomDataConnectorConfig extends DataConnectorConfig {
   readonly type: typeof DataConnectorType.Custom;
 }
@@ -311,6 +344,10 @@ export type AnyDataConnectorConfig =
   | HttpDataConnectorConfig
   | GrpcDataConnectorConfig
   | KafkaDataConnectorConfig
+  | NATSDataConnectorConfig
+  | RabbitMQDataConnectorConfig
+  | RedisStreamsDataConnectorConfig
+  | PulsarDataConnectorConfig
   | CronDataConnectorConfig
   | TemporalDataConnectorConfig
   | CustomDataConnectorConfig;
@@ -392,6 +429,10 @@ export type AnyEndpointConfig =
   | HttpEndpointConfig
   | GrpcEndpointConfig
   | KafkaEndpointConfig
+  | NATSEndpointConfig
+  | RabbitMQEndpointConfig
+  | RedisStreamsEndpointConfig
+  | PulsarEndpointConfig
   | CronEndpointConfig
   | TemporalEndpointConfig
   | CustomEndpointConfig;
@@ -719,7 +760,9 @@ export interface TemporalEndpointConfigDocument extends CronEndpointConfigDocume
   readonly maxConcurrentWorkflowTasks?: number | undefined;
 }
 
-export type CustomEndpointConfigDocument = EndpointConfigDocumentBase & { readonly enabled?: boolean | undefined };
+export type CustomEndpointConfigDocument = EndpointConfigDocumentBase & {
+  readonly enabled?: boolean | undefined;
+};
 
 export interface PoolConfigDocument {
   readonly name: string;
@@ -759,4 +802,152 @@ export interface TypeConfigDocument {
   readonly transferByValue?: boolean | undefined;
   readonly useAlias?: boolean | undefined;
   readonly [property: string]: unknown;
+}
+
+export interface NATSDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly servers?: readonly string[] | undefined;
+  readonly connectTimeoutMs?: number | undefined;
+  readonly operationTimeoutMs?: number | undefined;
+  readonly username?: string | undefined;
+  readonly password?: string | undefined;
+  readonly token?: string | undefined;
+  readonly credentialsFile?: string | undefined;
+  readonly tlsEnabled?: boolean | undefined;
+  readonly tlsServerName?: string | undefined;
+  readonly tlsCaFile?: string | undefined;
+  readonly tlsCertFile?: string | undefined;
+  readonly tlsKeyFile?: string | undefined;
+}
+export interface NATSEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly subject?: string | undefined;
+  readonly queueGroup?: string | undefined;
+  readonly streamName?: string | undefined;
+  readonly durableName?: string | undefined;
+  readonly createStream?: boolean | undefined;
+  readonly createConsumer?: boolean | undefined;
+}
+
+export interface RabbitMQDataConnectorConfig extends Omit<NATSDataConnectorConfig, "type"> {
+  readonly type: 9;
+  readonly virtualHost?: string | undefined;
+}
+export interface RabbitMQEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly queueName?: string | undefined;
+  readonly queueType?: "quorum" | "classic" | undefined;
+  readonly exchangeName?: string | undefined;
+  readonly exchangeType?: "direct" | "topic" | "fanout" | undefined;
+  readonly routingKey?: string | undefined;
+  readonly createQueue: boolean;
+  readonly createExchange: boolean;
+  readonly createBinding: boolean;
+  readonly consumerCredits?: number | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
+}
+export interface RabbitMQDataConnectorConfigDocument extends NATSDataConnectorConfigDocument {
+  readonly type: 9;
+  readonly virtualHost?: string | undefined;
+}
+export interface RabbitMQEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly queueName?: string | undefined;
+  readonly queueType?: "quorum" | "classic" | undefined;
+  readonly exchangeName?: string | undefined;
+  readonly exchangeType?: "direct" | "topic" | "fanout" | undefined;
+  readonly routingKey?: string | undefined;
+  readonly createQueue?: boolean | undefined;
+  readonly createExchange?: boolean | undefined;
+  readonly createBinding?: boolean | undefined;
+  readonly consumerCredits?: number | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
+}
+
+export interface RedisStreamsDataConnectorConfig extends Omit<NATSDataConnectorConfig, "type"> {
+  readonly type: 10;
+  readonly redisDatabase: number;
+}
+export interface RedisStreamsEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly streamKey: string;
+  readonly consumerGroup?: string | undefined;
+  readonly consumerName?: string | undefined;
+  readonly createConsumerGroup?: boolean | undefined;
+  readonly groupStartId?: string | undefined;
+  readonly readCount?: number | undefined;
+  readonly readBlockMs?: number | undefined;
+  readonly claimIdleMs?: number | undefined;
+  readonly claimIntervalMs?: number | undefined;
+  readonly createStream?: boolean | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
+}
+export interface RedisStreamsDataConnectorConfigDocument extends NATSDataConnectorConfigDocument {
+  readonly type: 10;
+  readonly redisDatabase?: number | undefined;
+}
+export interface RedisStreamsEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly streamKey: string;
+  readonly consumerGroup?: string | undefined;
+  readonly consumerName?: string | undefined;
+  readonly createConsumerGroup?: boolean | undefined;
+  readonly groupStartId?: string | undefined;
+  readonly readCount?: number | undefined;
+  readonly readBlockMs?: number | undefined;
+  readonly claimIdleMs?: number | undefined;
+  readonly claimIntervalMs?: number | undefined;
+  readonly createStream?: boolean | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
+}
+
+/** Draft Pulsar configuration; native runtime acceptance is tracked separately. */
+export interface PulsarDataConnectorConfig extends DataConnectorConfig {
+  readonly type: 11;
+  readonly servers: readonly string[];
+  readonly adminUrl: string;
+  readonly adminToken?: string | undefined;
+  readonly connectTimeoutMs: number;
+  readonly operationTimeoutMs: number;
+  readonly token?: string | undefined;
+  readonly tlsCaFile?: string | undefined;
+  readonly tlsCertFile?: string | undefined;
+  readonly tlsKeyFile?: string | undefined;
+}
+export interface PulsarEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly topic: string;
+  readonly createTopic?: boolean | undefined;
+  readonly partitions?: number | undefined;
+  readonly subscriptionName?: string | undefined;
+  readonly subscriptionType?: "Shared" | "Exclusive" | "Failover" | undefined;
+  readonly createSubscription?: boolean | undefined;
+  readonly subscriptionInitialPosition?: "Earliest" | "Latest" | undefined;
+  readonly receiverQueueSize?: number | undefined;
+  readonly negativeAckRedeliveryDelayMs?: number | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
+}
+export interface PulsarDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly type: 11;
+  readonly servers: readonly string[];
+  readonly adminUrl: string;
+  readonly adminToken?: string | undefined;
+  readonly connectTimeoutMs?: number | undefined;
+  readonly operationTimeoutMs?: number | undefined;
+  readonly token?: string | undefined;
+  readonly tlsCaFile?: string | undefined;
+  readonly tlsCertFile?: string | undefined;
+  readonly tlsKeyFile?: string | undefined;
+}
+export interface PulsarEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly topic: string;
+  readonly createTopic?: boolean | undefined;
+  readonly partitions?: number | undefined;
+  readonly subscriptionName?: string | undefined;
+  readonly subscriptionType?: "Shared" | "Exclusive" | "Failover" | undefined;
+  readonly createSubscription?: boolean | undefined;
+  readonly subscriptionInitialPosition?: "Earliest" | "Latest" | undefined;
+  readonly receiverQueueSize?: number | undefined;
+  readonly negativeAckRedeliveryDelayMs?: number | undefined;
+  readonly publisherMaxInFlight?: number | undefined;
 }

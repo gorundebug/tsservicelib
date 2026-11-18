@@ -130,3 +130,115 @@ in-flight TTL-bearing `joinValue` calls, but not zero-TTL calls or an expiry cal
 already executing. New TTL-bearing calls wait behind that maintenance stop and may
 continue afterward; admission of new graph requests belongs to the surrounding runtime.
 The outer service shutdown deadline still bounds process lifetime.
+
+### Native NATS Core and JetStream
+
+The Node adapters use the official `@nats-io/transport-node` and
+`@nats-io/jetstream` packages, both pinned to `3.5.0`. Connector kinds `7` (Core)
+and `8` (JetStream) remain separate. Generic DataSource/DataSink contracts are
+unchanged; the native entry points are:
+
+```typescript
+// @gorundebug/tsservicelib/datasource/nats
+makeNATSEndpointConsumer<H, T, R, E>(
+  stream: TypedInputStream<T, R, E>, handler: EndpointHandler<H, T, R, E>
+): Consumer<T>;
+
+// @gorundebug/tsservicelib/datasink/nats
+makeNATSEndpointConsumer<H, T, E>(
+  stream: TypedSinkStream<T, E>, handler: EndpointHandler<H, T, never, E>
+): Consumer<T>;
+makeNATSEndpointConsumerWithResult<H, T, R, E>(
+  stream: TypedSinkStreamWithResult<T, R, E>, handler: EndpointHandler<H, T, R, E>
+): Consumer<T>;
+```
+
+Source handlers receive real SDK `Msg` or `JsMsg` deliveries. Core has no ACK;
+JetStream handlers must explicitly call native acknowledgement methods.
+`ResultContext.done()` only completes local processing. Callback registration
+must precede graph collection. Native headers carry stream identity and tracing;
+local inherited context values remain available. A retained native message is
+not protected by a portable stale-ACK fence.
+
+Sink handlers fill `SinkMessage<R>.data: Uint8Array` and `.header: MsgHdrs`.
+`send(context: MessageContext, callback: DeliveryCallback<R>): void` admits work
+without waiting for the broker. The callback receives
+`(delivery: Delivery | undefined, error: Error | undefined): R | undefined`;
+a returned result is emitted to the result graph.
+`sendSync(context: MessageContext): Promise<Delivery>` explicitly awaits the
+native outcome. `Delivery.ack` is a native `PubAck` for JetStream and undefined
+for Core, where completion means a protocol flush, not subscriber processing.
+`out`/`skip` emit results without publication; `stream.errorCollect` retains typed
+business errors. Sink EndRequest follows ConsumeMessage; admitted delivery
+callbacks may finish later. Do not retain SinkMessage after ConsumeMessage.
+
+Servers are required and accept only `nats://` or `tls://` URLs without embedded
+credentials, paths, queries, or fragments. TLS URLs and TLS fields require
+`tlsEnabled: true`, including mixed URL lists. Authentication supports typed
+username/password, token, or mounted credentials-file configuration; TLS uses
+mounted CA/certificate/key files. Existing environment resolution is preserved.
+Timeouts use integer milliseconds, defaulting to 2000 for connection and 5000
+for operations. The canonical maximum is `9223372036854`; Node SDK startup
+explicitly rejects values above `2147483647` because native timers cannot
+represent them. Independent `tlsServerName` overrides are unsupported: use that
+hostname in each server URL.
+
+Core endpoints use subject and optional source queueGroup. JetStream endpoints
+require streamName and, for sources, durableName; queueGroup is forbidden.
+Creation flags default to false. Explicit creation only creates missing resources;
+existing streams and explicit-ACK pull consumers are validated, never reconfigured.
+Sinks cannot configure consumer fields. There is no request/reply adapter.
+
+Admission is bounded per endpoint. Core sources admit at most 256 pending
+messages / 8 MiB plus the active message; overflow stops the subscription and
+reports failure while draining admitted work. JetStream prefetch is one message
+plus the active message and requires broker `max_payload <= 8 MiB`.
+Sinks bound active handlers and publications to 256 each, with an 8 MiB
+publication budget including native headers. Saturation rejects admission.
+Native reconnect/resumption remains enabled. Ambiguous publication failures are
+not retried by the adapter; their budget remains reserved until a native flush
+or connection closure resolves buffered work. Stop first closes admission, drains
+admitted work to its supplied deadline, then cancels/closes. JavaScript handlers
+must cooperate with cancellation; shutdown cannot preempt synchronous user code.
+
+Run the native integration tests with an installed NATS server:
+
+```sh
+pnpm build
+pnpm exec tsc --build tsconfig.test.json
+NATS_SERVER=/absolute/path/to/nats-server node --test --test-concurrency=1 dist-test/test/nats-config.test.js dist-test/test/nats-native.test.js
+```
+
+Native tests otherwise skip explicitly. Coverage includes ACK/redelivery, Core
+and JetStream reconnect, queue groups, TLS/token authentication, typed results,
+context propagation, bounded admission and shutdown deadlines. This checkout has
+no TypeScript API-schema generation script (`src/api/index.ts` is a placeholder);
+the existing build generates runtime declarations and distributable JavaScript.
+
+### RabbitMQ AMQP 1.0
+
+Supported sinks and experimental source probes use RabbitMQ's designated `rabbitmq-amqp-js-client`
+1.0.0. Import `datasource/rabbitmq` or `datasink/rabbitmq`; typed native settings
+are exported from `runtime/config`. Explicit accept/release/reject are separate
+from Done; async publish callbacks report accepted/unroutable/rejected/unknown.
+Shutdown drains within its supplied context, then terminates the owned SDK worker.
+
+SDK 1.0.0 supports only the default virtual host through its public API and does
+not expose receiver-credit control. Source `consumerCredits` bounds admission;
+overflow closes the connection for unsettled redelivery. Sink bodies are bytes or
+strings; publisher limits remain held through callback completion. Full profile,
+configuration constraints and acceptance commands are in the repository's
+`README.rabbitmq.md`. Generated-project integration is a separate gate.
+
+Redis Streams native source/sink adapters use official node-redis with explicit
+XACK, bounded asynchronous publication and standalone-primary validation.
+See [the Redis Streams profile](README.redisstreams.md) for configuration,
+delivery guarantees, public-client limits and disposable-broker acceptance.
+
+### RabbitMQ source eligibility
+
+RabbitMQ AMQP 1.0 **sinks remain supported**. The source adapter is experimental
+capability-test code: official `rabbitmq-amqp-js-client` 1.0.0 has no supported
+native receive-credit/pause API, and a local admission limit is not native flow
+control. Builtin generation and authoring validation reject TypeScript RabbitMQ
+sources, including mixed graphs. See [the current upstream audit](test/native-probes/rabbitmq-credit-current.md).

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const temporary = await mkdtemp(join(tmpdir(), "tsservicelib-package-"));
@@ -49,21 +50,28 @@ try {
       2
     )}\n`
   );
+  // Consumer installation uses the supported native-build and dependency pins.
+  // In particular the official RabbitMQ client otherwise resolves rhea via SSH.
   await writeFile(
     join(temporary, "pnpm-workspace.yaml"),
-    [
-      "packages:",
-      "  - .",
-      "",
-      "allowBuilds:",
-      '  "@confluentinc/kafka-javascript": true',
-      '  "@swc/core": false',
-      "  protobufjs: false",
-      ""
-    ].join("\n")
+    await readFile(join(root, "pnpm-workspace.yaml"), "utf8")
+  );
+  // Retain the reviewed transitive resolutions when adding the packed SDK.
+  // Without this, a clean consumer resolves newer semver-compatible dependencies.
+  await writeFile(
+    join(temporary, "pnpm-lock.yaml"),
+    await readFile(join(root, "pnpm-lock.yaml"), "utf8")
   );
   const store = run("corepack", ["pnpm", "store", "path"], root).trim();
-  run("corepack", ["pnpm", "install", "--offline", "--store-dir", store, "--dir", temporary], root);
+  run("corepack", ["pnpm", "install", "--offline", "--no-frozen-lockfile", "--store-dir", store, "--dir", temporary], root);
+
+  const referenceLock = parseYaml(await readFile(join(root, "pnpm-lock.yaml"), "utf8"));
+  const consumerLock = parseYaml(await readFile(join(temporary, "pnpm-lock.yaml"), "utf8"));
+  for (const identity of Object.keys(consumerLock.packages ?? {})) {
+    if (identity.startsWith(`${sourcePackage.name}@file:`) && identity.endsWith(`/${tarball}`)) continue;
+    assert.ok(Object.hasOwn(referenceLock.packages, identity),
+      `Packed consumer resolved an unreviewed dependency: ${identity}`);
+  }
 
   await writeFile(
     join(temporary, "consumer.mjs"),
@@ -74,7 +82,12 @@ try {
       'import * as operators from "@gorundebug/tsservicelib/operators";',
       'assert.equal(typeof root, "object");',
       'assert.equal(typeof runtime.Context.background, "function");',
-      "assert.ok(Object.keys(operators).length > 0);"
+      "assert.ok(Object.keys(operators).length > 0);",
+      ...["nats", "pulsar", "redisstreams", "rabbitmq"].flatMap((broker) =>
+        ["datasource", "datasink"].map((direction) =>
+          `assert.ok(Object.keys(await import("@gorundebug/tsservicelib/${direction}/${broker}")).length > 0);`
+        )
+      )
     ].join("\n")
   );
   run(process.execPath, [join(temporary, "consumer.mjs")], temporary);
@@ -87,7 +100,13 @@ try {
       "const context: Context = Context.background();",
       "const config: RuntimeConfig | undefined = undefined;",
       "void context;",
-      "void config;"
+      "void config;",
+      ...["nats", "pulsar", "redisstreams", "rabbitmq"].flatMap((broker) =>
+        ["datasource", "datasink"].flatMap((direction) => [
+          `import * as ${direction}_${broker} from "@gorundebug/tsservicelib/${direction}/${broker}";`,
+          `void ${direction}_${broker};`
+        ])
+      )
     ].join("\n")
   );
   await writeFile(
@@ -126,6 +145,7 @@ try {
   );
   assert.equal(installedPackage.type, "module");
   assert.equal(installedPackage.version, sourcePackage.version);
+  console.log(`PASS packed SDK ${installedPackage.version}: root/runtime, eight broker imports and TypeScript declarations; Node ${process.version}`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }

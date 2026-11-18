@@ -1,3 +1,23 @@
+import {
+  requirePulsarDataConnectorConfig,
+  requirePulsarEndpointConfig,
+  validatePulsarEndpoint
+} from "./pulsar.js";
+import {
+  requireRedisStreamsDataConnectorConfig,
+  requireRedisStreamsEndpointConfig,
+  validateRedisStreamsEndpoint
+} from "./redis.js";
+import {
+  requireRabbitMQDataConnectorConfig,
+  requireRabbitMQEndpointConfig,
+  validateRabbitMQEndpoint
+} from "./rabbitmq.js";
+import {
+  requireNATSDataConnectorConfig,
+  requireNATSEndpointConfig,
+  validateNATSEndpoint
+} from "./nats.js";
 import type {
   CallSemanticsGroup,
   CanonicalConfig,
@@ -146,6 +166,10 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
       validateNonNegative(pool.queueCapacity, `pool ${pool.name} queueCapacity`);
     }
     for (const connector of this.#config.dataConnectors) {
+      if (connector.type === 7 || connector.type === 8) requireNATSDataConnectorConfig(connector);
+      if (connector.type === 9) requireRabbitMQDataConnectorConfig(connector);
+      if (connector.type === 11) requirePulsarDataConnectorConfig(connector);
+      if (connector.type === 10) requireRedisStreamsDataConnectorConfig(connector);
       if (connector.type === 2) {
         const connectionsCount =
           "connectionsCount" in connector ? connector.connectionsCount : undefined;
@@ -216,21 +240,72 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
         );
       }
       const endpointType =
-        "httpMethodType" in endpoint
-          ? 1
-          : "grpcMethodType" in endpoint
-            ? 2
-            : "topic" in endpoint
-              ? 3
-              : "taskQueue" in endpoint
-                ? 6
-                : "schedule" in endpoint
-                  ? 5
-                  : 4;
+        "streamKey" in endpoint
+          ? 10
+          : "createQueue" in endpoint
+            ? 9
+            : "subject" in endpoint
+              ? connector.type === 7 || connector.type === 8
+                ? connector.type
+                : -1
+              : "httpMethodType" in endpoint
+                ? 1
+                : "grpcMethodType" in endpoint
+                  ? 2
+                  : "topic" in endpoint
+                    ? connector.type === 11
+                      ? 11
+                      : 3
+                    : "taskQueue" in endpoint
+                      ? 6
+                      : "schedule" in endpoint
+                        ? 5
+                        : 4;
       if (connector.type !== endpointType) {
         throw new Error(
           `endpoint ${endpoint.name} type does not match data connector ${connector.name}`
         );
+      }
+      if (connector.type === 11) {
+        const native = requirePulsarEndpointConfig(endpoint);
+        for (const stream of this.#config.streams)
+          if (
+            (stream.type === "Input" || stream.type === "Sink") &&
+            "idEndpoint" in stream &&
+            stream.idEndpoint === endpoint.id
+          )
+            validatePulsarEndpoint(native, stream.type === "Sink");
+      }
+      if (connector.type === 10) {
+        const native = requireRedisStreamsEndpointConfig(endpoint);
+        for (const stream of this.#config.streams)
+          if (
+            (stream.type === "Input" || stream.type === "Sink") &&
+            "idEndpoint" in stream &&
+            stream.idEndpoint === endpoint.id
+          )
+            validateRedisStreamsEndpoint(native, stream.type === "Sink");
+      }
+      if (connector.type === 9) {
+        const native = requireRabbitMQEndpointConfig(endpoint);
+        for (const stream of this.#config.streams)
+          if (
+            (stream.type === "Input" || stream.type === "Sink") &&
+            "idEndpoint" in stream &&
+            stream.idEndpoint === endpoint.id
+          )
+            validateRabbitMQEndpoint(native, stream.type === "Sink");
+      }
+      if (connector.type === 7 || connector.type === 8) {
+        const native = requireNATSEndpointConfig(endpoint);
+        for (const stream of this.#config.streams) {
+          if (
+            (stream.type === "Input" || stream.type === "Sink") &&
+            "idEndpoint" in stream &&
+            stream.idEndpoint === endpoint.id
+          )
+            validateNATSEndpoint(native, connector.type, stream.type === "Sink");
+        }
       }
       if (isTemporalEndpoint(endpoint)) {
         if (endpoint.taskQueue === "") {

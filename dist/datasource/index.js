@@ -5,4 +5,8 @@ export * as grpc from "./grpc/index.js";
 export * as cron from "./cron/index.js";
 export * as localsource from "./localsource/index.js";
 export * as temporal from "./temporal/index.js";
+export * as nats from "./nats/index.js";
+export * as rabbitmq from "./rabbitmq/index.js";
+export * as redisstreams from "./redisstreams/index.js";
+export * as pulsar from "./pulsar/index.js";
 //# sourceMappingURL=index.js.map

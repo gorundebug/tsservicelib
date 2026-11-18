@@ -56,6 +56,11 @@ function composeSignal(signal, deadline) {
 }
 /** Portable equivalent of AbortSignal.any for runtimes such as Temporal isolates. */
 export function combineAbortSignals(signals) {
+    // Native composition uses weak dependencies: completed request contexts do not
+    // leave strong listeners on long-lived assignment/task signals. Keep the
+    // portable implementation for isolates without AbortSignal.any.
+    if (typeof AbortSignal.any === "function")
+        return AbortSignal.any([...signals]);
     if (signals.length === 0)
         return new AbortController().signal;
     const first = signals[0];

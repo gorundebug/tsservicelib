@@ -109,6 +109,12 @@ export class ConsumerMessage {
     this.#control.mark(this.#record, metadata);
   }
 
+  /**
+   * The default native adapter waits for an offset-commit observation for this
+   * next offset and rechecks assignment ownership. The native callback carries
+   * no request ID: identical auto/explicit positions cannot be distinguished.
+   * Cancellation/revocation cannot undo an already submitted broker operation.
+   */
   public commit(): Promise<void> {
     return this.#control.commit(this.#record);
   }
@@ -234,6 +240,7 @@ class KafkaResult<HandlerState, T, R, E> implements ResultContext<HandlerState, 
   readonly #done: Promise<void>;
   #resolveDone: (() => void) | undefined;
   #completed = false;
+  #failure: Error | undefined;
   #retiring = false;
   #activeCallbacks = 0;
   #retired: Promise<void> | undefined;
@@ -274,6 +281,16 @@ class KafkaResult<HandlerState, T, R, E> implements ResultContext<HandlerState, 
 
   public wait(): Promise<void> {
     return this.#done;
+  }
+
+  public fail(error: Error): void {
+    this.#failure ??= error;
+    this.#resolveDone?.();
+    this.#resolveDone = undefined;
+  }
+
+  public failure(): Error | undefined {
+    return this.#failure;
   }
 
   public span(): Span | undefined {
@@ -777,8 +794,9 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     if (this.#tracingEnabled) {
       const metadata = new Map<string, string>();
       for (const [name, value] of record.headers) {
-        if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(name)) {
-          metadata.set(name, Buffer.from(value).toString("utf8"));
+        const canonicalName = name.toLowerCase();
+        if ([TRACE_SAMPLING_HEADER, "traceparent", "tracestate", "baggage"].includes(canonicalName)) {
+          metadata.set(canonicalName, Buffer.from(value).toString("utf8"));
         }
       }
       context = context.withMetadata(metadata);
@@ -819,7 +837,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       if (span !== undefined) spanError(span, failure);
       span?.addEvent("begin_request.error", [stringAttribute("error", failure.message)]);
       this.endpoint().onBeginRequestFailed(context, failure);
-      return;
+      throw failure;
     }
     span?.addEvent("begin_request");
     const startedAt = this.endpoint().onRequestStart(context);
@@ -840,7 +858,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
         if (span !== undefined) spanError(span, failure);
         await this.#handler.endRequest(context, this.#streamContext, failure, state);
         this.endpoint().onRequestEnd(context, startedAt, failure);
-        return;
+        throw failure;
       }
     }
     let failure: Error | undefined;
@@ -874,6 +892,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
       this.pending().pop(streamId);
       this.endpoint().onPendingRemove(context, streamId);
     }
+    failure ??= result.failure();
     if (span !== undefined && failure !== undefined) spanError(span, failure);
     try {
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
@@ -883,6 +902,7 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
     } finally {
       this.endpoint().onRequestEnd(context, startedAt, failure);
     }
+    if (failure !== undefined) throw failure;
   }
 
   private async acquire(signal: AbortSignal): Promise<void> {
@@ -954,6 +974,9 @@ class KafkaEndpointConsumer<HandlerState, T, R, E>
         }
       }
       result.span()?.addEvent("result_consumed", [stringAttribute("message_id", messageId)]);
+    } catch (error: unknown) {
+      result.fail(errorFromUnknown(error));
+      throw error;
     } finally {
       result.endCallback();
     }
@@ -1204,7 +1227,9 @@ class ConfluentConsumer implements KafkaConsumer {
       },
       offset_commit_cb: (error: ConfluentKafka.LibrdKafkaError | null, offsets: ConfluentKafka.TopicPartitionOffset[]) => {
         for (const commit of this.#commits) {
-          if (error || offsets.some((offset) => offset.topic === this.#topic &&
+          // A scoped error belongs only to the returned offsets. A native
+          // unscoped failure is ambiguous and must not be reported as success.
+          if ((error && offsets.length === 0) || offsets.some((offset) => offset.topic === this.#topic &&
               offset.partition === commit.partition && offset.offset === commit.next)) {
             this.#commits.delete(commit);
             if (error) commit.reject(new Error(error.message, { cause: error })); else commit.resolve();
@@ -1333,11 +1358,14 @@ class ConfluentConsumer implements KafkaConsumer {
         }
         for (const [partition, values] of partitions) {
           const lease = this.#assignments.get(partition)!;
+          if (!this.current(partition, lease)) continue;
           this.#consumer.pause([{ topic: this.#topic, partition }]);
           const task = this.deliver(values, lease, handler);
           this.#tasks.add(task);
           void task.catch((error: unknown) => {
-            if (this.current(partition, lease)) this.fail(errorFromUnknown(error));
+            // Keep the failed assignment paused. Revoke its retained handles
+            // without stopping healthy partitions or choosing an implicit retry.
+            if (this.current(partition, lease)) lease.controller.abort(errorFromUnknown(error));
           }).finally(() => {
             this.#tasks.delete(task);
             if (this.current(partition, lease) && !this.#stopping) {
@@ -1381,6 +1409,8 @@ class ConfluentConsumer implements KafkaConsumer {
           offset: message.offset + 1, ...(metadata === undefined ? {} : { metadata }) }); }
         catch (error) { this.#commits.delete(pending); reject(errorFromUnknown(error)); }
         await done;
+        // A receipt arriving after revoke cannot validate a retained handle.
+        assertCurrent();
         committed = true;
       };
       const control: KafkaConsumerControl = {

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { makeEndpointTraceAttributes } from "../../runtime/endpoint-tracing.js";
-import { DataSinkEndpoint, OutputDataSink, RuntimeTaskRegistry, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
+import { settleWithinDeadline } from "../../runtime/lifecycle.js";
+import { DataSinkEndpoint, OutputDataSink, RuntimeTaskRegistry, RuntimeDrainTimeoutError, ContextDeadlineExceededError, err, errorFromUnknown, requireKafkaDataConnectorConfig, requireKafkaEndpointConfig, spanError, stringAttribute } from "../../runtime/index.js";
 import { librdkafkaStatisticsOptions } from "../../runtime/telemetry/librdkafka-statistics.js";
 const require = createRequire(import.meta.url);
 let confluentKafka;
@@ -146,6 +147,7 @@ export class KafkaDataSink extends OutputDataSink {
     #producer;
     #producerRecovery;
     #started = false;
+    #shutdown;
     constructor(connectorId, environment, factory) {
         super(connectorId, environment);
         requireKafkaDataConnectorConfig(this.config());
@@ -163,7 +165,7 @@ export class KafkaDataSink extends OutputDataSink {
     }
     async start(context) {
         void context;
-        if (this.#started) {
+        if (this.#started || this.#shutdown !== undefined) {
             throw new Error(`Kafka data sink ${this.name} is already started`);
         }
         this.#started = true;
@@ -215,22 +217,40 @@ export class KafkaDataSink extends OutputDataSink {
         }
     }
     async stop(context) {
-        if (!this.#started)
-            return;
-        this.#started = false;
+        if (this.#shutdown === undefined) {
+            if (!this.#started)
+                return;
+            this.#started = false;
+            this.#deliveries.stopAdmission();
+            this.#shutdown = this.drain(context);
+            // Keep the operation owned even when every caller has expired.
+            void this.#shutdown.catch(() => undefined);
+        }
+        const budget = context.remainingMs();
+        const [result] = await settleWithinDeadline(context, [this.#shutdown]);
+        if (result === undefined) {
+            if (context.signal().aborted && !(context.signal().reason instanceof ContextDeadlineExceededError)) {
+                throw errorFromUnknown(context.signal().reason);
+            }
+            throw new RuntimeDrainTimeoutError(budget ?? 0);
+        }
+        if (result.status === "rejected")
+            throw result.reason;
+    }
+    async drain(context) {
         for (const endpoint of this.kafkaEndpoints())
             await endpoint.stop(context);
-        this.#deliveries.stopAdmission();
+        await this.#deliveries.drain();
+        await this.#producerRecovery;
         const producer = this.#producer;
         if (producer === undefined)
             return;
         try {
-            await this.#deliveries.drain(context.remainingMs());
-            await producer.flush(context.remainingMs());
+            await producer.flush();
         }
         finally {
-            this.#producer = undefined;
             await producer.disconnect();
+            this.#producer = undefined;
         }
     }
     send(context, topic, key, value, partition, onDelivery) {

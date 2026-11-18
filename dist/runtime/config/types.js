@@ -41,7 +41,12 @@ export const DataConnectorType = {
     Kafka: 3,
     Custom: 4,
     Cron: 5,
-    Temporal: 6
+    Temporal: 6,
+    NATS: 7,
+    JetStream: 8,
+    RabbitMQ: 9,
+    RedisStreams: 10,
+    Pulsar: 11
 };
 export const HTTPMethodType = {
     Undefined: "",

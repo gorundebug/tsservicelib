@@ -1,5 +1,7 @@
+import { observeCancellationListeners } from "./support/cancellation-listeners.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TestTracing } from "@gorundebug/tsservicelib/runtime/testtracing";
 
 import {
   type ConsumerMessage,
@@ -201,6 +203,7 @@ class Handler implements EndpointHandler<undefined, string, string, Error> {
   public readonly events: string[] = [];
   public beginStreamId: string | undefined;
   public consumeStreamId: string | undefined;
+  public beginMetadata: ReadonlyMap<string, string> = new Map();
   public restoreCheckpoint(): ReadonlyMap<number, bigint> | null { return null; }
   public concurrency(): number {
     return 1;
@@ -209,6 +212,7 @@ class Handler implements EndpointHandler<undefined, string, string, Error> {
     context: MessageContext
   ): Promise<{ readonly context: MessageContext; readonly state: undefined }> {
     this.beginStreamId = context.streamId();
+    this.beginMetadata = context.metadata();
     this.events.push("begin");
     return Promise.resolve({ context, state: undefined });
   }
@@ -296,6 +300,44 @@ await test("Kafka source correlates a pipeline result before marking the offset"
   await dataSource.stop(Context.background());
   assert.equal(factory.consumerInstance.connected, false);
 });
+
+for (const tracingEnabled of [false, true]) {
+await test(`Kafka reserved header case is normalized with tracing=${String(tracingEnabled)}`, async () => {
+  const environment = makeTestEnvironment([inputConfig, resultConfig], {
+    dataConnectors: [connector], endpoints: [endpoint],
+    ...(tracingEnabled ? { tracing: new TestTracing() } : {})
+  });
+  environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+  const input = makeInputStream<string, string, Error>(inputConfig, environment);
+  const result = new ConsumedStream(resultConfig, environment, environment.serde(stringSerdeType));
+  input.setSource(result);
+  input.setConsumer(new FeedbackStream(result));
+  const factory = new Factory();
+  const handler = new Handler();
+  makeKafkaEndpointConsumer(input, handler, factory);
+  const source = environment.dataSourceById(10);
+  assert.ok(source);
+  const owner = new Context();
+  await source.start(owner);
+  try {
+    const headers = new Map([
+      ["TRACESTATE", Buffer.from("vendor=first")],
+      ["tracestate", Buffer.from("vendor=last")],
+      ["BAGGAGE", Buffer.from("tenant=test")],
+      ["business", Buffer.from([255, 0])]
+    ]);
+    await factory.consumerInstance.feed({ topic: "order-processed", partition: 0,
+      offset: 7n, key: undefined, value: Buffer.from("order-1"), headers }, new Control());
+    assert.equal(handler.beginMetadata.get("tracestate"), tracingEnabled ? "vendor=last" : undefined);
+    assert.equal(handler.beginMetadata.get("baggage"), tracingEnabled ? "tenant=test" : undefined);
+    assert.equal(handler.beginMetadata.has("business"), false);
+    assert.deepEqual(headers.get("business"), Buffer.from([255, 0]));
+    assert.deepEqual(handler.events, ["begin", "consume:order-1", "end"]);
+  } finally {
+    await source.stop(owner);
+  }
+});
+}
 
 await test("disabled Kafka source remains registered without connecting", async () => {
   const environment = makeTestEnvironment([inputConfig, resultConfig], {
@@ -748,4 +790,83 @@ await test("Kafka stop retains a pending reconnect without stopping an unconnect
   assert.equal(lateRuns, 0);
   assert.equal(factory.consumers.length, 2);
   assert.ok(factory.consumers.every((consumer) => !consumer.connected));
+});
+
+for (const mode of ["begin", "consume", "end", "callback", "done-callback"] as const) {
+  await test(`Kafka request failure reaches transport: ${mode}`, async (t) => {
+    const environment = makeTestEnvironment([inputConfig, resultConfig], {
+      dataConnectors: [connector], endpoints: [endpoint]
+    });
+    environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+    const input = makeInputStream<string, string, Error>(inputConfig, environment);
+    const result = new ConsumedStream(resultConfig, environment, environment.serde(stringSerdeType));
+    input.setSource(result);
+    input.setConsumer(new FeedbackStream(result));
+    const factory = new Factory();
+    const handler = new Handler();
+    const failure = new Error(`request-${mode}`);
+    let ended = 0;
+    let callbackTask: Promise<void> | undefined;
+    let routed: unknown;
+    t.mock.method(handler, "endRequest", () => { ended += 1; if (mode === "end") throw failure; });
+    if (mode === "begin") t.mock.method(handler, "beginRequest", () => Promise.reject(failure));
+    t.mock.method(handler, "consumeMessage", async (context: MessageContext, stream: StreamContext<string, string, Error>, _state: undefined, _message: ConsumerMessage, completion: ResultContext<undefined, string, string, Error>) => {
+      if (mode === "consume") throw failure;
+      if (mode === "callback" || mode === "done-callback") {
+        completion.setResultCallback("order-1", () => {
+          if (mode === "done-callback") completion.done();
+          throw failure;
+        });
+        // Callback runs after consumeMessage returns; its existing error route
+        // must coexist with failure propagation to the transport lane.
+        callbackTask = new Promise<void>((resolve) => setTimeout(resolve, 1))
+          .then(() => stream.collect(context, "order-1"))
+          .catch((error: unknown) => { routed = error; });
+      } else completion.done();
+    });
+    makeKafkaEndpointConsumer(input, handler, factory);
+    const source = environment.dataSourceById(10);
+    assert.ok(source);
+    const owner = new Context();
+    await source.start(owner);
+    try {
+      const control = new Control();
+      await assert.rejects(factory.consumerInstance.feed({ topic: "order-processed", partition: 0,
+        offset: 7n, key: undefined, value: Buffer.from("order-1"), headers: new Map() }, control),
+        (error: unknown) => error === failure);
+      await callbackTask;
+      assert.equal(ended, mode === "begin" ? 0 : 1);
+      assert.equal(control.commits, 0);
+      assert.deepEqual(control.marked, []);
+      if (mode === "callback" || mode === "done-callback") assert.equal(routed, failure);
+    } finally { await source.stop(owner); }
+  });
+}
+
+await test("Kafka completed requests retire assignment and task cancellation joins", async (t) => {
+  const observation = observeCancellationListeners();
+  t.after(observation.restore);
+  const environment = makeTestEnvironment([inputConfig, resultConfig], {
+    dataConnectors: [connector], endpoints: [endpoint]
+  });
+  environment.serdeRegistry().registerStreamErrorType(inputConfig.id, errorSerdeType);
+  const input = makeInputStream<string, string, Error>(inputConfig, environment);
+  const result = new ConsumedStream(resultConfig, environment, environment.serde(stringSerdeType));
+  input.setSource(result);
+  input.setConsumer(new FeedbackStream(result));
+  const factory = new Factory();
+  makeKafkaEndpointConsumer(input, new Handler(), factory);
+  const source = environment.dataSourceById(10);
+  assert.ok(source);
+  t.after(() => source.stop(new Context().bounded(1000)));
+  await source.start(Context.background());
+  const control = new Control();
+  for (let i = 0; i < 1024; i++) {
+    await factory.consumerInstance.feed({
+      topic: "order-processed", partition: 0, offset: BigInt(i), key: undefined,
+      value: Buffer.from("order"), headers: new Map()
+    }, control);
+  }
+  observation.assertBounded();
+  assert.equal(control.marked.length, 1024);
 });

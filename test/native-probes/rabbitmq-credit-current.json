@@ -1,0 +1,27 @@
+{
+  "checked_at_utc": "2026-11-18T04:04:37.035209+00:00",
+  "npm_dist_tags": {
+    "latest": "1.0.0"
+  },
+  "release": "v1.0.0",
+  "release_published_at": "2026-06-25T15:06:33.604Z",
+  "release_commit": "c75bd5f2bc50d49e4991a9741f5a4378e364548f",
+  "npm_integrity": "sha512-6P1l8B271DrX5WkBaQNfq5aE+Sa+Innr03s+DaYgkt1Zdg65RaPYPJvx8hO6d/X5GJd2LNT4OLft3CCULZK65A==",
+  "npm_tarball": "https://registry.npmjs.org/rabbitmq-amqp-js-client/-/rabbitmq-amqp-js-client-1.0.0.tgz",
+  "head": "5089d0234d9a40de544724738ffeec5e9fcd13a1",
+  "head_date": "2026-11-12T09:57:43Z",
+  "consumer_sha256": {
+    "installed": "7e4542681da5c75c7d72aa0c2ac2773aab9e402c045d166957338333f43e1011",
+    "release": "7e4542681da5c75c7d72aa0c2ac2773aab9e402c045d166957338333f43e1011",
+    "current_head": "7e4542681da5c75c7d72aa0c2ac2773aab9e402c045d166957338333f43e1011"
+  },
+  "credit_proposal": {
+    "url": "https://github.com/coders51/rabbitmq-amqp-js-client/pull/94",
+    "state": "open",
+    "merged": false,
+    "merged_at": null,
+    "head": "40f7025925ebb3d571093adfa86969a34d9593ff"
+  },
+  "verdict": "required bounded-credit AMQP 1.0 TypeScript source profile unsupported by current eligible public client API; existing product support not modified",
+  "raw_evidence_root": "/private/tmp/sa-ts-rabbit-current-credit-audit"
+}

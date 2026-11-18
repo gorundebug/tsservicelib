@@ -537,3 +537,46 @@ await test("Kafka SinkWithResult cancelled synchronous wait cannot emit late suc
   assert.deepEqual(h.errors.values, []);
   assert.equal(h.ended[0]?.message, "request cancelled");
 });
+
+for (const boundary of ["delivery", "flush", "disconnect"] as const) {
+  await test(`Kafka sink repeat Stop retains pending ${boundary}`, async (t) => {
+    const h = makeHarness(true);
+    const producer = h.factory.producerInstance;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    if (boundary === "delivery") producer.deferDelivery = true;
+    else t.mock.method(producer, boundary, async () => { calls += 1; await held; });
+    await h.dataSink.start(new Context());
+    await h.source.emit(new MessageContext(), "payload");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await assert.rejects(h.dataSink.stop(new Context().bounded(5)), { name: "RuntimeDrainTimeoutError" });
+    await assert.rejects(h.dataSink.start(new Context()), /already started/);
+    let done = false;
+    const second = h.dataSink.stop(new Context()).then(() => { done = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(done, false);
+    if (boundary === "delivery") {
+      assert.equal(producer.connected, true);
+      assert.deepEqual(h.results.values, []);
+      producer.completeDelivery();
+    } else {
+      assert.equal(calls, 1);
+      release();
+    }
+    await second;
+    await h.dataSink.stop(new Context());
+    if (boundary !== "delivery") assert.equal(calls, 1);
+  });
+}
+
+await test("Kafka native shutdown failure remains visible on repeated Stop", async (t) => {
+  const h = makeHarness(true);
+  const failure = new Error("native flush failed");
+  let closes = 0;
+  t.mock.method(h.factory.producerInstance, "flush", () => Promise.reject(failure));
+  t.mock.method(h.factory.producerInstance, "disconnect", async () => { closes += 1; });
+  await h.dataSink.start(new Context());
+  for (let i = 0; i < 2; ++i) await assert.rejects(h.dataSink.stop(new Context()), (e) => e === failure);
+  assert.equal(closes, 1);
+});

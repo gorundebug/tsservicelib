@@ -65,6 +65,7 @@ export declare class KafkaDataSink extends OutputDataSink {
     producer(): KafkaProducer;
     start(context: Context): Promise<void>;
     stop(context: Context): Promise<void>;
+    private drain;
     send(context: MessageContext, topic: string, key: Uint8Array | undefined, value: Uint8Array, partition: () => Promise<number | undefined>, onDelivery: (result: DeliveryResult | undefined, error: Error | undefined) => Completion): void;
     private recoverProducer;
     private replaceProducer;
