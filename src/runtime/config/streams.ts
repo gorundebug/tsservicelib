@@ -15,6 +15,7 @@ import type {
   MultiJoinStreamConfig,
   ProcessStreamConfig,
   SinkStreamConfig,
+  QueryStreamConfig,
   SplitStreamConfig,
   StreamConfig,
   WhenStreamConfig
@@ -201,4 +202,11 @@ export function isWhenStreamConfig(value: StreamConfig): value is WhenStreamConf
 
 export function requireWhenStreamConfig(value: StreamConfig | undefined): WhenStreamConfig {
   return requireStream(value, "When", isWhenStreamConfig);
+}
+
+export function isQueryStreamConfig(value: StreamConfig): value is QueryStreamConfig {
+  return value.type === "Query" && hasNumber(value, "idEndpoint");
+}
+export function requireQueryStreamConfig(value: StreamConfig | undefined): QueryStreamConfig {
+  return requireStream(value, "Query", isQueryStreamConfig);
 }

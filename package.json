@@ -167,6 +167,18 @@
     "./datasink/pulsar": {
       "types": "./dist/datasink/pulsar/index.d.ts",
       "import": "./dist/datasink/pulsar/index.js"
+    },
+    "./dataquery": {
+      "types": "./dist/dataquery/index.d.ts",
+      "import": "./dist/dataquery/index.js"
+    },
+    "./dataquery/postgresqlkysely": {
+      "types": "./dist/dataquery/postgresqlkysely/index.d.ts",
+      "import": "./dist/dataquery/postgresqlkysely/index.js"
+    },
+    "./dataquery/s3aws": {
+      "types": "./dist/dataquery/s3aws/index.d.ts",
+      "import": "./dist/dataquery/s3aws/index.js"
     }
   },
   "files": [
@@ -194,6 +206,7 @@
     "check": "node scripts/check-structure.mjs && tsc --build tsconfig.json && node scripts/check-package.mjs && eslint \"src/**/*.ts\" \"test/**/*.ts\" --max-warnings 0 && prettier --check . && node scripts/clean-test.mjs && tsc --build tsconfig.test.json && node scripts/copy-status-assets.mjs dist && node --test --test-concurrency=8 --enable-source-maps dist-test/test/**/*.test.js && node scripts/check-no-leaked-handles.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1100.0",
     "@bufbuild/protobuf": "2.14.0",
     "@confluentinc/kafka-javascript": "1.9.0",
     "@grpc/grpc-js": "1.14.4",
@@ -220,6 +233,9 @@
     "@temporalio/workflow": "1.21.1",
     "@types/ms": "2.1.0",
     "croner": "10.0.1",
+    "kysely": "0.29.9",
+    "pg": "8.23.1",
+    "pg-cursor": "2.22.1",
     "prom-client": "15.1.3",
     "pulsar-client": "1.18.0",
     "rabbitmq-amqp-js-client": "1.0.0",
@@ -229,6 +245,8 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.13.3",
+    "@types/pg": "8.23.1",
+    "@types/pg-cursor": "2.7.2",
     "eslint": "10.8.1",
     "prettier": "3.9.6",
     "typescript": "6.0.3",

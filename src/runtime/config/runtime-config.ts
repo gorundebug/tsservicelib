@@ -1,3 +1,4 @@
+import { requirePostgreSQLKyselyDataConnectorConfig, requireS3AWSDataConnectorConfig, requireQueryEndpointConfig } from "./query.js";
 import {
   requirePulsarDataConnectorConfig,
   requirePulsarEndpointConfig,
@@ -166,6 +167,8 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
       validateNonNegative(pool.queueCapacity, `pool ${pool.name} queueCapacity`);
     }
     for (const connector of this.#config.dataConnectors) {
+      if (connector.type === 13) requirePostgreSQLKyselyDataConnectorConfig(connector);
+      if (connector.type === 18) requireS3AWSDataConnectorConfig(connector);
       if (connector.type === 7 || connector.type === 8) requireNATSDataConnectorConfig(connector);
       if (connector.type === 9) requireRabbitMQDataConnectorConfig(connector);
       if (connector.type === 11) requirePulsarDataConnectorConfig(connector);
@@ -223,7 +226,7 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           );
         }
       }
-      if ((stream.type === "Input" || stream.type === "Sink") && "idEndpoint" in stream) {
+      if ((stream.type === "Input" || stream.type === "Sink" || stream.type === "Query") && "idEndpoint" in stream) {
         const endpointId = stream.idEndpoint;
         if (typeof endpointId !== "number" || !this.#endpoints.byId.has(endpointId)) {
           throw new Error(
@@ -239,8 +242,11 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
           `endpoint ${endpoint.name} references missing data connector id ${String(endpoint.idDataConnector)}`
         );
       }
+      if (connector.type === 13 || connector.type === 18) requireQueryEndpointConfig(endpoint, connector.type);
       const endpointType =
-        "streamKey" in endpoint
+        "queryOperation" in endpoint
+          ? connector.type === 13 || connector.type === 18 ? connector.type : -1
+          : "streamKey" in endpoint
           ? 10
           : "createQueue" in endpoint
             ? 9
@@ -358,7 +364,7 @@ export class RuntimeConfig<T extends CanonicalConfig = CanonicalConfig> {
     if (id >= 0) return false;
     // ErrorStream has no separate config: its ID is the negated owner ID.
     const owner = this.#streams.byId.get(-id);
-    return owner?.type === "Input" || owner?.type === "Process" || owner?.type === "Sink";
+    return owner?.type === "Input" || owner?.type === "Process" || owner?.type === "Sink" || owner?.type === "Query";
   }
 
   private validateCallSemantics(semantics: CallSemanticsGroup | undefined, owner: string): void {

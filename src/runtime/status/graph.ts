@@ -94,6 +94,7 @@ const transformationIcons: Readonly<Record<string, string>> = {
   Split: icons.split,
   Case: icons.case,
   Sink: icons.sink,
+  Query: icons.input,
   CycleLink: icons.cycle,
   Error: icons.error,
   Delay: icons.delay,
@@ -133,7 +134,7 @@ function statusService(environment: RuntimeEnvironment, config: StreamConfig) {
 }
 
 function endpointId(config: StreamConfig): number {
-  if ((config.type === "Input" || config.type === "Sink") && "idEndpoint" in config) {
+  if ((config.type === "Input" || config.type === "Sink" || config.type === "Query") && "idEndpoint" in config) {
     return typeof config.idEndpoint === "number" ? config.idEndpoint : 0;
   }
   return 0;
@@ -301,6 +302,21 @@ export function runtimeToCanonicalConfig(environment: RuntimeEnvironment): Canon
   for (const connector of [...environment.dataSources(), ...environment.dataSinks()]) {
     connectors.set(connector.id, connector.config());
     for (const endpoint of connector.endpoints()) endpoints.set(endpoint.id, endpoint.config());
+  }
+
+  // Query uses managed clients rather than DataSource/DataSink registrations.
+  // Include only endpoints referenced by live Query nodes and omit runtime URLs.
+  for (const stream of streams) {
+    if (stream.type !== "Query") continue;
+    const endpoint = environment.runtimeConfig().endpointById(endpointId(stream));
+    if (endpoint === undefined) continue;
+    const connector = environment.runtimeConfig().dataConnectorById(endpoint.idDataConnector);
+    if (connector === undefined) continue;
+    const publicConnector = { ...connector } as Record<string, unknown>;
+    delete publicConnector["connectionString"];
+    delete publicConnector["address"];
+    connectors.set(connector.id, publicConnector as unknown as DataConnectorConfig);
+    endpoints.set(endpoint.id, { ...endpoint });
   }
 
   return {

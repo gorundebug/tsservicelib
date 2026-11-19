@@ -125,4 +125,10 @@ export function isWhenStreamConfig(value) {
 export function requireWhenStreamConfig(value) {
     return requireStream(value, "When", isWhenStreamConfig);
 }
+export function isQueryStreamConfig(value) {
+    return value.type === "Query" && hasNumber(value, "idEndpoint");
+}
+export function requireQueryStreamConfig(value) {
+    return requireStream(value, "Query", isQueryStreamConfig);
+}
 //# sourceMappingURL=streams.js.map

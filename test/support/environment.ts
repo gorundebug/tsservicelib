@@ -12,6 +12,7 @@ import {
   type EndpointConfig,
   type JoinStorageFactory,
   type Logger,
+  type LinkConfig,
   type Metrics,
   type PoolConfig,
   type PriorityTaskPool,
@@ -23,6 +24,7 @@ import {
 } from "@gorundebug/tsservicelib/runtime";
 
 export interface TestEnvironmentOptions {
+  readonly links?: readonly LinkConfig[];
   readonly dataConnectors?: readonly DataConnectorConfig[];
   readonly endpoints?: readonly EndpointConfig[];
   readonly callerFactory?: CallerFactory;
@@ -77,7 +79,7 @@ export function makeTestEnvironmentWithStore(
     dataConnectors: options.dataConnectors ?? [],
     endpoints: options.endpoints ?? [],
     pools: options.pools ?? [],
-    links: [],
+    links: options.links ?? [],
     modules: [],
     types: [],
     properties: {}

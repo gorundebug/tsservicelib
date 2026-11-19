@@ -45,6 +45,7 @@ export type TransformationType =
   | "MultiJoin"
   | "Process"
   | "Sink"
+  | "Query"
   | "Split"
   | "When";
 
@@ -65,6 +66,7 @@ export type TransformationName =
   | "multiJoin"
   | "process"
   | "sink"
+  | "query"
   | "split"
   | "when";
 
@@ -85,6 +87,7 @@ const transformationNames: Readonly<Record<TransformationType, TransformationNam
   MultiJoin: "multiJoin",
   Process: "process",
   Sink: "sink",
+  Query: "query",
   Split: "split",
   When: "when"
 };
@@ -205,6 +208,12 @@ export interface SinkStreamConfig extends StreamConfig {
   readonly idEndpoint: number;
 }
 
+export interface QueryStreamConfig extends StreamConfig {
+  readonly type: "Query";
+  readonly valueType?: string | undefined;
+  readonly idEndpoint: number;
+}
+
 export interface CaseStreamConfig extends StreamConfig, FunctionConfig {
   readonly type: "Case";
 }
@@ -237,6 +246,7 @@ export type AnyStreamConfig =
   | SplitStreamConfig
   | CaseStreamConfig
   | SinkStreamConfig
+  | QueryStreamConfig
   | CycleLinkStreamConfig
   | DelayStreamConfig
   | WhenStreamConfig;
@@ -258,7 +268,9 @@ export const DataConnectorType = {
   JetStream: 8,
   RabbitMQ: 9,
   RedisStreams: 10,
-  Pulsar: 11
+  Pulsar: 11,
+  PostgreSQLKysely: 13,
+  S3AWS: 18
 } as const;
 
 export type DataConnectorType = (typeof DataConnectorType)[keyof typeof DataConnectorType];
@@ -341,6 +353,8 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
 }
 
 export type AnyDataConnectorConfig =
+  | PostgreSQLKyselyDataConnectorConfig
+  | S3AWSDataConnectorConfig
   | HttpDataConnectorConfig
   | GrpcDataConnectorConfig
   | KafkaDataConnectorConfig
@@ -426,6 +440,7 @@ export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
 export type CustomEndpointConfig = EndpointConfig & FunctionConfig & { readonly enabled: boolean };
 
 export type AnyEndpointConfig =
+  | QueryEndpointConfig
   | HttpEndpointConfig
   | GrpcEndpointConfig
   | KafkaEndpointConfig
@@ -641,6 +656,12 @@ export interface CaseStreamConfigDocument extends StreamConfigDocumentBase, Func
 
 export interface SinkStreamConfigDocument extends StreamConfigDocumentBase {
   readonly type: 13 | "Sink";
+  readonly valueType?: string | undefined;
+  readonly idEndpoint: number;
+}
+
+export interface QueryStreamConfigDocument extends StreamConfigDocumentBase {
+  readonly type: 19 | "Query";
   readonly valueType?: string | undefined;
   readonly idEndpoint: number;
 }
@@ -950,4 +971,50 @@ export interface PulsarEndpointConfigDocument extends EndpointConfigDocumentBase
   readonly receiverQueueSize?: number | undefined;
   readonly negativeAckRedeliveryDelayMs?: number | undefined;
   readonly publisherMaxInFlight?: number | undefined;
+}
+
+
+export interface PostgreSQLKyselyDataConnectorConfig extends DataConnectorConfig {
+  readonly type: 13;
+  readonly connectionString: string;
+  readonly connectionsCount: number;
+  readonly connectTimeoutMs: number;
+  readonly operationTimeoutMs: number;
+}
+export interface QueryEndpointConfig extends EndpointConfig, FunctionConfig {
+  readonly enabled: boolean;
+  readonly queryOperation: "Rows" | "Execute" | "GetObject" | "HeadObject" | "ListObjects" | "PutObject" | "DeleteObject";
+  readonly fetchSize: number;
+  readonly sqlFile?: string | undefined;
+  readonly bucket?: string | undefined;
+}
+
+export interface PostgreSQLKyselyDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly type: 13 | "PostgreSQLKysely";
+  readonly connectionString?: string | undefined;
+  readonly connectionsCount?: number | undefined;
+  readonly connectTimeoutMs?: number | undefined;
+  readonly operationTimeoutMs?: number | undefined;
+}
+
+export interface QueryEndpointConfigDocument extends EndpointConfigDocumentBase {
+  readonly enabled?: boolean | undefined;
+  readonly queryOperation: "Rows" | "Execute" | "GetObject" | "HeadObject" | "ListObjects" | "PutObject" | "DeleteObject";
+  readonly fetchSize?: number | undefined;
+  readonly sqlFile?: string | undefined;
+  readonly bucket?: string | undefined;
+}
+
+export interface S3AWSDataConnectorConfig extends DataConnectorConfig {
+  readonly type: 18;
+  readonly region: string;
+  readonly address?: string | undefined;
+  readonly forcePathStyle: boolean;
+}
+
+export interface S3AWSDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+  readonly type: 18 | "S3AWS";
+  readonly region: string;
+  readonly address?: string | undefined;
+  readonly forcePathStyle?: boolean | undefined;
 }

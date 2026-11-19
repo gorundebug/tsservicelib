@@ -93,6 +93,15 @@ async function start() {
             }
             : { queue: { name: ep.queueName ?? "" } });
     if (setup.source) {
+        // Upstream blocker for supported RabbitMQ Input:
+        // https://github.com/coders51/rabbitmq-amqp-js-client/pull/94
+        // Wait for a released client with settlement-based initialCredits (or an
+        // equivalent public bound on unsettled deliveries). Version 1.0.0 refills
+        // credit on arrival; awaiting a handler or withholding ACK does not stop it.
+        // Before removing the source capability gate, wire consumerCredits to that
+        // API and verify the bound survives reconnects and stale settlements.
+        // The PR is not merged as of 2026-11-18; do not use private receiver fields.
+        // Evidence: test/native-probes/rabbitmq-credit-current.md.
         consumer = await connection.createConsumer({
             queue: { name: ep.queueName ?? "" },
             preSettled: false,

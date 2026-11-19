@@ -1,3 +1,4 @@
+import { requireS3AWSDataConnectorConfig, requirePostgreSQLKyselyDataConnectorConfig, requireQueryEndpointConfig } from "./query.js";
 import { requirePulsarDataConnectorConfig, requirePulsarEndpointConfig } from "./pulsar.js";
 import {
   requireRedisStreamsDataConnectorConfig,
@@ -364,6 +365,7 @@ const transformations: Readonly<Record<number, TransformationType>> = {
   15: "Error",
   16: "Delay",
   17: "When",
+  19: "Query",
   18: "SubStream"
 };
 
@@ -519,6 +521,7 @@ function parseStream(source: RecordValue, path: string): AnyStreamConfig {
         type,
         pattern: optionalString(source.pattern, `${path}.pattern`)
       };
+    case "Query":
     case "Sink":
       return {
         ...common,
@@ -537,6 +540,8 @@ function parseStream(source: RecordValue, path: string): AnyStreamConfig {
 }
 
 const connectorKeys = new Set([
+  "region", "forcePathStyle",
+  "connectionString",
   "adminUrl",
   "adminToken",
   ...identityKeys,
@@ -585,6 +590,21 @@ function parseConnector(source: RecordValue, path: string): AnyDataConnectorConf
     properties: properties(source, connectorKeys)
   };
   switch (type) {
+    case 18:
+      return requireS3AWSDataConnectorConfig({
+        ...common, type: 18,
+        region: stringValue(source["region"], `${path}.region`),
+        address: optionalString(source.address, `${path}.address`),
+        forcePathStyle: optionalBoolean(source["forcePathStyle"], `${path}.forcePathStyle`) ?? false
+      });
+    case 13:
+      return requirePostgreSQLKyselyDataConnectorConfig({
+        ...common, type: 13,
+        connectionString: stringValue(source["connectionString"], `${path}.connectionString`),
+        connectionsCount: optionalInteger(source.connectionsCount, `${path}.connectionsCount`) ?? 10,
+        connectTimeoutMs: optionalInteger(source["connectTimeoutMs"], `${path}.connectTimeoutMs`) ?? 0,
+        operationTimeoutMs: optionalInteger(source["operationTimeoutMs"], `${path}.operationTimeoutMs`) ?? 0
+      });
     case 1:
       return {
         ...common,
@@ -755,6 +775,7 @@ function parseConnector(source: RecordValue, path: string): AnyDataConnectorConf
 }
 
 const endpointKeys = new Set([
+  "queryOperation", "fetchSize", "sqlFile", "bucket",
   "subscriptionName",
   "subscriptionType",
   "createSubscription",
@@ -849,6 +870,16 @@ function parseEndpoint(
     properties: properties(source, endpointKeys)
   };
   const functions = functionFields(source, path);
+  if (connectorType === 13 || connectorType === 18) {
+    return requireQueryEndpointConfig({
+      ...common, ...functions,
+      enabled: optionalBoolean(source.enabled, `${path}.enabled`) ?? true,
+      queryOperation: stringValue(source["queryOperation"], `${path}.queryOperation`),
+      fetchSize: optionalInteger(source["fetchSize"], `${path}.fetchSize`) ?? 256,
+      sqlFile: optionalString(source["sqlFile"], `${path}.sqlFile`),
+      bucket: optionalString(source["bucket"], `${path}.bucket`)
+    }, connectorType);
+  }
   if (connectorType === 11) {
     for (const k of [
       "consumerGroup",

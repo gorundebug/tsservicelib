@@ -1,3 +1,4 @@
+import { requirePostgreSQLKyselyDataConnectorConfig, requireS3AWSDataConnectorConfig, requireQueryEndpointConfig } from "./query.js";
 import { requirePulsarDataConnectorConfig, requirePulsarEndpointConfig, validatePulsarEndpoint } from "./pulsar.js";
 import { requireRedisStreamsDataConnectorConfig, requireRedisStreamsEndpointConfig, validateRedisStreamsEndpoint } from "./redis.js";
 import { requireRabbitMQDataConnectorConfig, requireRabbitMQEndpointConfig, validateRabbitMQEndpoint } from "./rabbitmq.js";
@@ -108,6 +109,10 @@ export class RuntimeConfig {
             validateNonNegative(pool.queueCapacity, `pool ${pool.name} queueCapacity`);
         }
         for (const connector of this.#config.dataConnectors) {
+            if (connector.type === 13)
+                requirePostgreSQLKyselyDataConnectorConfig(connector);
+            if (connector.type === 18)
+                requireS3AWSDataConnectorConfig(connector);
             if (connector.type === 7 || connector.type === 8)
                 requireNATSDataConnectorConfig(connector);
             if (connector.type === 9)
@@ -153,7 +158,7 @@ export class RuntimeConfig {
                     throw new Error(`stream ${stream.name} references missing source stream id ${String(sourceId)}`);
                 }
             }
-            if ((stream.type === "Input" || stream.type === "Sink") && "idEndpoint" in stream) {
+            if ((stream.type === "Input" || stream.type === "Sink" || stream.type === "Query") && "idEndpoint" in stream) {
                 const endpointId = stream.idEndpoint;
                 if (typeof endpointId !== "number" || !this.#endpoints.byId.has(endpointId)) {
                     throw new Error(`${stream.type} stream ${stream.name} references missing endpoint id ${String(endpointId)}`);
@@ -165,27 +170,31 @@ export class RuntimeConfig {
             if (connector === undefined) {
                 throw new Error(`endpoint ${endpoint.name} references missing data connector id ${String(endpoint.idDataConnector)}`);
             }
-            const endpointType = "streamKey" in endpoint
-                ? 10
-                : "createQueue" in endpoint
-                    ? 9
-                    : "subject" in endpoint
-                        ? connector.type === 7 || connector.type === 8
-                            ? connector.type
-                            : -1
-                        : "httpMethodType" in endpoint
-                            ? 1
-                            : "grpcMethodType" in endpoint
-                                ? 2
-                                : "topic" in endpoint
-                                    ? connector.type === 11
-                                        ? 11
-                                        : 3
-                                    : "taskQueue" in endpoint
-                                        ? 6
-                                        : "schedule" in endpoint
-                                            ? 5
-                                            : 4;
+            if (connector.type === 13 || connector.type === 18)
+                requireQueryEndpointConfig(endpoint, connector.type);
+            const endpointType = "queryOperation" in endpoint
+                ? connector.type === 13 || connector.type === 18 ? connector.type : -1
+                : "streamKey" in endpoint
+                    ? 10
+                    : "createQueue" in endpoint
+                        ? 9
+                        : "subject" in endpoint
+                            ? connector.type === 7 || connector.type === 8
+                                ? connector.type
+                                : -1
+                            : "httpMethodType" in endpoint
+                                ? 1
+                                : "grpcMethodType" in endpoint
+                                    ? 2
+                                    : "topic" in endpoint
+                                        ? connector.type === 11
+                                            ? 11
+                                            : 3
+                                        : "taskQueue" in endpoint
+                                            ? 6
+                                            : "schedule" in endpoint
+                                                ? 5
+                                                : 4;
             if (connector.type !== endpointType) {
                 throw new Error(`endpoint ${endpoint.name} type does not match data connector ${connector.name}`);
             }
@@ -259,7 +268,7 @@ export class RuntimeConfig {
             return false;
         // ErrorStream has no separate config: its ID is the negated owner ID.
         const owner = this.#streams.byId.get(-id);
-        return owner?.type === "Input" || owner?.type === "Process" || owner?.type === "Sink";
+        return owner?.type === "Input" || owner?.type === "Process" || owner?.type === "Sink" || owner?.type === "Query";
     }
     validateCallSemantics(semantics, owner) {
         if (semantics === undefined || "functionCall" in semantics || "parallelCall" in semantics) {

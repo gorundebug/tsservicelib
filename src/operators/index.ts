@@ -15,4 +15,5 @@ export * from "./merge.js";
 export * from "./multi-join.js";
 export * from "./process.js";
 export * from "./sink.js";
+export * from "./query.js";
 export * from "./split.js";

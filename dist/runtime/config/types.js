@@ -15,6 +15,7 @@ const transformationNames = {
     MultiJoin: "multiJoin",
     Process: "process",
     Sink: "sink",
+    Query: "query",
     Split: "split",
     When: "when"
 };
@@ -46,7 +47,9 @@ export const DataConnectorType = {
     JetStream: 8,
     RabbitMQ: 9,
     RedisStreams: 10,
-    Pulsar: 11
+    Pulsar: 11,
+    PostgreSQLKysely: 13,
+    S3AWS: 18
 };
 export const HTTPMethodType = {
     Undefined: "",

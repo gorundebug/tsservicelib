@@ -5,3 +5,4 @@ export * from "./operators/index.js";
 export { SubStream } from "./operators/substream.js";
 export * from "./runtime/index.js";
 export * from "./transformation/index.js";
+export * as dataquery from "./dataquery/index.js";

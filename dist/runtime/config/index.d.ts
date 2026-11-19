@@ -12,4 +12,5 @@ export * from "./nats.js";
 export * from "./rabbitmq.js";
 export * from "./redis.js";
 export * from "./pulsar.js";
+export * from "./query.js";
 //# sourceMappingURL=index.d.ts.map

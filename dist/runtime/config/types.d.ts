@@ -25,8 +25,8 @@ export interface ServiceConfig extends NamedIdentity {
     readonly shutdownTimeout: number;
     readonly statusHandler: string;
 }
-export type TransformationType = "Case" | "CycleLink" | "Delay" | "Error" | "Filter" | "FlatMap" | "FlatMapIterable" | "Input" | "SubStream" | "Join" | "KeyBy" | "Map" | "Merge" | "MultiJoin" | "Process" | "Sink" | "Split" | "When";
-export type TransformationName = "case" | "cycleLink" | "delay" | "error" | "filter" | "flatMap" | "flatMapIterable" | "input" | "substream" | "join" | "keyBy" | "map" | "merge" | "multiJoin" | "process" | "sink" | "split" | "when";
+export type TransformationType = "Case" | "CycleLink" | "Delay" | "Error" | "Filter" | "FlatMap" | "FlatMapIterable" | "Input" | "SubStream" | "Join" | "KeyBy" | "Map" | "Merge" | "MultiJoin" | "Process" | "Sink" | "Query" | "Split" | "When";
+export type TransformationName = "case" | "cycleLink" | "delay" | "error" | "filter" | "flatMap" | "flatMapIterable" | "input" | "substream" | "join" | "keyBy" | "map" | "merge" | "multiJoin" | "process" | "sink" | "query" | "split" | "when";
 export declare function transformationName(type: TransformationType): TransformationName;
 export interface StreamConfig extends NamedIdentity {
     readonly type: TransformationType;
@@ -121,6 +121,11 @@ export interface SinkStreamConfig extends StreamConfig {
     readonly valueType?: string | undefined;
     readonly idEndpoint: number;
 }
+export interface QueryStreamConfig extends StreamConfig {
+    readonly type: "Query";
+    readonly valueType?: string | undefined;
+    readonly idEndpoint: number;
+}
 export interface CaseStreamConfig extends StreamConfig, FunctionConfig {
     readonly type: "Case";
 }
@@ -134,7 +139,7 @@ export interface SplitStreamConfig extends StreamConfig {
 export interface CycleLinkStreamConfig extends StreamConfig {
     readonly type: "CycleLink";
 }
-export type AnyStreamConfig = InputStreamConfig | SubStreamConfig | MapStreamConfig | FilterStreamConfig | JoinStreamConfig | MultiJoinStreamConfig | ProcessStreamConfig | FlatMapStreamConfig | FlatMapIterableStreamConfig | KeyByStreamConfig | MergeStreamConfig | SplitStreamConfig | CaseStreamConfig | SinkStreamConfig | CycleLinkStreamConfig | DelayStreamConfig | WhenStreamConfig;
+export type AnyStreamConfig = InputStreamConfig | SubStreamConfig | MapStreamConfig | FilterStreamConfig | JoinStreamConfig | MultiJoinStreamConfig | ProcessStreamConfig | FlatMapStreamConfig | FlatMapIterableStreamConfig | KeyByStreamConfig | MergeStreamConfig | SplitStreamConfig | CaseStreamConfig | SinkStreamConfig | QueryStreamConfig | CycleLinkStreamConfig | DelayStreamConfig | WhenStreamConfig;
 export interface DataConnectorConfig extends NamedIdentity {
     readonly type: DataConnectorType;
     readonly implementation: string;
@@ -152,6 +157,8 @@ export declare const DataConnectorType: {
     readonly RabbitMQ: 9;
     readonly RedisStreams: 10;
     readonly Pulsar: 11;
+    readonly PostgreSQLKysely: 13;
+    readonly S3AWS: 18;
 };
 export type DataConnectorType = (typeof DataConnectorType)[keyof typeof DataConnectorType];
 export interface HttpDataConnectorConfig extends DataConnectorConfig {
@@ -223,7 +230,7 @@ export interface TemporalDataConnectorConfig extends DataConnectorConfig {
     readonly tlsKeyFile: string;
     readonly workerStopTimeout: number;
 }
-export type AnyDataConnectorConfig = HttpDataConnectorConfig | GrpcDataConnectorConfig | KafkaDataConnectorConfig | NATSDataConnectorConfig | RabbitMQDataConnectorConfig | RedisStreamsDataConnectorConfig | PulsarDataConnectorConfig | CronDataConnectorConfig | TemporalDataConnectorConfig | CustomDataConnectorConfig;
+export type AnyDataConnectorConfig = PostgreSQLKyselyDataConnectorConfig | S3AWSDataConnectorConfig | HttpDataConnectorConfig | GrpcDataConnectorConfig | KafkaDataConnectorConfig | NATSDataConnectorConfig | RabbitMQDataConnectorConfig | RedisStreamsDataConnectorConfig | PulsarDataConnectorConfig | CronDataConnectorConfig | TemporalDataConnectorConfig | CustomDataConnectorConfig;
 export interface EndpointConfig extends NamedIdentity {
     readonly idDataConnector: number;
     readonly tracingEnabled?: boolean | undefined;
@@ -287,7 +294,7 @@ export interface TemporalEndpointConfig extends EndpointConfig, FunctionConfig {
 export type CustomEndpointConfig = EndpointConfig & FunctionConfig & {
     readonly enabled: boolean;
 };
-export type AnyEndpointConfig = HttpEndpointConfig | GrpcEndpointConfig | KafkaEndpointConfig | NATSEndpointConfig | RabbitMQEndpointConfig | RedisStreamsEndpointConfig | PulsarEndpointConfig | CronEndpointConfig | TemporalEndpointConfig | CustomEndpointConfig;
+export type AnyEndpointConfig = QueryEndpointConfig | HttpEndpointConfig | GrpcEndpointConfig | KafkaEndpointConfig | NATSEndpointConfig | RabbitMQEndpointConfig | RedisStreamsEndpointConfig | PulsarEndpointConfig | CronEndpointConfig | TemporalEndpointConfig | CustomEndpointConfig;
 export interface PoolConfig {
     readonly name: string;
     readonly executorsCount: number;
@@ -460,6 +467,11 @@ export interface CaseStreamConfigDocument extends StreamConfigDocumentBase, Func
 }
 export interface SinkStreamConfigDocument extends StreamConfigDocumentBase {
     readonly type: 13 | "Sink";
+    readonly valueType?: string | undefined;
+    readonly idEndpoint: number;
+}
+export interface QueryStreamConfigDocument extends StreamConfigDocumentBase {
+    readonly type: 19 | "Query";
     readonly valueType?: string | undefined;
     readonly idEndpoint: number;
 }
@@ -743,6 +755,46 @@ export interface PulsarEndpointConfigDocument extends EndpointConfigDocumentBase
     readonly receiverQueueSize?: number | undefined;
     readonly negativeAckRedeliveryDelayMs?: number | undefined;
     readonly publisherMaxInFlight?: number | undefined;
+}
+export interface PostgreSQLKyselyDataConnectorConfig extends DataConnectorConfig {
+    readonly type: 13;
+    readonly connectionString: string;
+    readonly connectionsCount: number;
+    readonly connectTimeoutMs: number;
+    readonly operationTimeoutMs: number;
+}
+export interface QueryEndpointConfig extends EndpointConfig, FunctionConfig {
+    readonly enabled: boolean;
+    readonly queryOperation: "Rows" | "Execute" | "GetObject" | "HeadObject" | "ListObjects" | "PutObject" | "DeleteObject";
+    readonly fetchSize: number;
+    readonly sqlFile?: string | undefined;
+    readonly bucket?: string | undefined;
+}
+export interface PostgreSQLKyselyDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+    readonly type: 13 | "PostgreSQLKysely";
+    readonly connectionString?: string | undefined;
+    readonly connectionsCount?: number | undefined;
+    readonly connectTimeoutMs?: number | undefined;
+    readonly operationTimeoutMs?: number | undefined;
+}
+export interface QueryEndpointConfigDocument extends EndpointConfigDocumentBase {
+    readonly enabled?: boolean | undefined;
+    readonly queryOperation: "Rows" | "Execute" | "GetObject" | "HeadObject" | "ListObjects" | "PutObject" | "DeleteObject";
+    readonly fetchSize?: number | undefined;
+    readonly sqlFile?: string | undefined;
+    readonly bucket?: string | undefined;
+}
+export interface S3AWSDataConnectorConfig extends DataConnectorConfig {
+    readonly type: 18;
+    readonly region: string;
+    readonly address?: string | undefined;
+    readonly forcePathStyle: boolean;
+}
+export interface S3AWSDataConnectorConfigDocument extends DataConnectorConfigDocumentBase {
+    readonly type: 18 | "S3AWS";
+    readonly region: string;
+    readonly address?: string | undefined;
+    readonly forcePathStyle?: boolean | undefined;
 }
 export {};
 //# sourceMappingURL=types.d.ts.map
