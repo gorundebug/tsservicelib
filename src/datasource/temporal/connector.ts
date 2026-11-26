@@ -417,7 +417,15 @@ export class TemporalConnector implements ManagedDataConnector {
       queues.set(config.taskQueue, activities);
       activities[registration.activityType] = async (value) => {
         const signal = cancellationSignal();
-        const envelope = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
+        const received = endpointEnvelopeFromWire(value as EndpointWireEnvelope);
+        if (received.version !== 1 || received.messageId === "") {
+          throw new Error(
+            `invalid Temporal endpoint envelope for ${String(registration.endpointId)}`
+          );
+        }
+        // Activity type selects the named endpoint; numeric IDs are local to
+        // each generated service. Its graph adapter receives the owner's ID.
+        const envelope = { ...received, endpointId: registration.endpointId };
         const durable = new DurableCallContext(envelope.messageId, "Activity", {
           heartbeat,
           diagnostics: this.activityDiagnostics(

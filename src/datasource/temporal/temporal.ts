@@ -6,6 +6,7 @@ import {
   DataSourceEndpointConsumer,
   FunctionCollector,
   InputDataSource,
+  MessageContextKey,
   ScheduleBackend,
   bindDurableCallSpan,
   errorFromUnknown,
@@ -106,7 +107,10 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
   readonly #decode: (envelope: EndpointEnvelope) => Input;
   readonly #handler: TemporalEndpointHandler<State, Input, T, R, E>;
   readonly #streamContext: StreamContext<T, R, E>;
-  readonly #pending = new Map<string, PendingResult<R>>();
+  // Upstream stream IDs can be shared by concurrent Activity invocations.
+  readonly #pending = new Map<PendingResult<R>, string>();
+  readonly #currentResult = new MessageContextKey<PendingResult<R> | undefined>(undefined);
+  #nextInvocation = 0;
   readonly #traceAttributes: ReturnType<typeof makeEndpointTraceAttributes>;
   readonly #tracingEnabled: boolean;
   readonly #tracer: Tracer | undefined;
@@ -188,12 +192,11 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
     let failure: Error | undefined;
     try {
       if (resultStream !== undefined) {
-        if (this.#pending.has(streamId)) {
-          throw new Error(`Temporal execution ${streamId} is already active`);
-        }
         pending = { ...Promise.withResolvers<R>(), settled: false };
-        this.#pending.set(streamId, pending);
-        this.#endpoint.onPendingAdd(context, streamId);
+        const metricId = String(++this.#nextInvocation);
+        this.#pending.set(pending, metricId);
+        context = context.withLocalValue(this.#currentResult, pending);
+        this.#endpoint.onPendingAdd(context, metricId);
       }
       await this.#handler.consumeMessage(
         context,
@@ -212,8 +215,9 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       throw failure;
     } finally {
       if (pending !== undefined) {
-        this.#pending.delete(streamId);
-        this.#endpoint.onPendingRemove(context, streamId);
+        const metricId = this.#pending.get(pending);
+        this.#pending.delete(pending);
+        if (metricId !== undefined) this.#endpoint.onPendingRemove(context, metricId);
       }
       await this.#handler.endRequest(context, this.#streamContext, failure, state);
       this.#endpoint.onRequestEnd(context, started, failure);
@@ -227,8 +231,8 @@ class TemporalEndpointConsumer<State, Input, T, R, E> extends DataSourceEndpoint
       this.#endpoint.onMissingStreamId(context);
       return;
     }
-    const pending = this.#pending.get(streamId);
-    if (pending === undefined) {
+    const pending = context.localValue(this.#currentResult);
+    if (pending === undefined || !this.#pending.has(pending)) {
       this.#endpoint.onLateResult(context, streamId);
       return;
     }

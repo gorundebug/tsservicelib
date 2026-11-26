@@ -289,7 +289,13 @@ export class TemporalConnector {
             queues.set(config.taskQueue, activities);
             activities[registration.activityType] = async (value) => {
                 const signal = cancellationSignal();
-                const envelope = endpointEnvelopeFromWire(value);
+                const received = endpointEnvelopeFromWire(value);
+                if (received.version !== 1 || received.messageId === "") {
+                    throw new Error(`invalid Temporal endpoint envelope for ${String(registration.endpointId)}`);
+                }
+                // Activity type selects the named endpoint; numeric IDs are local to
+                // each generated service. Its graph adapter receives the owner's ID.
+                const envelope = { ...received, endpointId: registration.endpointId };
                 const durable = new DurableCallContext(envelope.messageId, "Activity", {
                     heartbeat,
                     diagnostics: this.activityDiagnostics("endpoint", String(registration.endpointId), currentTemporalActivityMessageContext())
